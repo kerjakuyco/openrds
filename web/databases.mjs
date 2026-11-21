@@ -1,6 +1,6 @@
 // The database inventory: select a row to act on it, or open it for details.
 import { h, icon, menu, status, dataTable, empty, isRunning, needsAttention, percent, meter, sizeLabel, plural, ago, when } from "./lib.mjs";
-import { state, subscribe, instance } from "./store.mjs";
+import { state, subscribe, instance, can } from "./store.mjs";
 import { databaseActions } from "./actions.mjs";
 
 // Kept across visits so filters and selection survive navigation.
@@ -38,7 +38,7 @@ export function databasesView() {
   const list = h("div", { id: "fleet-list" });
   const el = h("div", null,
     h("div", { class: "page-head" }, h("div", null, h("h1", null, "Databases"), h("p", { class: "muted" }, "Every database on this VPS. Select one to act on it, or open it for details.")),
-      h("div", { class: "page-actions" }, h("a", { class: "btn primary", id: "new-db", href: "#/databases/new" }, icon("plus"), "Create database"))),
+      can("operator") ? h("div", { class: "page-actions" }, h("a", { class: "btn primary", id: "new-db", href: "#/databases/new" }, icon("plus"), "Create database")) : null),
     h("section", { class: "panel" },
       h("header", { class: "panel-head" }, h("div", null, h("h2", null, "Databases", count)), actions),
       h("div", { class: "toolbar" }, h("label", { class: "search" }, icon("search"), search, h("kbd", null, "/")), engineSel, statusSel),
@@ -50,6 +50,7 @@ export function databasesView() {
   }
 
   function renderActions() {
+    if (!can("operator")) { actions.replaceChildren(h("span", { class: "chip neutral", title: "Your Viewer role can look but not change anything." }, icon("eye"), "Read only")); return; }
     const d = instance(ui.selected);
     const items = d ? databaseActions(d) : [{ label: "Select a database first", disabled: true, run: () => {} }];
     actions.replaceChildren(
@@ -65,7 +66,8 @@ export function databasesView() {
     count.textContent = ui.q || ui.engine || ui.status ? `${shown.length} of ${all.length}` : String(all.length);
     renderActions();
     if (!all.length) {
-      list.replaceChildren(empty("db", "Create your first database", "Pick an engine, a size and a backup schedule. OpenRDS creates the volume and credentials.", h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database")));
+      list.replaceChildren(can("operator") ? empty("db", "Create your first database", "Pick an engine, a size and a backup schedule. OpenRDS creates the volume and credentials.", h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database"))
+        : empty("db", "No databases yet", "An operator or administrator can create one."));
       return;
     }
     if (!shown.length) {
@@ -75,7 +77,7 @@ export function databasesView() {
       return;
     }
     const columns = [
-      { key: "select", label: h("span", { class: "sr-only" }, "Select"), cls: "select", value: d => {
+      can("operator") && { key: "select", label: h("span", { class: "sr-only" }, "Select"), cls: "select", value: d => {
         const radio = h("input", { type: "radio", name: "selected-db", value: d.name, checked: d.name === ui.selected, "aria-label": `Select ${d.name}` });
         radio.addEventListener("change", () => { ui.selected = d.name; render(); });
         return radio;
@@ -92,7 +94,7 @@ export function databasesView() {
         d.backupRetentionDays ? h("span", null, plural(d.backupRetentionDays, "day")) : h("span", { class: "status warn" }, icon("alert"), "Off"),
         d.latestBackupAt ? h("small", { title: when(d.latestBackupAt) }, `Latest ${ago(d.latestBackupAt)}`) : null) },
     ];
-    list.replaceChildren(dataTable({ caption: "Databases", columns, rows: shown, sortKey: ui.sort.key, sortDir: ui.sort.dir, onSort, rowClass: d => d.name === ui.selected ? "selected" : "" }));
+    list.replaceChildren(dataTable({ caption: "Databases", columns: columns.filter(Boolean), rows: shown, sortKey: ui.sort.key, sortDir: ui.sort.dir, onSort, rowClass: d => d.name === ui.selected ? "selected" : "" }));
   }
 
   render();

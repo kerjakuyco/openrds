@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"os"
@@ -13,9 +14,11 @@ const activityLimit = 1000
 type event struct {
 	At     time.Time `json:"at"`
 	Name   string    `json:"name"`
+	Kind   string    `json:"kind,omitempty"` // "user" for account changes; otherwise a database
 	Action string    `json:"action"`
 	Result string    `json:"result"`
 	Detail string    `json:"detail,omitempty"`
+	Actor  string    `json:"actor,omitempty"` // account, "admin token" or "system"
 }
 
 func (m *manager) readActivity() ([]event, error) {
@@ -27,12 +30,13 @@ func (m *manager) readActivity() ([]event, error) {
 	return items, err
 }
 
-func (m *manager) note(name, action, result, detail string) {
+func (m *manager) logEvent(ctx context.Context, e event) {
+	e.At, e.Actor = time.Now().UTC(), actorFrom(ctx)
 	m.activityMu.Lock()
 	defer m.activityMu.Unlock()
 	items, err := m.readActivity()
 	if err == nil {
-		items = append([]event{{time.Now().UTC(), name, action, result, detail}}, items...)
+		items = append([]event{e}, items...)
 		if len(items) > activityLimit {
 			items = items[:activityLimit]
 		}
@@ -41,6 +45,15 @@ func (m *manager) note(name, action, result, detail string) {
 	if err != nil {
 		log.Printf("writing activity history: %v", err)
 	}
+}
+
+func (m *manager) note(ctx context.Context, name, action, result, detail string) {
+	m.logEvent(ctx, event{Name: name, Action: action, Result: result, Detail: detail})
+}
+
+// Account changes are recorded under the username they affect.
+func (m *manager) noteUser(ctx context.Context, username, action, detail string) {
+	m.logEvent(ctx, event{Name: username, Kind: "user", Action: action, Result: "completed", Detail: detail})
 }
 
 // Only operator-facing problem texts are recorded. Other errors can carry
@@ -56,13 +69,13 @@ func describe(err error) string {
 	return p.text
 }
 
-func (m *manager) track(name, action string) func(error) {
-	m.note(name, action, "started", "")
+func (m *manager) track(ctx context.Context, name, action string) func(error) {
+	m.note(ctx, name, action, "started", "")
 	return func(err error) {
 		if err != nil {
-			m.note(name, action, "failed", describe(err))
+			m.note(ctx, name, action, "failed", describe(err))
 			return
 		}
-		m.note(name, action, "completed", "")
+		m.note(ctx, name, action, "completed", "")
 	}
 }

@@ -1,59 +1,67 @@
 // Sign-in, the workspace shell and the hash router.
 import { h, icon, api, onUnauthorized, setAlert, empty } from "./lib.mjs";
-import { state, sync, startPolling, reset, subscribe, operations, loadEngines } from "./store.mjs";
+import { state, sync, startPolling, reset, subscribe, operations, loadEngines, setMe, can } from "./store.mjs";
 import { dashboardView } from "./dashboard.mjs";
 import { databasesView } from "./databases.mjs";
 import { instanceView } from "./instance.mjs";
 import { createView, modifyView, restoreView } from "./forms.mjs";
 import { backupsView } from "./backups.mjs";
 import { eventsView } from "./events.mjs";
+import { usersView } from "./users.mjs";
+import { accountView } from "./account.mjs";
+import { startView } from "./start.mjs";
+import { renderAuth } from "./auth.mjs";
+import { initNav, markEventsSeen } from "./nav.mjs";
 
 const $ = (id) => document.getElementById(id);
 
 // ---------- theme: light, dark, or follow the system
 
 const THEME = "openrds-theme";
-function applyTheme(choice) {
-  if (!["light", "dark", "system"].includes(choice)) choice = "system";
-  if (choice === "system") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = choice;
-  document.querySelectorAll("[data-theme-choice]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === choice)));
-  try { localStorage.setItem(THEME, choice); } catch { /* private mode */ }
+let theme = "system";
+try { theme = localStorage.getItem(THEME) || "system"; } catch { /* private mode */ }
+function setTheme(choice) {
+  theme = ["light", "dark", "system"].includes(choice) ? choice : "system";
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem(THEME, theme); } catch { /* private mode */ }
 }
-let savedTheme = "system";
-try { savedTheme = localStorage.getItem(THEME) || "system"; } catch { /* private mode */ }
-applyTheme(savedTheme);
-document.querySelectorAll("[data-theme-choice]").forEach(b => b.addEventListener("click", () => applyTheme(b.dataset.themeChoice)));
+setTheme(theme);
 
 // ---------- routes
 
+const operatorOnly = (make) => (m) => can("operator") ? make(m)
+  : { el: empty("key", "This needs the Operator role", "Viewers can look at databases but not change them. Ask an administrator for access.", h("a", { class: "btn", href: "#/databases" }, "Back to databases")), title: "Not allowed", nav: "databases", crumbs: [["Not allowed"]] };
+
 const ROUTES = [
   [/^\/?$|^\/dashboard$/, () => dashboardView()],
+  [/^\/getting-started$/, () => startView()],
   [/^\/databases$/, () => databasesView()],
-  [/^\/databases\/new$/, () => createView()],
-  [/^\/databases\/([a-z0-9-]+)\/modify$/, m => modifyView(m[1])],
+  [/^\/databases\/new$/, operatorOnly(() => createView())],
+  [/^\/databases\/([a-z0-9-]+)\/modify$/, operatorOnly(m => modifyView(m[1]))],
   [/^\/databases\/([a-z0-9-]+)(?:\/([a-z]+))?$/, m => instanceView(m[1], m[2]), "instance"],
-  [/^\/snapshots\/([a-f0-9]{32})\/restore$/, m => restoreView(m[1])],
+  [/^\/snapshots\/([a-f0-9]{32})\/restore$/, operatorOnly(m => restoreView(m[1]))],
   [/^\/snapshots$/, () => backupsView("manual")],
   [/^\/automated-backups$/, () => backupsView("automated")],
-  [/^\/events$/, () => eventsView()],
+  [/^\/events$/, () => { markEventsSeen(); return eventsView(); }],
+  [/^\/users$/, () => usersView()],
+  [/^\/account$/, () => accountView({ onIdentity })],
 ];
 const LEGACY = { overview: "/", databases: "/databases", backups: "/snapshots", activity: "/events" };
 
 let view = null, routeID = 0;
 
 function crumbs(list = []) {
-  const nav = $("crumbs");
-  nav.replaceChildren(h("ol", null, h("li", null, h("a", { href: "#/" }, "OpenRDS")),
+  $("crumbs").replaceChildren(h("ol", null, h("li", null, h("a", { href: "#/" }, "OpenRDS")),
     list.map(([label, href], i) => h("li", null, href && i < list.length - 1 ? h("a", { href }, label) : h("span", { "aria-current": "page" }, label)))));
 }
 
 async function route() {
-  if (!state.signedIn) return;
   const path = location.hash.replace(/^#/, "");
+  if (path.startsWith("/invite/")) { showAuth("invite", { secret: path.slice(8) }); return; }
+  if (!state.signedIn) return;
   if (Object.hasOwn(LEGACY, path)) { location.replace(`#${LEGACY[path]}`); return; }
   const id = ++routeID;
-  closeNav();
   for (const [pattern, make, kind] of ROUTES) {
     const m = pattern.exec(path);
     if (!m) continue;
@@ -87,10 +95,9 @@ subscribe((changed) => {
     const bad = state.problems.length > 0;
     const link = $("link-state");
     link.className = `link-state ${bad ? "warn" : "good"}`;
-    link.lastElementChild.textContent = bad ? "Degraded" : "Connected";
-    link.title = `Last checked ${new Date(state.syncedAt).toLocaleTimeString()}`;
+    $("host-name").textContent = bad ? "Degraded" : (state.host?.name || "Connected");
+    link.title = `${bad ? "Some data could not be refreshed" : "Connected to the Docker host"} · last checked ${new Date(state.syncedAt).toLocaleTimeString()}`;
     setAlert($("sync-error"), bad ? `Some data could not be refreshed, so older values are shown. ${state.problems.join(" · ")}` : "", "warn");
-    if (state.host) $("host-label").lastElementChild.textContent = state.host.name || "Single VPS";
   }
   if (changed.has("operations")) {
     const ops = $("ops");
@@ -115,58 +122,55 @@ document.addEventListener("keydown", (e) => {
 });
 document.querySelector(".skip").addEventListener("click", (e) => { e.preventDefault(); $("content").focus(); });
 
-const menuToggle = $("menu-toggle");
-function closeNav() { document.body.classList.remove("nav-open"); menuToggle.setAttribute("aria-expanded", "false"); }
-menuToggle.addEventListener("click", () => {
-  const open = !document.body.classList.contains("nav-open");
-  document.body.classList.toggle("nav-open", open);
-  menuToggle.setAttribute("aria-expanded", String(open));
-});
-
 // ---------- session
 
-function showLogin(message = "") {
+const nav = initNav({ onSignOut: signOut, theme: () => theme, setTheme });
+
+function onIdentity(id) {
+  setMe(id);
+  nav.render();
+  sync();
+}
+
+async function showAuth(mode, extra = {}) {
   state.signedIn = false;
   reset();
+  nav.reset();
   view?.destroy?.(); view = null;
   document.querySelectorAll("dialog[open]").forEach(d => d.close());
   $("content").replaceChildren();
   $("app").hidden = $("boot").hidden = true;
   $("login").hidden = false;
-  $("token").value = "";
-  setAlert($("login-note"), message, "error");
-  $("token").focus();
+  await renderAuth($("auth-panel"), { mode, ...extra, done: showWorkspace });
 }
-onUnauthorized(() => { if (state.signedIn) showLogin("Your session expired. Sign in again."); });
 
-async function showWorkspace() {
+async function showLogin(message = "") {
+  let setup = false;
+  try { setup = (await api("status")).setup; } catch { /* show sign-in */ }
+  showAuth(setup ? "setup" : "login", { message });
+}
+onUnauthorized(() => { if (state.signedIn) showLogin("Your session ended. Sign in again."); });
+
+async function showWorkspace(id) {
+  setMe(id);
   state.signedIn = true;
+  $("auth-panel").replaceChildren(); // drop the sign-in forms, including any typed token
   $("app").hidden = false;
   $("boot").hidden = $("login").hidden = true;
   await Promise.allSettled([sync(), loadEngines()]);
+  nav.render();
   startPolling();
+  if (location.hash.startsWith("#/invite/")) location.hash = "#/";
   await route();
 }
 
-$("login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const submit = e.submitter;
-  submit.disabled = true;
-  setAlert($("login-note"), "Signing in…", "info");
-  try {
-    await api("session", { method: "POST", token: $("token").value.trim() });
-    $("token").value = "";
-    await showWorkspace();
-  } catch (err) { setAlert($("login-note"), err.message, "error"); }
-  finally { submit.disabled = false; }
-});
-
-$("logout").addEventListener("click", async () => {
+async function signOut() {
   try { await api("session", { method: "DELETE" }); } catch { /* signed out locally either way */ }
   showLogin();
-});
+}
 
 (async () => {
-  try { await api("session"); await showWorkspace(); }
-  catch (err) { showLogin(err.status === 401 ? "" : err.message); }
+  if (location.hash.startsWith("#/invite/")) { route(); return; }
+  try { await showWorkspace(await api("session")); }
+  catch (err) { if (err.status === 401) showLogin(); else showAuth("login", { message: err.message }); }
 })();

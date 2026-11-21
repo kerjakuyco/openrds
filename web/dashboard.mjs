@@ -1,6 +1,7 @@
 // The landing page: headline counts, recommendations and host capacity.
 import { h, icon, panel, empty, dataTable, status, keyValues, bytes, plural, ago, when, isLive, isRunning, needsAttention, meter } from "./lib.mjs";
-import { state, subscribe } from "./store.mjs";
+import { state, subscribe, can } from "./store.mjs";
+import { startCard } from "./start.mjs";
 import { cpuCell, showDatabases } from "./databases.mjs";
 import { resultChip } from "./instance.mjs";
 
@@ -43,9 +44,11 @@ export function dashboardView() {
   const host = h("div");
   const fleet = h("div");
   const recent = h("div");
+  const start = h("div");
   const el = h("div", null,
     h("div", { class: "page-head" }, h("div", null, h("h1", null, "Dashboard"), h("p", { class: "muted" }, "Databases, recovery points and capacity on this VPS.")),
-      h("div", { class: "page-actions" }, h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database"))),
+      can("operator") ? h("div", { class: "page-actions" }, h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database")) : null),
+    start,
     tiles,
     h("div", { class: "dash-grid" },
       h("div", { class: "stack-gap" }, recs, fleet),
@@ -53,6 +56,9 @@ export function dashboardView() {
 
   function render() {
     const dbs = state.instances, backups = state.backups, now = Date.now();
+    const card = dbs ? startCard() : null;
+    start.replaceChildren(...(card ? [card] : []));
+    start.className = card ? "dash-start" : "";
     const manual = backups?.filter(b => b.kind !== "automated") || [];
     const auto = backups?.filter(b => b.kind === "automated") || [];
     tiles.replaceChildren(
@@ -66,11 +72,11 @@ export function dashboardView() {
       !dbs ? empty("pulse", "Reading inventory…", "") : list.length ? h("ul", { class: "recs" }, list.map(r => h("li", { class: r.tone },
         icon(r.tone === "critical" ? "error" : r.tone === "warn" ? "alert" : "info", "icon rec-icon"),
         h("div", null, h("strong", null, r.title), h("p", { class: "muted" }, r.detail)),
-        h("a", { class: "btn small", href: r.href }, r.action))))
+        can("operator") || r.href.endsWith("/logs") ? h("a", { class: "btn small", href: r.href }, r.action) : null)))
         : h("div", { class: "all-good" }, icon("ok"), h("div", null, h("strong", null, "No recommendations"), h("p", { class: "muted" }, "Every database is healthy and backed up.")))));
 
     fleet.replaceChildren(panel("Databases", { counter: dbs?.length ?? null, actions: [h("a", { class: "btn small", href: "#/databases" }, "View all")] },
-      !dbs ? empty("host", "Reading inventory…", "") : !dbs.length ? empty("db", "No databases yet", "Create one to see its status and usage here.", h("a", { class: "btn primary", href: "#/databases/new" }, "Create database"))
+      !dbs ? empty("host", "Reading inventory…", "") : !dbs.length ? empty("db", "No databases yet", "Create one to see its status and usage here.", can("operator") ? h("a", { class: "btn primary", href: "#/databases/new" }, "Create database") : null)
         : dataTable({ caption: "Databases", rows: [...dbs].sort((a, b) => a.name.localeCompare(b.name)).slice(0, 8), columns: [
           { key: "name", label: "DB identifier", value: d => h("div", { class: "stack" }, h("a", { href: `#/databases/${d.name}` }, d.name), h("small", null, d.engineLabel)) },
           { key: "status", label: "Status", value: status },
@@ -98,9 +104,10 @@ export function dashboardView() {
     const events = state.activity?.slice(0, 6) || [];
     recent.replaceChildren(panel("Recent events", { actions: [h("a", { class: "btn small", href: "#/events" }, "View all")] },
       !state.activity ? empty("bell", "Reading history…", "") : events.length ? h("ul", { class: "timeline" }, events.map(e => h("li", null,
-        resultChip(e.result), h("div", null, h("strong", null, e.action), h("small", null, h("a", { href: `#/databases/${e.name}` }, e.name), ` · ${ago(e.at, now)}`))))) : empty("bell", "No operations yet", "Database operations appear here as they run.")));
+        resultChip(e.result), h("div", null, h("strong", null, e.action), h("small", null, e.kind === "user" ? e.name : h("a", { href: `#/databases/${e.name}` }, e.name), e.actor && e.actor !== "system" && e.actor !== e.name ? ` by ${e.actor}` : "", ` · ${ago(e.at, now)}`))))) : empty("bell", "No operations yet", "Database operations appear here as they run.")));
   }
   render();
   const stop = subscribe(render);
-  return { el, title: "Dashboard", nav: "dashboard", crumbs: [["Dashboard"]], destroy: stop };
+  window.addEventListener("openrds:start", render);
+  return { el, title: "Dashboard", nav: "dashboard", crumbs: [["Dashboard"]], destroy: () => { stop(); window.removeEventListener("openrds:start", render); } };
 }

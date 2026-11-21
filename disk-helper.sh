@@ -24,7 +24,10 @@ host() {
 
 case "${1:-}" in
   check)
-    nsenter -t 1 -m losetup -f >/dev/null
+    if ! out=$(nsenter -t 1 -m losetup -f 2>&1); then
+      echo "no free loop device on the host: ${out:-losetup failed}" >&2
+      exit 1
+    fi
     ;;
   attach)
     image_ok || { echo "invalid disk image request" >&2; exit 1; }

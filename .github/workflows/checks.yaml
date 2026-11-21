@@ -13,6 +13,11 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - run: for f in web/*.mjs scripts/*.cjs; do node --check "$f"; done
+      - name: Make loop devices available for data-volume limits
+        run: |
+          sudo modprobe loop || true
+          ls -l /dev/loop-control
+          sudo losetup -f
       - run: OPENRDS_METRICS_INTERVAL=5s sh install.sh
       - run: OPENRDS_REQUIRE_QUOTA=1 python3 scripts/smoke.py
       - name: Exercise the dashboard in Chrome

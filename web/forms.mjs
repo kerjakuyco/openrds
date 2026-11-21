@@ -1,6 +1,6 @@
 // Create, restore and modify pages: numbered sections like a console wizard,
 // with a summary that shows what the request will do to the host.
-import { h, icon, btn, api, alertBox, setAlert, mib, nextId, windowLabel, plural, bytes, keyValues, isLive, modal, toast } from "./lib.mjs";
+import { h, icon, btn, api, alertBox, setAlert, mib, nextId, windowLabel, plural, bytes, keyValues, isLive, modal, toast, help } from "./lib.mjs";
 import { state, loadEngines, engine, instance, track, sync, go } from "./store.mjs";
 
 const SIZES = [
@@ -53,13 +53,14 @@ function suggestPort(key, taken = new Set((state.instances || []).map(d => d.por
 
 // ---------- building blocks
 
-function field(label, control, { hint = "", optional = false } = {}) {
+function field(label, control, { hint = "", optional = false, explain = "" } = {}) {
   if (!control.id) control.id = nextId("field");
   const id = control.id;
   const error = h("p", { class: "field-error", id: `${id}-error`, hidden: true });
   const hintEl = hint ? h("p", { class: "hint", id: `${id}-hint` }, hint) : null;
   control.setAttribute("aria-describedby", [hintEl && `${id}-hint`, `${id}-error`].filter(Boolean).join(" "));
-  const wrap = h("div", { class: "field" }, h("label", { for: id, class: "field-label" }, label, optional && h("span", { class: "optional" }, " · optional")), control, hintEl, error);
+  const labelEl = h("label", { for: id, class: "field-label" }, label, optional && h("span", { class: "optional" }, " · optional"));
+  const wrap = h("div", { class: "field" }, explain ? h("div", { class: "field-head" }, labelEl, help(explain, `About ${label}`)) : labelEl, control, hintEl, error);
   wrap.setError = (msg) => { error.textContent = msg || ""; error.hidden = !msg; control.setAttribute("aria-invalid", msg ? "true" : "false"); };
   wrap.control = control;
   return wrap;
@@ -238,7 +239,7 @@ function databaseForm({ mode, eng, initial, source }) {
   }
   applySize();
   updateSizes();
-  sections.push(section(++n, "Instance configuration", "Limits are enforced by Docker. A database never uses more than its share.", sizeCards, custom));
+  sections.push(section(++n, "Instance configuration", "Limits are enforced by Docker, so a busy database cannot slow the others down. Not sure? Start small; you can change the size later.", sizeCards, custom));
 
   // Storage
   if (mode !== "modify") {
@@ -246,7 +247,7 @@ function databaseForm({ mode, eng, initial, source }) {
     disk.addEventListener("input", () => { v.diskGiB = Number(disk.value) || 0; fields.disk.setError(""); changed(); });
     const quota = host?.volumeQuota;
     const supported = quota?.state === "supported";
-    fields.disk = field("Data volume limit (GiB)", disk, { optional: true, hint: supported
+    fields.disk = field("Data volume limit (GiB)", disk, { optional: true, explain: "Without a limit, one database can fill the VPS disk and stop the others. With a limit, only its own writes fail when its volume is full.", hint: supported
       ? "A fixed-size ext4 volume. Writes past it fail, and usable space is slightly less than the number you enter."
       : `${quota?.message || "Checking whether this host can enforce a data-volume limit."} Leave it blank for an uncapped volume.` });
     sections.push(section(++n, "Storage", null, h("p", { class: "row" }, h("span", { class: `chip ${supported ? "good" : quota?.state === "unsupported" ? "warn" : "neutral"}` }, supported ? "Limits enforceable" : quota?.state === "unsupported" ? "Limits not enforceable here" : "Checking host")), fields.disk));
@@ -258,7 +259,7 @@ function databaseForm({ mode, eng, initial, source }) {
   // Connectivity
   const port = h("input", { type: "number", min: "1024", max: "65535", step: "1", value: v.port, required: true });
   port.addEventListener("input", () => { v.port = Number(port.value); fields.port.setError(""); changed(); });
-  fields.port = field("Host port", port, { hint: "Bound to 127.0.0.1 on the VPS. Reach it from elsewhere through an SSH tunnel." });
+  fields.port = field("Host port", port, { explain: "The port on the VPS that leads to this database. Any free port from 1024 to 65535 works; each database needs its own.", hint: "Bound to 127.0.0.1 on the VPS. Reach it from elsewhere through an SSH tunnel." });
   sections.push(section(++n, "Connectivity", "No database port is exposed publicly.", fields.port));
 
   // Backups
@@ -266,8 +267,8 @@ function databaseForm({ mode, eng, initial, source }) {
   const win = parseWindow(v.window);
   const start = select(Array.from({ length: 48 }, (_, i) => [i * 30, `${hhmm(i * 30)} UTC`]), win.start);
   const length = select([...new Set([...LENGTHS, win.length])].map(m => [m, m < 60 ? `${m} minutes` : plural(m / 60, "hour")]), win.length);
-  const windowFields = h("div", { class: "form-grid" }, field("Backup window start", start), field("Window length", length));
-  fields.retention = field("Backup retention period", retention, { hint: "Automated backups run once a day in the window and are deleted after this period. Manual snapshots stay until you delete them." });
+  const windowFields = h("div", { class: "form-grid" }, field("Backup window start", start, { explain: "Times are in UTC. Choose an hour when the database is quiet, because a backup adds load while it runs." }), field("Window length", length));
+  fields.retention = field("Backup retention period", retention, { explain: "How many days each daily backup is kept. Off means no automated backups; you can still take snapshots by hand.", hint: "Automated backups run once a day in the window and are deleted after this period. Manual snapshots stay until you delete them." });
   const syncBackup = () => { v.retention = Number(retention.value); v.window = formatWindow(Number(start.value), Number(length.value)); windowFields.hidden = v.retention === 0; changed(); };
   [retention, start, length].forEach(c => c.addEventListener("change", syncBackup));
   syncBackup();
@@ -287,10 +288,10 @@ function databaseForm({ mode, eng, initial, source }) {
   const tags = tagEditor(v.tags);
   tags.onChange(changed);
   sections.push(section(++n, "Additional configuration", null,
-    h("h3", { class: "sub" }, icon("sliders"), "Engine parameters"),
+    h("h3", { class: "sub" }, icon("sliders"), "Engine parameters", help("Settings the database engine reads when it starts. The defaults suit most applications; change them when you know you need to.", "About engine parameters")),
     h("p", { class: "muted" }, mode === "modify" ? "Parameter changes need a restart. You choose when below." : "Applied when the database starts. Only checked settings are offered."),
     paramSlot,
-    h("h3", { class: "sub" }, icon("shield"), "Deletion protection"),
+    h("h3", { class: "sub" }, icon("shield"), "Deletion protection", help("A safety switch. While it is on, deleting the database is refused, even by an administrator.", "About deletion protection")),
     h("label", { class: "check", for: protection.id }, protection, h("span", null, h("strong", null, "Enable deletion protection"), h("small", null, "The database cannot be deleted until this is turned off."))),
     h("h3", { class: "sub" }, icon("tag"), "Tags"),
     h("p", { class: "muted" }, "Key-value labels to organise and search databases."),

@@ -190,7 +190,7 @@ func TestRestoreRequiresExplicitUncapOnUnsupportedHost(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "data"), []byte("dump"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	h := handler(m, auth{"test-token"})
+	h := handler(m, testAuth(t, m, "test-token"))
 	restore := func(body string) int {
 		req := httptest.NewRequest("POST", "/api/backups/"+b.ID+"/restore", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-token")

@@ -92,7 +92,7 @@ func (m *manager) makeBackup(ctx context.Context, name, kind string) (b backup, 
 	if kind == "automated" {
 		label = "Automated backup"
 	}
-	finish := m.track(name, label)
+	finish := m.track(ctx, name, label)
 	defer func() { finish(err) }()
 	return m.snapshot(ctx, r, kind, false)
 }
@@ -140,7 +140,7 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 }
 
 // Unpublish first so readers never discover a half-deleted backup.
-func (m *manager) removeBackup(b backup, action string) error {
+func (m *manager) removeBackup(ctx context.Context, b backup, action string) error {
 	dir := filepath.Join(m.backupDir(), b.ID)
 	dest := filepath.Join(m.backupDir(), ".deleting-"+b.ID)
 	if err := os.Rename(dir, dest); err != nil {
@@ -148,34 +148,34 @@ func (m *manager) removeBackup(b backup, action string) error {
 	}
 	err := os.RemoveAll(dest)
 	if err == nil {
-		m.note(b.Name, action, "completed", "")
+		m.note(ctx, b.Name, action, "completed", "")
 	}
 	return err
 }
 
-func (m *manager) deleteBackup(id string) error {
+func (m *manager) deleteBackup(ctx context.Context, id string) error {
 	m.backupMu.Lock()
 	defer m.backupMu.Unlock()
 	b, err := m.backup(id)
 	if err != nil {
 		return err
 	}
-	return m.removeBackup(b, "Delete backup")
+	return m.removeBackup(ctx, b, "Delete backup")
 }
 
 // Re-read under the lock: the backup may have been kept as a snapshot meanwhile.
-func (m *manager) expire(id string, now time.Time) error {
+func (m *manager) expire(ctx context.Context, id string, now time.Time) error {
 	m.backupMu.Lock()
 	defer m.backupMu.Unlock()
 	b, err := m.backup(id)
 	if err != nil || b.Kind != "automated" || b.Expires == nil || !now.After(*b.Expires) {
 		return nil
 	}
-	return m.removeBackup(b, "Expire automated backup")
+	return m.removeBackup(ctx, b, "Expire automated backup")
 }
 
 // Turn an automated backup into a manual snapshot that never expires.
-func (m *manager) keepBackup(id string) (backup, error) {
+func (m *manager) keepBackup(ctx context.Context, id string) (backup, error) {
 	m.backupMu.Lock()
 	defer m.backupMu.Unlock()
 	b, err := m.backup(id)
@@ -189,7 +189,7 @@ func (m *manager) keepBackup(id string) (backup, error) {
 	if err := writeJSON(filepath.Join(m.backupDir(), b.ID, "meta.json"), b); err != nil {
 		return b, err
 	}
-	m.note(b.Name, "Keep backup as snapshot", "completed", "")
+	m.note(ctx, b.Name, "Keep backup as snapshot", "completed", "")
 	return b, nil
 }
 

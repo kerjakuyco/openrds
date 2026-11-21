@@ -3,9 +3,13 @@
 import { api, toast } from "./lib.mjs";
 
 export const state = {
-  instances: null, backups: null, activity: null, host: null, engines: null,
-  signedIn: false, syncedAt: 0, problems: [],
+  instances: null, backups: null, activity: null, host: null, engines: null, users: null,
+  me: null, signedIn: false, syncedAt: 0, problems: [],
 };
+
+const LEVEL = { viewer: 1, operator: 2, admin: 3 };
+// Whether the signed-in person has at least this role. The server enforces the same rule.
+export const can = (role) => (LEVEL[state.me?.role] || 0) >= LEVEL[role];
 
 const listeners = new Set();
 export const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
@@ -17,11 +21,12 @@ const RESOURCES = ["instances", "backups", "activity", "host"];
 export async function sync() {
   if (!state.signedIn) return;
   const id = ++syncID;
-  const results = await Promise.allSettled(RESOURCES.map(k => api(k)));
+  const keys = can("admin") ? [...RESOURCES, "users"] : RESOURCES;
+  const results = await Promise.allSettled(keys.map(k => api(k)));
   if (id !== syncID || !state.signedIn) return;
   const changed = new Set(), problems = [];
   results.forEach((res, i) => {
-    const key = RESOURCES[i];
+    const key = keys[i];
     if (res.status === "fulfilled") {
       if (JSON.stringify(state[key]) !== JSON.stringify(res.value)) changed.add(key);
       state[key] = res.value;
@@ -39,12 +44,14 @@ export async function loadEngines() {
 }
 
 export const go = (hash) => { location.hash = hash; };
+export function setMe(id) { state.me = id; emit(new Set(["me"])); }
 export const engine = (key) => state.engines?.find(e => e.key === key);
 export const instance = (name) => state.instances?.find(d => d.name === name);
 
 export function reset() {
   syncID++;
-  for (const key of RESOURCES) state[key] = null;
+  for (const key of [...RESOURCES, "users"]) state[key] = null;
+  state.me = null;
   state.problems = [];
   operations.clear();
 }

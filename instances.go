@@ -103,7 +103,7 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	if from != nil {
 		action = "Restore backup"
 	}
-	finish := m.track(r.Name, action)
+	finish := m.track(ctx, r.Name, action)
 	defer func() { finish(err) }()
 	if err := m.start(ctx, r); err != nil {
 		return fail(502, "Provisioning did not finish. The instance was kept for inspection. "+err.Error())
@@ -162,7 +162,7 @@ func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err err
 	if state := states[r.Project]; state != "" && state != "stopped" {
 		return fail(409, "Stop the database before changing its disk limit.")
 	}
-	finish := m.track(name, "Resize disk")
+	finish := m.track(ctx, name, "Resize disk")
 	defer func() { finish(err) }()
 	if err = m.diskHelper(ctx, "resize", r, gib); err != nil {
 		return fail(502, "Disk resize did not finish. "+err.Error())
@@ -223,7 +223,7 @@ func (m *manager) change(ctx context.Context, name, action string) (err error) {
 	default:
 		return fail(404, "Unknown database action.")
 	}
-	finish := m.track(name, label)
+	finish := m.track(ctx, name, label)
 	defer func() { finish(err) }()
 	switch action {
 	case "start":
@@ -255,14 +255,14 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 		if r.PendingRestore {
 			return fail(409, "This instance has an incomplete restore, so it has no data to back up. Delete it without a final snapshot.")
 		}
-		finish := m.track(name, "Final snapshot")
+		finish := m.track(ctx, name, "Final snapshot")
 		_, err := m.snapshot(ctx, r, "manual", true)
 		finish(err)
 		if err != nil {
 			return fail(502, "The final snapshot failed, so the database was not deleted. Start the database to take one, or delete it without a final snapshot. "+describe(err))
 		}
 	}
-	finish := m.track(name, "Delete database")
+	finish := m.track(ctx, name, "Delete database")
 	defer func() { finish(err) }()
 	if r.DiskGiB > 0 {
 		err = m.checkExistingVolume(ctx, r)
@@ -383,7 +383,7 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 		}
 		running = live(states[r.Project])
 	}
-	finish := m.track(name, "Modify database")
+	finish := m.track(ctx, name, "Modify database")
 	defer func() { finish(err) }()
 	switch {
 	case running && (mod.ApplyImmediately || next.Port != r.Port):

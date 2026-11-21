@@ -47,7 +47,7 @@ func TestSessionAndSecretBoundaries(t *testing.T) {
 	if err != nil || again != token {
 		t.Fatalf("token did not survive restart: %v", err)
 	}
-	h := handler(m, auth{token})
+	h := handler(m, testAuth(t, m, token))
 	request := func(method, path, body string, cookie *http.Cookie, bearer, origin string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		if cookie != nil {
@@ -96,7 +96,7 @@ func TestSessionAndSecretBoundaries(t *testing.T) {
 		t.Fatal("connection endpoint did not return only the requested user's credentials")
 	}
 	exp := fmt.Sprint(time.Now().Add(-time.Second).Unix())
-	cookie.Value = exp + "." + (auth{token}).sign(exp)
+	cookie.Value = exp + "." + (auth{token: token}).sign(exp)
 	if w := request("GET", "/api/activity", "", cookie, "", ""); w.Code != 401 {
 		t.Fatal("expired session accepted")
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -37,6 +38,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	people, err := openAccounts(filepath.Join(dir, "users.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	m.history.interval = sampleInterval()
 	if m.engine, err = dockerEngine(); err != nil {
 		m.history.unavailable = "Metric history is off: " + err.Error() + "."
@@ -46,7 +51,7 @@ func main() {
 	prepare, cancelPrepare := context.WithTimeout(context.Background(), 2*time.Minute)
 	m.prepareDisks(prepare)
 	cancelPrepare()
-	srv := &http.Server{Addr: env("OPENRDS_LISTEN", "127.0.0.1:8080"), Handler: handler(m, auth{token}),
+	srv := &http.Server{Addr: env("OPENRDS_LISTEN", "127.0.0.1:8080"), Handler: handler(m, auth{token: token, accounts: people}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

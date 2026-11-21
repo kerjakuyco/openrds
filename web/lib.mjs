@@ -156,7 +156,7 @@ export function modal({ title, kicker = "", body = [], confirm = "Confirm", tone
       h("button", { type: "button", class: "icon-btn ghost", "aria-label": "Close", onclick: () => dlg.close() }, icon("close"))),
     form);
   form.prepend(...flat([body]));
-  form.append(note, h("footer", { class: "modal-foot" }, h("button", { type: "button", class: "btn", onclick: () => dlg.close() }, cancel), submit));
+  form.append(note, h("footer", { class: "modal-foot" }, cancel && h("button", { type: "button", class: "btn", onclick: () => dlg.close() }, cancel), submit));
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (submit.disabled) return;
@@ -176,13 +176,17 @@ export function modal({ title, kicker = "", body = [], confirm = "Confirm", tone
 // ---------- menus
 
 // A menu button (WAI-ARIA menu pattern): arrow keys move, Escape closes.
-export function menu(label, items, { cls = "", align = "end", labelIcon = null } = {}) {
+export function menu(label, items, { cls = "", align = "end", labelIcon = null, trigger: custom = null, up = false, ariaLabel = null, chevron = true } = {}) {
   const listID = nextId("menu");
-  const trigger = h("button", { type: "button", class: `btn ${cls}`.trim(), "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": listID },
-    labelIcon && icon(labelIcon), label, icon("chevron", "icon chevron"));
-  const list = h("div", { id: listID, class: `menu ${align}`, role: "menu", hidden: true });
+  const trigger = custom || h("button", { type: "button", class: `btn ${cls}`.trim() },
+    labelIcon && icon(labelIcon), label, chevron && icon("chevron", "icon chevron"));
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.setAttribute("aria-controls", listID);
+  if (ariaLabel) trigger.setAttribute("aria-label", ariaLabel);
+  const list = h("div", { id: listID, class: `menu ${align}${up ? " up" : ""}`, role: "menu", hidden: true });
   const wrap = h("div", { class: "menu-wrap" }, trigger, list);
-  const entries = () => [...list.querySelectorAll("[role=menuitem]:not([aria-disabled=true])")];
+  const entries = () => [...list.querySelectorAll("[role^=menuitem]:not([aria-disabled=true])")];
   const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
   function open() {
     list.hidden = false; trigger.setAttribute("aria-expanded", "true");
@@ -208,9 +212,13 @@ export function menu(label, items, { cls = "", align = "end", labelIcon = null }
   });
   for (const item of items.filter(Boolean)) {
     if (item === "-") { list.append(h("div", { class: "menu-sep", role: "separator" })); continue; }
-    const entry = h("button", { type: "button", role: "menuitem", tabindex: "-1", class: item.danger ? "danger-item" : "",
+    if (item.heading) { list.append(h("p", { class: "menu-heading", role: "presentation" }, item.heading)); continue; }
+    const radio = item.checked !== undefined;
+    const entry = h("button", { type: "button", role: radio ? "menuitemradio" : "menuitem", tabindex: "-1", class: item.danger ? "danger-item" : "",
+      "aria-checked": radio ? String(item.checked) : null,
       "aria-disabled": item.disabled ? "true" : null, title: item.disabled && item.reason ? item.reason : null },
-      item.icon && icon(item.icon), h("span", null, item.label, item.disabled && item.reason && h("small", null, item.reason)));
+      item.icon && icon(item.icon), h("span", null, item.label, item.disabled && item.reason && h("small", null, item.reason)),
+      radio && item.checked ? icon("check", "icon tick") : null);
     entry.addEventListener("click", () => { if (item.disabled) return; close(); item.run(); });
     list.append(entry);
   }
@@ -300,3 +308,44 @@ export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, row
   const body = h("tbody", null, list.map(r => h("tr", { class: rowClass?.(r) || null }, columns.map(c => h("td", { class: c.cls || null, "data-label": typeof c.label === "string" ? c.label : null }, c.value(r))))));
   return h("div", { class: "table-wrap" }, h("table", { id }, caption && h("caption", { class: "sr-only" }, caption), h("thead", null, head), body));
 }
+
+// A copyable block of text such as a command, a URI or a snippet.
+export function codeBlock(text, { label = "Copy", onCopy = null, caption = "" } = {}) {
+  const copy = btn([icon("copy"), label], async () => {
+    const ok = await copyText(text);
+    toast(ok ? "Copied to the clipboard." : "Copying failed. Select the text and copy it.", ok ? "success" : "warn");
+    if (ok) onCopy?.();
+  }, "small ghost");
+  return h("div", { class: "code-wrap" }, caption && h("p", { class: "code-caption" }, caption), h("div", { class: "code" }, h("pre", null, text), copy));
+}
+
+// A small toggletip: a "?" button that reveals a short explanation.
+export function help(text, label = "More information") {
+  const tipID = nextId("tip");
+  const tip = h("span", { id: tipID, class: "tip-bubble", role: "status", hidden: true });
+  const button = h("button", { type: "button", class: "help-btn", "aria-label": label, "aria-expanded": "false", "aria-controls": tipID }, "?");
+  const close = (e) => { if (!wrap.contains(e.target)) toggle(false); };
+  function toggle(open) {
+    tip.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+    tip.textContent = open ? text : "";
+    if (open) document.addEventListener("pointerdown", close); else document.removeEventListener("pointerdown", close);
+  }
+  button.addEventListener("click", () => toggle(tip.hidden));
+  button.addEventListener("keydown", (e) => { if (e.key === "Escape") toggle(false); });
+  const wrap = h("span", { class: "help" }, button, tip);
+  return wrap;
+}
+
+export function initials(name = "") {
+  const parts = name.trim().split(/[\s._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] || "?") + (parts[1]?.[0] || "")).toUpperCase();
+}
+
+export const avatar = (name, cls = "") => h("span", { class: `avatar ${cls}`.trim(), "aria-hidden": "true" }, initials(name));
+
+export const ROLES = {
+  admin: { label: "Admin", text: "Everything, including accounts and roles." },
+  operator: { label: "Operator", text: "Create, change and delete databases and backups, and reveal credentials." },
+  viewer: { label: "Viewer", text: "Read-only: status, monitoring, logs and events. No credentials or backup downloads." },
+};

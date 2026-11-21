@@ -1,6 +1,7 @@
 """Exercise the installed control plane and both real database engines."""
 
 import datetime
+import http.cookiejar
 import json
 import os
 import secrets
@@ -216,7 +217,55 @@ case "$message" in *"Disk quota exceeded"*|*"No space left on device"*) ;; *) ec
                 api(f"backups/{b['id']}", "DELETE")
 
 
+def browser():
+    """A cookie-keeping client, like one person's browser session."""
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def call(path, method="GET", body=None):
+        req = urllib.request.Request(f"http://{address}/api/{path}", method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with opener.open(req, timeout=60) as response:
+                payload = response.read()
+                return response.status, json.loads(payload) if payload else None
+        except urllib.error.HTTPError as err:
+            return err.code, None
+    return call
+
+
+def exercise_accounts():
+    suffix = secrets.token_hex(3)
+    created = []
+    try:
+        people = {}
+        for role in ("operator", "viewer"):
+            invite = api("users", "POST", {"username": f"smoke-{role}-{suffix}", "name": f"Smoke {role}", "role": role})
+            created.append(invite["user"]["id"])
+            assert invite["user"]["status"] == "invited" and "password" not in json.dumps(invite["user"])
+            person = browser()
+            code, me = person(f"invites/{invite['secret']}", "POST", {"password": f"{role}-{suffix}-password"})
+            assert code == 200 and me["role"] == role, (code, me)
+            assert person(f"invites/{invite['secret']}", "POST", {"password": "a-second-password"})[0] == 404
+            people[role] = person
+        viewer, operator = people["viewer"], people["operator"]
+        assert viewer("instances")[0] == 200
+        assert viewer("instances", "POST", {"name": f"denied-{suffix}", "engine": "valkey", "port": free_port()})[0] == 403
+        assert viewer("users")[0] == 403 and operator("users")[0] == 403
+        assert operator("session")[1]["role"] == "operator"
+        returning = browser()
+        assert returning("session", "POST", {"username": f"smoke-viewer-{suffix}", "password": "wrong-password"})[0] == 401
+        assert returning("session", "POST", {"username": f"smoke-viewer-{suffix}", "password": f"viewer-{suffix}-password"})[0] == 200
+        events = api("activity")
+        assert any(e["action"] == "Set account password" and e["actor"] == f"smoke-viewer-{suffix}" for e in events)
+        print("accounts: invitations, sign-in, roles and audit trail passed", flush=True)
+    finally:
+        for user_id in created:
+            api(f"users/{user_id}", "DELETE")
+
+
 if __name__ == "__main__":
+    exercise_accounts()
     host = api("host")
     assert host["cpus"] > 0 and host["memoryBytes"] > 0
     quota = host["volumeQuota"]["state"]

@@ -1,6 +1,7 @@
 // One database: summary, actions and tabs, like a managed-database console.
 import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
-import { state, subscribe, instance, engine, loadEngines, sync, go, track } from "./store.mjs";
+import { state, subscribe, instance, engine, loadEngines, sync, go, track, can } from "./store.mjs";
+import { connectGuide } from "./connect.mjs";
 import { timeChart, chartGroup } from "./charts.mjs";
 import { databaseActions, takeSnapshot, confirmReboot } from "./actions.mjs";
 import { backupTable, backupSummary } from "./backups.mjs";
@@ -9,14 +10,6 @@ import { tagEditor } from "./forms.mjs";
 const TABS = [["connectivity", "Connectivity & security"], ["monitoring", "Monitoring"], ["logs", "Logs & events"],
   ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
 let chartRange = "1h";
-
-function code(text, label = "Copy") {
-  const copy = btn([icon("copy"), label], async () => {
-    const ok = await copyText(text);
-    toast(ok ? "Copied to the clipboard." : "Copying failed. Select the text and copy it.", ok ? "success" : "warn");
-  }, "small ghost");
-  return h("div", { class: "code" }, h("pre", null, text), copy);
-}
 
 const pendingChanges = (d) => {
   if (!d.applied) return [];
@@ -29,36 +22,16 @@ const pendingChanges = (d) => {
 
 function connectivityTab(d) {
   const eng = engine(d.engine);
-  const uri = h("div"), container = h("div");
-  let c = null;
-  async function reveal(b) {
-    b.disabled = true;
-    try { c = await api(`instances/${d.name}/connection`); render(); }
-    catch (err) { toast(err.message, "error"); b.disabled = false; }
-  }
-  function render() {
-    if (!c) {
-      uri.replaceChildren(h("p", { class: "muted" }, "The URI includes the password, so it is fetched only when you ask for it."), btn([icon("eye"), "Reveal connection URI"], reveal));
-      container.replaceChildren(h("p", { class: "muted" }, "Reveal the connection URI to see the network to join and the internal address."));
-      return;
-    }
-    uri.replaceChildren(code(c.uri, "Copy URI"), h("div", { class: "row" }, btn("Hide", () => { c = null; render(); }, "small ghost")));
-    container.replaceChildren(h("p", { class: "muted" }, "Attach your application container to this private network, then use the internal URI."),
-      code(`docker network connect ${c.network} YOUR_APP_CONTAINER`), code(c.networkURI, "Copy container URI"));
-  }
-  render();
-  const el = h("div", { class: "tab-grid" },
-    panel("Endpoint & port", {}, keyValues([["Endpoint", h("code", null, "127.0.0.1")], ["Port", h("code", null, String(d.port))],
-      ["Master user", h("code", null, eng.user)], [d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)],
-      ["Container DNS name", h("code", null, `openrds-${d.name}`)], ["Protocol", d.engine === "valkey" ? "Redis (RESP)" : d.engineLabel]], "cols-2")),
-    panel("Connection URI", { description: d.engine === "valkey" ? "Any Redis client can use this URI." : "" }, uri),
-    panel("Connect from your computer", { description: "Replace user@your-vps with your SSH login, keep the tunnel open, then use the URI locally." },
-      code(`ssh -N -L ${d.port}:127.0.0.1:${d.port} user@your-vps`)),
-    panel("Connect an application container", {}, container),
-    panel("Security", {}, h("ul", { class: "facts" },
-      h("li", null, icon("shield"), "The port is published on the VPS loopback interface only; nothing listens publicly."),
-      h("li", null, icon("key"), "The password was generated for this database and is kept in the control volume."),
-      h("li", null, icon("terminal"), "Traffic between the tunnel and the database is not encrypted inside the VPS."))));
+  const el = h("div", { class: "stack-gap" },
+    connectGuide(d, eng, { canReveal: can("operator") }).el,
+    h("div", { class: "tab-grid" },
+      panel("Endpoint & port", {}, keyValues([["Endpoint", h("code", null, "127.0.0.1")], ["Port", h("code", null, String(d.port))],
+        ["Master user", h("code", null, eng.user)], [d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)],
+        ["Container DNS name", h("code", null, `openrds-${d.name}`)], ["Protocol", d.engine === "valkey" ? "Redis (RESP)" : d.engineLabel]], "cols-2")),
+      panel("Security", {}, h("ul", { class: "facts" },
+        h("li", null, icon("shield"), "The port is published on the VPS loopback interface only; nothing listens publicly."),
+        h("li", null, icon("key"), "The password was generated for this database and is kept in the control volume."),
+        h("li", null, icon("terminal"), "Traffic between the tunnel and the database is not encrypted inside the VPS.")))));
   return { el };
 }
 
@@ -158,7 +131,7 @@ function storagePanel(d) {
   }, "small");
   measure.disabled = !isLive(d) || d.busy;
   const body = [keyValues([["Data volume limit", d.diskGiB ? `${d.diskGiB} GiB` : "Uncapped"]]), h("div", { class: "row" }, measure, measured)];
-  if (d.diskGiB) {
+  if (d.diskGiB && can("operator")) {
     const stopped = ["stopped", "not provisioned"].includes(d.status) && !d.busy;
     const input = h("input", { type: "number", min: "1", max: "65536", step: "1", value: String(d.diskGiB), class: "num", "aria-label": `New data volume size for ${d.name} in GiB` });
     const apply = btn("Apply size", async (b) => {
@@ -173,7 +146,7 @@ function storagePanel(d) {
     apply.disabled = !stopped;
     body.push(h("div", { class: "resize" }, h("div", { class: "row" }, input, h("span", { class: "muted" }, "GiB"), apply),
       h("p", { class: "muted" }, stopped ? "Grow or shrink the ext4 volume. A smaller size is refused when the data does not fit." : "Stop the database to change this limit.")));
-  } else {
+  } else if (!d.diskGiB) {
     body.push(h("p", { class: "muted" }, "A limit cannot be added to an existing volume. Restore a snapshot into a new instance with a data volume limit."));
   }
   return panel("Storage", {}, ...body);
@@ -189,14 +162,14 @@ function configurationTab(d) {
   const el = h("div", { class: "stack-gap" },
     d.applied && alertBox(`Pending until the next restart: ${pendingChanges(d).join(", ")}.`, "info"),
     h("div", { class: "tab-grid" },
-      panel("Instance configuration", { actions: [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Modify")] }, keyValues([
+      panel("Instance configuration", { actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Modify")] : [] }, keyValues([
         ["Engine", d.engineLabel], ["Created", when(d.createdAt)],
         ["CPU limit", d.cpus ? `${d.cpus} vCPU` : "Unlimited"], ["Memory limit", d.memoryMiB ? mib(d.memoryMiB) : "Unlimited"],
         ["Host port", String(d.port)], ["Deletion protection", d.deletionProtection ? "On" : "Off"],
       ], "cols-2")),
       storagePanel(d)),
     panel("Engine parameters", { counter: params.length, description: "Values passed to the engine at start-up. Unlisted settings use the engine default.",
-      actions: [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("sliders"), "Edit parameters")] },
+      actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("sliders"), "Edit parameters")] : [] },
     paramRows.length ? dataTable({ caption: "Engine parameters", rows: paramRows, columns: [
       { key: "k", label: "Parameter", cls: "wrap", value: r => h("div", { class: "stack" }, h("code", null, r.k), h("small", null, describe(r.k)?.description || "")) },
       { key: "v", label: "Value", value: r => r.v === null ? h("span", { class: "muted" }, "Default") : h("code", null, r.v === "" ? "(empty)" : r.v) },
@@ -225,9 +198,9 @@ function backupsTab(d) {
   snap.disabled = d.busy || !isRunning(d);
   const el = h("div", { class: "stack-gap" },
     h("div", { class: "tab-grid" },
-      panel("Automated backups", { actions: [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Change")] }, backupSummary(d)),
-      panel("Deletion protection", { actions: [toggle] }, h("p", { class: "protection" }, icon("shield"), d.deletionProtection ? "On. The database cannot be deleted until protection is turned off." : "Off. The database can be deleted, with an optional final snapshot."))),
-    panel("Snapshots and backups", { description: "Every recovery point of this database. Restoring always creates a new database.", actions: [snap] }, list));
+      panel("Automated backups", { actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Change")] : [] }, backupSummary(d)),
+      panel("Deletion protection", { actions: can("operator") ? [toggle] : [] }, h("p", { class: "protection" }, icon("shield"), d.deletionProtection ? "On. The database cannot be deleted until protection is turned off." : "Off. The database can be deleted, with an optional final snapshot."))),
+    panel("Snapshots and backups", { description: "Every recovery point of this database. Restoring always creates a new database.", actions: can("operator") ? [snap] : [] }, list));
   render(d);
   return { el, update: render };
 }
@@ -243,7 +216,7 @@ function tagsTab(d) {
         await sync();
       } });
   }, "small");
-  const el = panel("Tags", { counter: tags.length, description: "Labels for organising databases. Search the database list by tag.", actions: [manage] },
+  const el = panel("Tags", { counter: tags.length, description: "Labels for organising databases. Search the database list by tag.", actions: can("operator") ? [manage] : [] },
     tags.length ? dataTable({ caption: "Tags", rows: tags, columns: [{ key: "k", label: "Key", value: ([k]) => h("code", null, k) }, { key: "v", label: "Value", value: ([, v]) => v || h("span", { class: "muted" }, "(empty)") }] })
       : empty("tag", "No tags", "Add tags such as env = production or team = payments."));
   return { el };
@@ -285,8 +258,8 @@ function banners(d) {
   if (d.status === "unhealthy" && !d.busy) out.push(alertBox("The health check is failing. Check Logs & events for the database’s own messages.", "error"));
   if (d.status === "not provisioned" && !d.busy) out.push(alertBox("The container does not exist. Choose Actions → Start to retry provisioning, or delete the database to free its name and port.", "warn"));
   if (d.applied) {
-    const reboot = btn([icon("reboot"), "Reboot now"], () => confirmReboot(d), "small");
-    reboot.disabled = d.busy || !isLive(d);
+    const reboot = can("operator") ? btn([icon("reboot"), "Reboot now"], () => confirmReboot(d), "small") : null;
+    if (reboot) reboot.disabled = d.busy || !isLive(d);
     out.push(alertBox(`Pending modifications apply at the next restart: ${pendingChanges(d).join(", ")}.`, "info", " ", reboot));
   }
   return out;
@@ -342,15 +315,16 @@ export async function instanceView(name, tab = "connectivity") {
       return;
     }
     if (gone) { gone = false; headSig = bannerSig = ""; body.replaceChildren(alerts, summarySlot, tablist, panelEl); current = null; }
-    const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel]);
+    const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel, state.me?.role]);
     if (sig !== headSig) {
       headSig = sig;
       const locked = d.busy || d.pendingRestore;
       head.replaceChildren(
         h("div", null, h("p", { class: "kicker" }, d.engineLabel), h("h1", null, d.name, " ", status(d))),
-        h("div", { class: "page-actions" },
+        can("operator") ? h("div", { class: "page-actions" },
           h("a", { class: `btn${locked ? " disabled" : ""}`, href: locked ? null : `#/databases/${d.name}/modify`, "aria-disabled": locked ? "true" : null }, icon("edit"), "Modify"),
-          menu("Actions", databaseActions(d), { cls: "primary" })));
+          menu("Actions", databaseActions(d), { cls: "primary" }))
+          : h("span", { class: "chip neutral", title: "Your Viewer role can look but not change anything." }, icon("eye"), "Read only"));
     }
     const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters]);
     if (bsig !== bannerSig) { bannerSig = bsig; alerts.replaceChildren(...banners(d)); }

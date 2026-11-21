@@ -401,11 +401,11 @@ func TestAutomatedBackupsFollowTheWindowAndRetention(t *testing.T) {
 	if b, _ := m.backup(auto.ID); !b.Expires.Equal(b.Created.AddDate(0, 0, 5)) {
 		t.Fatal("a longer retention period did not extend existing automated backups")
 	}
-	m.expireBackups(now.Add(4 * 24 * time.Hour))
+	m.expireBackups(ctx, now.Add(4*24*time.Hour))
 	if _, err := m.backup(auto.ID); err != nil {
 		t.Fatal("expired before the new retention period")
 	}
-	m.expireBackups(now.Add(6 * 24 * time.Hour))
+	m.expireBackups(ctx, now.Add(6*24*time.Hour))
 	if _, err := m.backup(auto.ID); status(err) != 404 {
 		t.Fatal("automated backup outlived its retention")
 	}
@@ -415,14 +415,14 @@ func TestAutomatedBackupsFollowTheWindowAndRetention(t *testing.T) {
 	m.attempts = map[string]time.Time{}
 	m.automatedBackup(ctx, "orders")
 	list, _ = m.backups()
-	kept, err := m.keepBackup(list[0].ID)
+	kept, err := m.keepBackup(ctx, list[0].ID)
 	if err != nil || kept.Kind != "manual" || kept.Expires != nil {
 		t.Fatalf("keep: %+v %v", kept, err)
 	}
-	if _, err := m.keepBackup(kept.ID); status(err) != 409 {
+	if _, err := m.keepBackup(ctx, kept.ID); status(err) != 409 {
 		t.Fatal("kept a manual snapshot twice")
 	}
-	m.expireBackups(now.Add(30 * 24 * time.Hour))
+	m.expireBackups(ctx, now.Add(30*24*time.Hour))
 	if _, err := m.backup(kept.ID); err != nil {
 		t.Fatal("a kept backup expired")
 	}
@@ -565,7 +565,7 @@ func TestEngineCatalogAndHistoryEndpoints(t *testing.T) {
 	if err := m.provision(t.Context(), instanceSpec{Name: "orders", Engine: "postgres", Port: 15432, Tags: map[string]string{"env": "prod"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	h := handler(m, auth{"test-token"})
+	h := handler(m, testAuth(t, m, "test-token"))
 	get := func(path string) (int, string) {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Authorization", "Bearer test-token")

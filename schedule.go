@@ -129,7 +129,7 @@ func (m *manager) automatedBackup(ctx context.Context, name string) {
 
 // Remove automated backups past their retention period, including those of
 // deleted instances. Manual snapshots are kept until someone deletes them.
-func (m *manager) expireBackups(now time.Time) {
+func (m *manager) expireBackups(ctx context.Context, now time.Time) {
 	list, err := m.backups()
 	if err != nil {
 		log.Printf("expiring backups: %v", err)
@@ -137,7 +137,7 @@ func (m *manager) expireBackups(now time.Time) {
 	}
 	for _, b := range list {
 		if b.Kind == "automated" && b.Expires != nil && now.After(*b.Expires) {
-			if err := m.expire(b.ID, now); err != nil {
+			if err := m.expire(ctx, b.ID, now); err != nil {
 				log.Printf("expiring backup %s: %v", b.ID, err)
 			}
 		}
@@ -150,7 +150,7 @@ func (m *manager) maintain(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		now := time.Now().UTC()
-		m.expireBackups(now)
+		m.expireBackups(ctx, now)
 		for _, name := range m.dueBackups(ctx, now) {
 			go m.automatedBackup(ctx, name)
 		}

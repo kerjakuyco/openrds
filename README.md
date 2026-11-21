@@ -1,6 +1,6 @@
 # OpenRDS
 
-OpenRDS is an MIT-licensed database control plane for a single Linux VPS. Install it on your server, open the dashboard, and provision PostgreSQL, MySQL, or Valkey with a persistent data volume, a private endpoint, and generated credentials. Each database gets daily automated backups, engine parameters, resource limits you can change later, deletion protection, and monitoring charts, managed from a console modeled on managed-database services.
+OpenRDS is an MIT-licensed database control plane for a single Linux VPS. Install it on your server, open the dashboard, and provision PostgreSQL, MySQL, or Valkey with a persistent data volume, a private endpoint, and generated credentials. Each database gets daily automated backups, engine parameters, resource limits you can change later, deletion protection, and monitoring charts, managed from a console modeled on managed-database services. Teammates sign in with their own accounts and roles, and a getting-started checklist and connection guide help newcomers from an empty VPS to a connected application.
 
 ## Install on a VPS
 
@@ -21,13 +21,13 @@ The installer builds the dashboard from this checkout and waits for it to start.
 ssh -N -L 8080:127.0.0.1:8080 user@your-vps
 ```
 
-Visit **http://127.0.0.1:8080** and paste the token. Both the dashboard and database ports are bound to the VPS loopback interface. If you changed the dashboard port, use that port in the tunnel and URL.
+Visit **http://127.0.0.1:8080**. The first visit asks for the admin token, to prove you control the VPS, and for the administrator account you will sign in with from then on. Both the dashboard and database ports are bound to the VPS loopback interface. If you changed the dashboard port, use that port in the tunnel and URL.
 
 ## Create and connect
 
 1. Choose **Databases → Create database**. Pick PostgreSQL 17, MySQL 8.4 LTS, or Valkey 9.1, and a template: **Production** (daily backups kept 7 days, deletion protection, 2 vCPU · 4 GiB) or **Dev and test** (backups kept 1 day, 0.5 vCPU · 512 MiB). Then adjust the size, data volume limit, host port, backup window, engine parameters and tags. The summary shows how the CPU and memory limits add up against the host before you create anything.
-2. Open the database and choose **Connectivity & security → Reveal connection URI**. PostgreSQL and MySQL create the database `app` and user `openrds`. Valkey uses Redis database `0` and the `default` user; any Redis client can connect.
-3. Applications on the VPS can use the URI directly. From another computer, run the SSH command shown on the same tab first. For a containerized app, the tab also shows the network to join and the internal URI.
+2. Open the database. Its **Connectivity & security** tab has a connection guide: choose where your application runs (on the VPS, in a container on the VPS, or on your computer) and its language or framework, such as Node.js, Python, Go, Prisma, Django, Laravel, Java or the command-line client. It shows the steps in order: the SSH tunnel or Docker network command when one is needed, the environment variables, and the code that reads them. Operators reveal the password into the snippets; viewers see a placeholder.
+3. PostgreSQL and MySQL create the database `app` and user `openrds`. Valkey uses Redis database `0` and the `default` user; any Redis client can connect.
 
 Each instance gets a separate Compose project, network, volume, and random password. Stop/Start and Reboot preserve the volume. Delete removes that instance’s volume; snapshots and automated backups have their own lifecycle.
 
@@ -68,28 +68,50 @@ Backups cover one database: PostgreSQL uses a custom-format `pg_dump` of `app`; 
 
 Backups are stored **on the same VPS**. Download a copy to independent storage to recover from losing the host. Downloaded `.dump`, `.sql`, and `.rdb` files can also be restored with standard `pg_restore`, `mysql`, and Valkey or Redis tools.
 
+## Accounts and roles
+
+Everyone signs in with their own username and password. Each account has a role:
+
+| Role | Can |
+| --- | --- |
+| **Admin** | Everything, including inviting people and changing roles. |
+| **Operator** | Create, modify, start, stop and delete databases; take, restore, download and delete backups; reveal database passwords. |
+| **Viewer** | Read-only: databases, monitoring, logs, backups and events. No passwords, no backup downloads, no changes. |
+
+The server enforces the role on every API request; the console hides what a role cannot do. An admin invites someone from **Users**. OpenRDS returns a one-time link that expires after 72 hours, and the person chooses their own password with it, so the admin never handles it. **Reset password** signs the account out everywhere and issues a new link. Disabling an account signs it out at once. You cannot change your own role, disable or delete yourself, or leave OpenRDS without an active administrator.
+
+Passwords have at least 10 characters and are stored as PBKDF2-SHA256 hashes with 600,000 iterations. Five failed sign-ins in a row lock that username for 30 seconds, doubling up to 15 minutes. A session lasts 12 hours. Changing your password, or **Account → Sign out other sessions**, ends the account's other sessions. Events record who did what: an account name, `admin token`, or OpenRDS itself for scheduled work.
+
+The **admin token** keeps full access for automation (`Authorization: Bearer`) and emergencies, such as resetting the last administrator's password. Sign in with it from **use the admin token** on the sign-in page. Keep it secret: anyone who has it controls OpenRDS.
+
+Accounts decide who can do what once connected; the network decides who can connect. The console still listens only on the VPS, so each person reaches it through their own SSH tunnel, or through a TLS reverse proxy you put in front of it.
+
 ## Monitor and operate
 
 | Console area | What you can do |
 | --- | --- |
+| **Getting started** | Follow a checklist that ticks itself off: create a database, connect an application, turn on automated backups, keep a copy off the VPS, and invite your team. It also explains the main ideas in plain language. The dashboard shows it until you finish or hide it. |
 | **Dashboard** | See database, snapshot and backup counts, recommendations (unhealthy databases, backups off or missing, pending restarts, unprotected databases tagged `env=production`, databases without a memory limit), host CPU and memory allocation, and recent events. |
 | **Databases** | Filter by name, port, tag, engine or status; sort by any column; select a database and use **Modify** or **Actions** (start, stop, reboot, take snapshot, delete). Each database has tabs for connectivity, monitoring, logs and events, configuration and parameters, maintenance and backups, and tags. |
 | **Snapshots** and **Automated backups** | Restore, download, keep or delete recovery points, and review each database’s backup schedule, latest backup and next backup. |
-| **Events** | Review the last 1,000 operations, including failure details, filtered by database, outcome or text. |
+| **Events** | Review the last 1,000 operations with who ran them and failure details, filtered by database or user, outcome or text. The sidebar counts new failures since your last visit. |
+| **Users** and **Account** | Admins invite people and change roles. Everyone can rename themselves, change their password and sign out other sessions. |
 
-The **Monitoring** tab charts CPU utilization (as a share of the CPU limit, or of the host when unlimited), memory in use against the limit, and network and disk throughput over the last 1, 3, 6, 12 or 24 hours. Every 30 seconds (`OPENRDS_METRICS_INTERVAL`, 5s–5m) the control plane reads each running database’s container statistics from the Docker Engine API through the mounted socket. The Docker CLI rounds statistics to three significant digits, which would make long-running throughput coarse. Readings are kept for 24 hours in memory and saved to `metrics.json` every five minutes and at shutdown, so an update keeps the charts. Each chart has a table view and a keyboard-readable crosshair. The console follows the system light or dark theme unless you pick one.
+The **Monitoring** tab charts CPU utilization (as a share of the CPU limit, or of the host when unlimited), memory in use against the limit, and network and disk throughput over the last 1, 3, 6, 12 or 24 hours. Every 30 seconds (`OPENRDS_METRICS_INTERVAL`, 5s–5m) the control plane reads each running database’s container statistics from the Docker Engine API through the mounted socket. The Docker CLI rounds statistics to three significant digits, which would make long-running throughput coarse. Readings are kept for 24 hours in memory and saved to `metrics.json` every five minutes and at shutdown, so an update keeps the charts. Each chart has a table view and a keyboard-readable crosshair.
+
+The sidebar groups the console into databases, backups, activity and administration, with a quick link and live status dot for each database. Collapse it to icons on a desktop; on a phone it opens as a drawer. The account menu at its foot holds account settings, the light, dark or system theme, and sign-out.
 
 ### Where state lives
 
-- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the admin token, instance metadata and database passwords, generated Compose overrides for engine parameters, activity history, metric history, and completed backups.
+- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the admin token, accounts (`users.json`, with password hashes), instance metadata and database passwords, generated Compose overrides for engine parameters, activity history, metric history, and completed backups.
 - Each database has its own named data volume. Its internal Compose project name is in `instances/<name>.json` in the control volume. Treat this metadata as secret.
-- The control plane uses the host Docker socket to operate these projects and read their statistics; its administrator is a trusted VPS operator. This release is for one admin workspace on one host.
+- The control plane uses the host Docker socket to operate these projects and read their statistics; anyone with the admin token or an administrator account is a trusted VPS operator. This release manages one host.
 - To update: pull your chosen revision and run `sh install.sh` again. Rebuilding the dashboard preserves existing database containers, volumes, and credentials. Existing databases keep automated backups off until you set a retention period. `docker compose down` in the checkout stops the dashboard; **`down -v` also deletes the control volume**.
-- To rotate the admin token and invalidate browser sessions, run `docker compose stop openrds`, `docker compose run --rm --no-deps --entrypoint rm openrds /var/lib/openrds/admin-token`, then `docker compose up -d`. Read the newly generated token as above.
+- Sessions are signed with the admin token. To rotate it and sign everyone out, run `docker compose stop openrds`, `docker compose run --rm --no-deps --entrypoint rm openrds /var/lib/openrds/admin-token`, then `docker compose up -d`. Read the newly generated token as above.
 
 ## HTTP API
 
-Use `Authorization: Bearer <admin-token>` for automation. The browser exchanges the token for a 12-hour HTTP-only session cookie. Inventory endpoints omit credentials; the connection endpoint returns them on request.
+Use `Authorization: Bearer <admin-token>` for automation; it has the Admin role. Browsers sign in with an account and get a 12-hour HTTP-only session cookie. Each endpoint needs at least the role in the table: viewer for reading, operator for changes, credentials and backup downloads, and admin for accounts. Inventory endpoints omit credentials; the connection endpoint returns them on request.
 
 ```sh
 TOKEN=$(docker compose exec -T openrds cat /var/lib/openrds/admin-token)
@@ -118,8 +140,16 @@ Only `name`, `engine` and `port` are required. Omitted limits mean unlimited, an
 | POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine, data-volume limit and parameters are inherited. Set `diskGiB` or `parameters` to override them. |
 | POST | `/backups/{id}/keep` — turn an automated backup into a snapshot that never expires |
 | DELETE | `/backups/{id}` |
+| GET | `/status` — public: `{"setup": true}` until the first account exists |
+| POST | `/setup` — admin token required: `{"username","name","password"}` creates the first administrator and signs in |
+| POST / GET / DELETE | `/session` — sign in with `{"username","password"}` (or a bearer token), read who you are, sign out |
+| GET / POST | `/invites/{secret}` — public: read an invite or reset link, or set the password with `{"password"}` |
+| GET / POST | `/users` — admin: list accounts, or invite one with `{"username","name","role"}`; returns the link secret once |
+| PATCH / DELETE | `/users/{id}` — admin: change `name`, `role` or `disabled`, or delete |
+| POST | `/users/{id}/reset` — admin: sign the account out and issue a new link |
+| PATCH | `/account` — your `name`; POST `/account/password` with `{"current","password"}`; POST `/account/signout` ends your other sessions |
 
-Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, and `final` for final snapshots. Operations are synchronous; the first provision may take several minutes to pull the image. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
+Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, and `final` for final snapshots. Operations are synchronous; the first provision may take several minutes to pull the image. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
 
 ## Development
 
@@ -133,6 +163,6 @@ go run .
 
 Native development also needs the Docker CLI, daemon and Compose plugin for database operations. Local state defaults to `.openrds/` and the listener to `127.0.0.1:8080`; override with `OPENRDS_DATA_DIR` and `OPENRDS_LISTEN`. Metric history needs a unix Docker socket (`/var/run/docker.sock`, or `DOCKER_HOST=unix://…`); elsewhere the Monitoring tab shows live readings instead.
 
-CI installs the packaged dashboard on Linux and exercises PostgreSQL, MySQL, and Valkey against real Docker with `python3 scripts/smoke.py`: parameters, a deferred change applied by reboot, metric history, backups, deletion protection, and a final snapshot restored into a new instance. A desktop and mobile Chrome workflow, `scripts/ui-smoke.cjs`, then creates a database with parameters and tags, walks every tab, takes a snapshot, modifies and reboots it, and checks the restore form, events, themes and mobile layouts.
+CI installs the packaged dashboard on Linux and exercises PostgreSQL, MySQL, and Valkey against real Docker with `python3 scripts/smoke.py`: parameters, a deferred change applied by reboot, metric history, backups, deletion protection, and a final snapshot restored into a new instance. It first checks accounts: invitations, sign-in, role limits and the audit trail. A desktop and mobile Chrome workflow, `scripts/ui-smoke.cjs`, then completes first-run setup, creates a database with parameters and tags, walks every tab, takes a snapshot, modifies and reboots it, checks the restore form, events and themes, invites a viewer who accepts the link in a second browser, and checks mobile layouts.
 
 [MIT license](LICENSE)

@@ -1,6 +1,7 @@
 // Snapshots and automated backups: the recovery library.
 import { h, icon, api, modal, dataTable, empty, panel, bytes, when, ago, plural, windowLabel, toast, keyValues } from "./lib.mjs";
-import { state, subscribe, sync, instance, engine } from "./store.mjs";
+import { state, subscribe, sync, instance, engine, can } from "./store.mjs";
+import { markDownloaded } from "./start.mjs";
 
 const kindLabel = (b) => b.final ? "Final snapshot" : b.kind === "automated" ? "Automated" : "Manual";
 
@@ -32,9 +33,9 @@ export function backupTable(list, { showInstance = true, sort = { key: "created"
     { key: "kind", label: "Type", sort: kindLabel, value: b => h("span", { class: `chip ${b.final ? "info" : b.kind === "automated" ? "neutral" : "good"}` }, kindLabel(b)) },
     { key: "size", label: "Size", sort: b => b.bytes, cls: "num", value: b => bytes(b.bytes) },
     { key: "expires", label: "Expires", sort: b => b.expiresAt ? Date.parse(b.expiresAt) : Infinity, value: b => b.expiresAt ? h("span", { title: when(b.expiresAt) }, ago(b.expiresAt)) : h("span", { class: "muted" }, "Never") },
-    { key: "actions", label: "Actions", value: b => h("div", { class: "cell-actions" },
+    can("operator") && { key: "actions", label: "Actions", value: b => h("div", { class: "cell-actions" },
       h("a", { class: "text-btn", href: `#/snapshots/${b.id}/restore`, "aria-label": `Restore the ${when(b.createdAt)} backup of ${b.name}` }, icon("restore"), "Restore"),
-      h("a", { class: "text-btn", href: `/api/backups/${b.id}/download`, download: "", "aria-label": `Download the ${when(b.createdAt)} backup of ${b.name}` }, icon("download"), "Download"),
+      h("a", { class: "text-btn", href: `/api/backups/${b.id}/download`, download: "", onclick: markDownloaded, "aria-label": `Download the ${when(b.createdAt)} backup of ${b.name}` }, icon("download"), "Download"),
       b.kind === "automated" && h("button", { type: "button", class: "text-btn", onclick: () => keep(b), title: "Convert to a manual snapshot that never expires" }, icon("shield"), "Keep"),
       h("button", { type: "button", class: "text-btn danger", onclick: () => confirmDeleteBackup(b), "aria-label": `Delete the ${when(b.createdAt)} backup of ${b.name}` }, icon("trash"), "Delete")) },
   ].filter(Boolean);

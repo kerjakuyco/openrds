@@ -10,6 +10,8 @@ const compose = (...args) => execFileSync("docker", ["compose", ...args], { enco
 const base = `http://${compose("port", "openrds", "8080")}`;
 const token = compose("exec", "-T", "openrds", "cat", "/var/lib/openrds/admin-token");
 const name = `ui-${randomBytes(5).toString("hex")}`;
+const admin = { username: `ci-${randomBytes(4).toString("hex")}`, password: randomBytes(12).toString("hex") };
+const viewer = { username: `${admin.username}-v`, password: randomBytes(12).toString("hex") };
 async function api(resource, method = "GET", body) {
   const res = await fetch(`${base}/api/${resource}`, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
   assert.ok(res.ok, `${method} ${resource} returned ${res.status}`);
@@ -28,10 +30,27 @@ async function run() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
     const errors = [];
     page.on("pageerror", err => errors.push(err.message));
+    // A fresh install asks for the admin token and an administrator account;
+    // an installation that already has accounts offers the token as a fallback.
     await page.goto(base);
-    await page.getByLabel("Admin token", { exact: true }).fill(token);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.getByText("Connected", { exact: true }).waitFor();
+    const setup = page.getByRole("heading", { name: "Set up OpenRDS" });
+    const signIn = page.getByRole("heading", { name: "Open your workspace" });
+    await setup.or(signIn).waitFor();
+    if (await setup.isVisible()) {
+      await page.getByLabel("Admin token", { exact: true }).fill(token);
+      await page.getByLabel("Your name").fill("CI Administrator");
+      await page.getByLabel("Username", { exact: true }).fill(admin.username);
+      await page.getByLabel("Password", { exact: true }).fill(admin.password);
+      await page.getByLabel("Confirm password", { exact: true }).fill(admin.password);
+      await page.getByRole("button", { name: "Create administrator account" }).click();
+    } else {
+      admin.username = "";
+      await page.getByRole("button", { name: "use the admin token" }).click();
+      await page.getByLabel("Admin token", { exact: true }).fill(token);
+      await page.getByRole("button", { name: "Sign in" }).click();
+    }
+    await page.getByRole("heading", { name: "Dashboard", level: 1 }).waitFor();
+    await page.getByText("Get started with OpenRDS").waitFor();
 
     // Create through the sectioned form.
     await page.locator('nav#nav [data-nav="databases"]').click();
@@ -43,7 +62,7 @@ async function run() {
     await page.getByLabel("CPU limit (vCPU)").fill("0.5");
     await page.getByLabel("Memory limit (MiB)").fill("256");
     const quotas = (await api("host")).volumeQuota.state === "supported";
-    const disk = page.getByLabel("Data volume limit (GiB)");
+    const disk = page.getByRole("spinbutton", { name: /^Data volume limit \(GiB\)/ });
     await disk.fill(quotas ? "2" : "");
     await page.getByLabel("Host port", { exact: true }).fill(String(await freePort()));
     await page.getByLabel("Parameter to add").selectOption("max_connections");
@@ -57,10 +76,13 @@ async function run() {
     await page.locator("h1 .status").filter({ hasText: "Running" }).waitFor({ timeout: 360000 });
     await page.getByText("0.5 vCPU · 256 MiB").first().waitFor();
 
-    // Connectivity
-    await page.getByRole("button", { name: "Reveal connection URI" }).click();
-    assert.ok(/@127\.0\.0\.1:\d+\/app/.test(await page.locator("pre").filter({ hasText: "@127.0.0.1:" }).innerText()), "Expected a loopback connection URI");
+    // Connection guide: reveal the password, then switch to an app in a container on the VPS.
+    await page.getByRole("button", { name: "Reveal password" }).click();
+    const envLine = await page.locator("pre").filter({ hasText: "DATABASE_URL=" }).innerText();
+    assert.ok(/^DATABASE_URL=postgresql:\/\/openrds:[a-f0-9]{48}@127\.0\.0\.1:\d+\/app$/.test(envLine), `Expected a loopback URI with the password, got ${envLine}`);
+    await page.getByRole("button", { name: "In a Docker container here" }).click();
     await page.locator("pre").filter({ hasText: `@openrds-${name}:5432/app` }).waitFor();
+    await page.locator("pre").filter({ hasText: "docker network connect" }).waitFor();
 
     // Monitoring renders four charts and their table view.
     await page.getByRole("tab", { name: "Monitoring" }).click();
@@ -125,9 +147,39 @@ async function run() {
     await page.locator("#result-filter").selectOption("completed");
     await page.locator("#activity-list tr").filter({ hasText: name }).filter({ hasText: "Create snapshot" }).waitFor();
 
-    await page.getByRole("button", { name: "Dark theme" }).click();
+    const account = page.locator("#account button").first();
+    await account.click();
+    await page.getByRole("menuitemradio", { name: "Dark" }).click();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "dark");
-    await page.getByRole("button", { name: "Match the system theme" }).click();
+    await account.click();
+    await page.getByRole("menuitemradio", { name: "Match system" }).click();
+
+    // Invite a viewer, accept the link in another browser, and check what a viewer can do.
+    await page.locator('nav#nav [data-nav="users"]').click();
+    await page.getByRole("button", { name: "Invite user" }).click();
+    const invite = page.getByRole("dialog");
+    await invite.getByLabel("Name", { exact: true }).fill("CI Viewer");
+    await invite.getByLabel("Username").fill(viewer.username);
+    await invite.getByText("Viewer", { exact: true }).click();
+    await invite.getByRole("button", { name: "Create invite link" }).click();
+    const link = await page.getByRole("dialog").locator("pre").filter({ hasText: "/#/invite/" }).innerText();
+    await page.getByRole("dialog").getByRole("button", { name: "Done" }).click();
+    const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const guest = await other.newPage();
+    guest.on("pageerror", err => errors.push(`viewer: ${err.message}`));
+    await guest.goto(link);
+    await guest.getByRole("heading", { name: "Welcome, CI Viewer" }).waitFor();
+    await guest.getByLabel("Choose a password", { exact: true }).fill(viewer.password);
+    await guest.getByLabel("Confirm password", { exact: true }).fill(viewer.password);
+    await guest.getByRole("button", { name: "Create my account" }).click();
+    await guest.getByRole("heading", { name: "Dashboard", level: 1 }).waitFor();
+    assert.equal(await guest.locator("#nav-create").isVisible(), false, "viewers cannot create databases");
+    assert.equal(await guest.locator('nav#nav [data-nav="users"]').isVisible(), false, "viewers cannot manage users");
+    await guest.goto(`${base}/#/databases/${name}`);
+    await guest.getByText("Read only").first().waitFor();
+    await guest.getByText("Your Viewer role cannot see database passwords", { exact: false }).waitFor();
+    await other.close();
+    await page.getByRole("cell", { name: /CI Viewer/ }).first().waitFor();
 
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -141,14 +193,16 @@ async function run() {
       }
     }
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.getByRole("button", { name: "Sign out" }).click();
-    await page.getByRole("button", { name: "Sign in" }).waitFor();
+    await page.locator("#account button").first().click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: create with parameters and tags, connectivity, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");
     for (const b of await api("backups")) if (b.name === name) await api(`backups/${b.id}`, "DELETE");
+    for (const u of await api("users")) if ([admin.username, viewer.username].includes(u.username)) await api(`users/${u.id}`, "DELETE");
   }
 }
 run().catch(err => { console.error(err); process.exitCode = 1; });

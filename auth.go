@@ -47,39 +47,81 @@ func adminToken(dir string) (string, error) {
 	return token, closeErr
 }
 
-type auth struct{ token string }
+// The admin token signs sessions, so rotating it signs everyone out.
+type auth struct {
+	token    string
+	accounts *accounts
+}
 
 func (a auth) bearer(r *http.Request) bool {
 	value, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	return ok && subtle.ConstantTimeCompare([]byte(value), []byte(a.token)) == 1
 }
 
-func (a auth) sign(expiry string) string {
+func (a auth) sign(payload string) string {
 	h := hmac.New(sha256.New, []byte(a.token))
-	h.Write([]byte("openrds-session:" + expiry))
+	h.Write([]byte("openrds-session:" + payload))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (a auth) authorized(r *http.Request) bool {
+// identify returns who made the request. A session cookie is a payload and its
+// signature: "t.<expiry>" for the admin token or "u.<id>.<epoch>.<expiry>" for
+// an account. A bare "<expiry>" is an admin-token session from before accounts.
+func (a auth) identify(r *http.Request) (identity, bool) {
 	if a.bearer(r) {
-		return true
+		return tokenIdentity, true
 	}
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
-		return false
+		return identity{}, false
 	}
-	exp, sig, ok := strings.Cut(c.Value, ".")
-	unix, err := strconv.ParseInt(exp, 10, 64)
-	return ok && err == nil && unix > time.Now().Unix() && hmac.Equal([]byte(sig), []byte(a.sign(exp)))
+	cut := strings.LastIndexByte(c.Value, '.')
+	if cut < 0 || !hmac.Equal([]byte(c.Value[cut+1:]), []byte(a.sign(c.Value[:cut]))) {
+		return identity{}, false
+	}
+	fields := strings.Split(c.Value[:cut], ".")
+	live := func(expiry string) bool {
+		unix, err := strconv.ParseInt(expiry, 10, 64)
+		return err == nil && unix > time.Now().Unix()
+	}
+	switch {
+	case len(fields) == 1 && live(fields[0]), len(fields) == 2 && fields[0] == "t" && live(fields[1]):
+		return tokenIdentity, true
+	case len(fields) == 4 && fields[0] == "u" && live(fields[3]):
+		// Disabling an account, resetting it or changing its password raises
+		// the epoch, which ends sessions issued before.
+		if u, ok := a.accounts.find(fields[1]); ok && u.active() && strconv.Itoa(u.Epoch) == fields[2] {
+			return identityOf(u), true
+		}
+	}
+	return identity{}, false
 }
 
-func (a auth) cookie(w http.ResponseWriter, r *http.Request, login bool) {
-	c := &http.Cookie{Name: sessionCookie, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil,
-		SameSite: http.SameSiteStrictMode, MaxAge: -1}
-	if login {
-		c.MaxAge = int(sessionLifetime.Seconds())
-		exp := strconv.FormatInt(time.Now().Add(sessionLifetime).Unix(), 10)
-		c.Value = exp + "." + a.sign(exp)
+// startSession signs in the browser as an account, or as the admin token when u is nil.
+func (a auth) startSession(w http.ResponseWriter, r *http.Request, u *user) {
+	expiry := strconv.FormatInt(time.Now().Add(sessionLifetime).Unix(), 10)
+	payload := "t." + expiry
+	if u != nil {
+		payload = fmt.Sprintf("u.%s.%d.%s", u.ID, u.Epoch, expiry)
 	}
-	http.SetCookie(w, c)
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: payload + "." + a.sign(payload), Path: "/api/",
+		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(sessionLifetime.Seconds())})
+}
+
+func (a auth) endSession(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil,
+		SameSite: http.SameSiteStrictMode, MaxAge: -1})
+}
+
+var roleNames = map[int]string{roleViewer: "Viewer", roleOperator: "Operator", roleAdmin: "Admin"}
+
+// require admits a request only if its identity has at least the given role.
+func require(level int, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, _ := identityFrom(r.Context()); id.level() < level {
+			sendError(w, fail(403, fmt.Sprintf("This needs the %s role. Ask an administrator for access.", roleNames[level])))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

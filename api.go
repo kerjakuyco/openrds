@@ -78,32 +78,26 @@ func (f endpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func handler(m *manager, a auth) http.Handler {
 	api := http.NewServeMux()
-	api.HandleFunc("GET /api/session", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	api.HandleFunc("DELETE /api/session", func(w http.ResponseWriter, r *http.Request) {
-		a.cookie(w, r, false)
-		w.WriteHeader(http.StatusNoContent)
-	})
-	api.Handle("GET /api/host", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	add := func(pattern string, level int, h endpoint) { api.Handle(pattern, require(level, h)) }
+	add("GET /api/host", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		host, err := m.host(r.Context())
 		if err == nil {
 			sendJSON(w, 200, host)
 		}
 		return err
-	}))
-	api.Handle("GET /api/instances", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/instances", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		items, err := m.instances(r.Context())
 		if err == nil {
 			sendJSON(w, 200, items)
 		}
 		return err
-	}))
-	api.Handle("GET /api/engines", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/engines", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		sendJSON(w, 200, engineCatalog())
 		return nil
-	}))
-	api.Handle("POST /api/instances", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("POST /api/instances", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		var spec instanceSpec
 		if err := decode(w, r, &spec); err != nil {
 			return err
@@ -113,17 +107,17 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		sendJSON(w, 201, map[string]string{"name": spec.Name})
 		return nil
-	}))
+	})
 	for _, op := range []string{"start", "stop", "reboot"} {
-		api.Handle("POST /api/instances/{name}/"+op, endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		add("POST /api/instances/{name}/"+op, roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 			if err := m.change(r.Context(), r.PathValue("name"), op); err != nil {
 				return err
 			}
 			w.WriteHeader(http.StatusNoContent)
 			return nil
-		}))
+		})
 	}
-	api.Handle("DELETE /api/instances/{name}", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	add("DELETE /api/instances/{name}", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		final := r.URL.Query().Get("finalSnapshot")
 		if final != "" && final != "true" && final != "false" {
 			return fail(400, "Set finalSnapshot to true or false.")
@@ -133,8 +127,8 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return nil
-	}))
-	api.Handle("POST /api/instances/{name}/modify", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("POST /api/instances/{name}/modify", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		var mod modification
 		if err := decode(w, r, &mod); err != nil {
 			return err
@@ -144,8 +138,8 @@ func handler(m *manager, a auth) http.Handler {
 			sendJSON(w, 200, result)
 		}
 		return err
-	}))
-	api.Handle("GET /api/instances/{name}/history", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/instances/{name}/history", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		db, err := m.record(r.PathValue("name"))
 		if err != nil {
 			return err
@@ -160,8 +154,8 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		sendJSON(w, 200, m.history.view(db.Project, span, time.Now()))
 		return nil
-	}))
-	api.Handle("GET /api/instances/{name}/connection", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/instances/{name}/connection", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		db, err := m.record(r.PathValue("name"))
 		if err != nil {
 			return err
@@ -175,23 +169,23 @@ func handler(m *manager, a auth) http.Handler {
 		sendJSON(w, 200, map[string]any{"host": "127.0.0.1", "port": db.Port, "user": eng.user, "database": eng.database, "password": db.Password, "uri": u.String(),
 			"network": db.Project + "_default", "networkHost": alias, "networkURI": internal.String()})
 		return nil
-	}))
-	api.Handle("GET /api/instances/{name}/metrics", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/instances/{name}/metrics", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		u, err := m.metrics(r.Context(), r.PathValue("name"))
 		if err != nil {
 			return err
 		}
 		sendJSON(w, 200, u)
 		return nil
-	}))
-	api.Handle("GET /api/instances/{name}/logs", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/instances/{name}/logs", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		text, err := m.logs(r.Context(), r.PathValue("name"))
 		if err == nil {
 			sendJSON(w, 200, map[string]string{"text": text})
 		}
 		return err
-	}))
-	api.Handle("POST /api/instances/{name}/disk", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("POST /api/instances/{name}/disk", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
 			DiskGiB int `json:"diskGiB"`
 		}
@@ -203,43 +197,43 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return nil
-	}))
-	api.Handle("GET /api/instances/{name}/storage", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/instances/{name}/storage", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		used, err := m.volumeUsage(r.Context(), r.PathValue("name"))
 		if err == nil {
 			sendJSON(w, 200, map[string]int64{"usedBytes": used})
 		}
 		return err
-	}))
-	api.Handle("GET /api/activity", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/activity", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		items, err := m.readActivity()
 		if err == nil {
 			sendJSON(w, 200, items)
 		}
 		return err
-	}))
-	api.Handle("GET /api/backups", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/backups", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		items, err := m.backups()
 		if err == nil {
 			sendJSON(w, 200, items)
 		}
 		return err
-	}))
-	api.Handle("POST /api/instances/{name}/backups", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("POST /api/instances/{name}/backups", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		b, err := m.makeBackup(r.Context(), r.PathValue("name"), "manual")
 		if err == nil {
 			sendJSON(w, 201, b)
 		}
 		return err
-	}))
-	api.Handle("POST /api/backups/{id}/keep", endpoint(func(w http.ResponseWriter, r *http.Request) error {
-		b, err := m.keepBackup(r.PathValue("id"))
+	})
+	add("POST /api/backups/{id}/keep", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		b, err := m.keepBackup(r.Context(), r.PathValue("id"))
 		if err == nil {
 			sendJSON(w, 200, b)
 		}
 		return err
-	}))
-	api.Handle("GET /api/backups/{id}/download", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("GET /api/backups/{id}/download", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		b, err := m.backup(r.PathValue("id"))
 		if err != nil {
 			return err
@@ -254,8 +248,8 @@ func handler(m *manager, a auth) http.Handler {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
 		http.ServeContent(w, r, name, b.Created, f)
 		return nil
-	}))
-	api.Handle("POST /api/backups/{id}/restore", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	})
+	add("POST /api/backups/{id}/restore", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		b, err := m.backup(r.PathValue("id"))
 		if err != nil {
 			return err
@@ -272,31 +266,25 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		sendJSON(w, 201, map[string]string{"name": spec.Name})
 		return nil
-	}))
-	api.Handle("DELETE /api/backups/{id}", endpoint(func(w http.ResponseWriter, r *http.Request) error {
-		if err := m.deleteBackup(r.PathValue("id")); err != nil {
+	})
+	add("DELETE /api/backups/{id}", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		if err := m.deleteBackup(r.Context(), r.PathValue("id")); err != nil {
 			return err
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return nil
-	}))
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
-	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, r *http.Request) {
-		if !a.bearer(r) {
-			sendError(w, fail(401, "The admin token was not accepted."))
-			return
-		}
-		a.cookie(w, r, true)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	accountRoutes(mux, add, m, a)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		if !a.authorized(r) {
-			sendError(w, fail(401, "Sign in with your admin token."))
+		id, ok := a.identify(r)
+		if !ok {
+			sendError(w, fail(401, "Sign in to continue."))
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(withIdentity(r.Context(), id), 30*time.Minute)
 		defer cancel()
 		api.ServeHTTP(w, r.WithContext(ctx))
 	})
