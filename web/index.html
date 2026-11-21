@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102c2a">
+  <title>OpenRDS · Database control plane</title>
+  <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <noscript>Enable JavaScript to use the OpenRDS dashboard, or use the authenticated HTTP API.</noscript>
+  <div id="boot" class="boot">Connecting to OpenRDS…</div>
+  <main id="login" class="login-screen" hidden>
+    <div class="login-card">
+      <div class="brand"><img src="/mark.svg" alt="" width="34" height="34">OpenRDS</div>
+      <p class="kicker">Operator access</p><h1>Open your workspace</h1>
+      <p class="muted">Sign in to the database control plane on this VPS.</p>
+      <form id="login-form">
+        <label for="token">Admin token</label>
+        <input id="token" type="password" required autocomplete="current-password" autofocus>
+        <button class="primary" type="submit">Sign in <svg class="icon"><use href="/icons.svg#arrow"/></svg></button>
+        <p id="login-note" class="notice" role="status"></p>
+      </form>
+      <details><summary>Where do I find my token?</summary><p>From the installation directory on your VPS, run:</p><pre>docker compose exec openrds cat /var/lib/openrds/admin-token</pre></details>
+    </div>
+  </main>
+
+  <div id="app" class="shell" hidden>
+    <a class="skip" href="#content">Skip to content</a>
+    <aside class="sidebar">
+      <div class="brand"><img src="/mark.svg" alt="" width="34" height="34">OpenRDS</div>
+      <div class="workspace-label"><span class="little-dot"></span>Self-hosted workspace</div>
+      <p class="nav-label">Workspace</p>
+      <nav aria-label="Workspace">
+        <a href="#overview" data-page="overview"><svg class="icon"><use href="/icons.svg#overview"/></svg>Overview</a>
+        <a href="#databases" data-page="databases"><svg class="icon"><use href="/icons.svg#db"/></svg>Databases</a>
+        <a href="#backups" data-page="backups"><svg class="icon"><use href="/icons.svg#archive"/></svg>Backups</a>
+        <a href="#activity" data-page="activity"><svg class="icon"><use href="/icons.svg#pulse"/></svg>Activity</a>
+      </nav>
+      <div class="side-foot"><span><svg class="icon"><use href="/icons.svg#host"/></svg>Single VPS</span><button id="logout" class="side-action"><svg class="icon"><use href="/icons.svg#exit"/></svg>Sign out</button></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="crumb">Workspace <span>/</span> <strong id="crumb">Overview</strong></div>
+        <div class="top-actions"><span class="chip quiet" id="link-state">Connecting</span><button id="refresh" class="icon-btn" title="Refresh workspace" aria-label="Refresh workspace"><svg class="icon"><use href="/icons.svg#refresh"/></svg></button></div>
+      </header>
+      <main id="content" tabindex="-1">
+        <div class="page-heading"><div><p class="kicker">Database control plane</p><h1 id="page-title">Overview</h1><p id="page-description" class="muted"></p></div><button id="new-db" class="primary"><svg class="icon"><use href="/icons.svg#plus"/></svg>New database</button></div>
+        <div id="sync-error" class="notice error" role="status"></div>
+        <div id="notice" class="notice" role="status" aria-live="polite"></div>
+        <div id="stats" class="stats"></div>
+        <div id="board" class="board">
+          <div class="fleet-column">
+          <section id="fleet" class="panel">
+            <header class="panel-heading"><div><p class="kicker">Inventory</p><h2>Database instances</h2></div><span id="fleet-count" class="counter">0</span></header>
+            <div class="toolbar">
+              <label class="search"><svg class="icon"><use href="/icons.svg#search"/></svg><input id="search" type="search" aria-label="Search databases by name or port" placeholder="Search name or port…"><kbd>/</kbd></label>
+              <select id="engine-filter" aria-label="Filter by engine"><option value="">All engines</option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option></select>
+              <select id="state-filter" aria-label="Filter by status"><option value="">All statuses</option><option value="running">Running</option><option value="stopped">Stopped</option><option value="attention">Needs attention</option></select>
+            </div>
+            <div id="fleet-list"></div>
+          </section>
+          <section id="host-panel" class="panel host-panel"><header class="panel-heading"><div><p class="kicker">Infrastructure</p><h2>Host capacity</h2></div><svg class="icon"><use href="/icons.svg#host"/></svg></header><div id="host-info"></div></section>
+          </div>
+          <aside id="overview-side">
+            <section class="panel"><header class="panel-heading"><div><p class="kicker">Operations</p><h2>Recent activity</h2></div></header><div id="recent"></div><a class="panel-link" href="#activity">View activity <svg class="icon"><use href="/icons.svg#arrow"/></svg></a></section>
+            <div class="access-note"><svg class="icon"><use href="/icons.svg#terminal"/></svg><div><strong>Private endpoints</strong><p>Connect from this VPS, or use the SSH command in a database’s Connection tab.</p></div></div>
+          </aside>
+        </div>
+        <section id="backup-panel" class="panel" hidden><header class="panel-heading"><div><p class="kicker">Recovery</p><h2>Backup library</h2></div><span id="backup-count" class="counter">0</span></header><div id="backup-list"></div></section>
+        <section id="activity-panel" class="panel" hidden><header class="panel-heading"><div><p class="kicker">Timeline</p><h2>Operation history</h2></div><select id="result-filter" aria-label="Filter operations by outcome"><option value="">All outcomes</option><option>started</option><option>completed</option><option>failed</option></select></header><div id="activity-list"></div></section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="editor" aria-labelledby="editor-title">
+    <form id="editor-form">
+      <header class="dialog-head"><div><p class="kicker" id="editor-kicker">Provisioning</p><h2 id="editor-title">New database</h2></div><button type="button" class="icon-btn close" aria-label="Close"><svg class="icon"><use href="/icons.svg#close"/></svg></button></header>
+      <p id="editor-description" class="muted"></p>
+      <label for="db-name">Instance name</label><input id="db-name" required maxlength="40" pattern="[a-z]([a-z0-9\-]{0,38}[a-z0-9])?" placeholder="orders-prod" autocomplete="off" spellcheck="false">
+      <div class="form-grid"><div><label for="db-engine">Engine</label><select id="db-engine"><option value="postgres">PostgreSQL 17</option><option value="mysql">MySQL 8.4 LTS</option></select></div><div><label for="db-port">Host port</label><input id="db-port" type="number" min="1024" max="65535" required></div></div>
+      <details><summary>Resource limits <span class="muted">· optional</span></summary>
+        <p class="muted">Leave blank to share the host’s available resources.</p>
+        <div class="form-grid"><div><label for="db-cpus">CPU cores</label><input id="db-cpus" type="number" min="0.1" max="1024" step="0.1" placeholder="Uncapped"></div><div><label for="db-memory">Memory (MiB)</label><input id="db-memory" type="number" min="128" placeholder="Uncapped"></div></div>
+      </details>
+      <div id="editor-note" class="notice" role="status"></div>
+      <footer class="dialog-foot"><button class="secondary close" type="button">Cancel</button><button class="primary" id="editor-submit" type="submit">Create database</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="detail" class="drawer" aria-labelledby="detail-title">
+    <header class="dialog-head"><div><p class="kicker" id="detail-engine">Database instance</p><h2 id="detail-title"></h2></div><button class="icon-btn close" aria-label="Close database details"><svg class="icon"><use href="/icons.svg#close"/></svg></button></header>
+    <div class="tabs" aria-label="Instance sections"><button data-tab="overview">Overview</button><button data-tab="connection">Connection</button><button data-tab="logs">Logs</button></div>
+    <div id="detail-note" class="notice" role="status"></div><div id="detail-body"></div>
+  </dialog>
+  <dialog id="confirm" aria-labelledby="confirm-title">
+    <div class="dialog-head"><div><p class="kicker">Deletion</p><h2 id="confirm-title"></h2></div><button class="icon-btn close" aria-label="Cancel"><svg class="icon"><use href="/icons.svg#close"/></svg></button></div>
+    <p id="confirm-description" class="muted"></p><div class="notice" id="confirm-note" role="status"></div>
+    <footer class="dialog-foot"><button class="secondary close" autofocus>Cancel</button><button class="danger" id="confirm-submit">Delete</button></footer>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,135 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+type engine struct {
+	title   string
+	scheme  string
+	port    int
+	suffix  string
+	dump    []string
+	restore []string
+}
+
+// Only these templates and commands can be run by the control plane.
+// Compose exec -T keeps database dumps binary-safe in both directions.
+var engines = map[string]engine{
+	"postgres": {
+		title: "PostgreSQL 17", scheme: "postgresql", port: 5432, suffix: ".dump",
+		dump:    []string{"pg_dump", "-U", "openrds", "-d", "app", "--format=custom"},
+		restore: []string{"pg_restore", "-U", "openrds", "-d", "app", "--single-transaction", "--no-owner", "--no-privileges"},
+	},
+	"mysql": {
+		title: "MySQL 8.4", scheme: "mysql", port: 3306, suffix: ".sql",
+		// Keep the password out of argv. Root is used locally inside the
+		// container so routine, event and trigger definitions are included.
+		dump:    []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump -u root --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --routines --events --triggers --hex-blob app`},
+		restore: []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --binary-mode -u root app`},
+	},
+}
+
+type dockerRunner interface {
+	run(ctx context.Context, env []string, in io.Reader, out io.Writer, args ...string) error
+}
+
+type dockerCLI struct{}
+
+// Keep the useful end of Compose diagnostics without buffering image-pull logs.
+type tailBuffer struct {
+	limit int
+	data  []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if n > b.limit {
+		p = p[n-b.limit:]
+	}
+	if drop := len(b.data) + len(p) - b.limit; drop > 0 {
+		b.data = b.data[drop:]
+	}
+	b.data = append(b.data, p...)
+	return n, nil
+}
+
+func (dockerCLI) run(ctx context.Context, env []string, in io.Reader, out io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = append(os.Environ(), env...)
+	diagnostics := tailBuffer{limit: 2048}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, &diagnostics
+	// Database engines commonly write their normal server logs to stderr.
+	// Using the same comparable writer lets os/exec serialize both streams.
+	if len(args) > 5 && args[0] == "compose" && args[5] == "logs" {
+		cmd.Stderr = out
+	}
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		text := strings.TrimSpace(string(diagnostics.data))
+		for _, v := range env {
+			key, value, _ := strings.Cut(v, "=")
+			if strings.HasSuffix(key, "PASSWORD") && value != "" {
+				text = strings.ReplaceAll(text, value, "[redacted]")
+			}
+		}
+		if text == "" {
+			text = err.Error()
+		}
+		return fmt.Errorf("docker: %s", text)
+	}
+	return nil
+}
+
+func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Writer, args ...string) error {
+	if _, ok := engines[r.Engine]; !ok {
+		return fmt.Errorf("unknown stored engine %q", r.Engine)
+	}
+	base := []string{"compose", "--project-name", r.Project, "--file", filepath.Join(m.templates, r.Engine+".yaml")}
+	env := []string{
+		"OPENRDS_DB_PORT=" + strconv.Itoa(r.Port),
+		"OPENRDS_DB_ALIAS=openrds-" + r.Name,
+		"OPENRDS_DB_CPUS=" + strconv.FormatFloat(r.CPUs, 'f', -1, 64),
+		"OPENRDS_DB_MEMORY=" + strconv.FormatInt(int64(r.MemoryMiB)*1024*1024, 10),
+		"OPENRDS_DB_PASSWORD=" + r.Password,
+		"OPENRDS_ROOT_PASSWORD=" + r.RootPassword,
+	}
+	return m.docker.run(ctx, env, in, out, append(base, args...)...)
+}
+
+func (m *manager) states(ctx context.Context) (map[string]string, error) {
+	var out bytes.Buffer
+	err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--filter", "label=io.openrds.database=true",
+		"--format", `{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`)
+	if err != nil {
+		return nil, err
+	}
+	states := make(map[string]string)
+	for _, line := range strings.Split(out.String(), "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "|", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		state := fields[1]
+		switch {
+		case state == "exited":
+			state = "stopped"
+		case state == "running" && strings.Contains(fields[2], "(unhealthy)"):
+			state = "unhealthy"
+		case state == "running" && strings.Contains(fields[2], "(health: starting)"):
+			state = "starting"
+		}
+		states[fields[0]] = state
+	}
+	return states, nil
+}

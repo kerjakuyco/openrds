@@ -1,0 +1,23 @@
+name: Control plane checks
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: node --check web/app.js
+      - run: sh install.sh
+      - run: python3 scripts/smoke.py
+      - name: Exercise the dashboard in Chrome
+        run: |
+          npm install --prefix "$RUNNER_TEMP/openrds-ui" playwright-core@1.61.1
+          NODE_PATH="$RUNNER_TEMP/openrds-ui/node_modules" node scripts/ui-smoke.cjs
+      - if: always()
+        run: docker compose down

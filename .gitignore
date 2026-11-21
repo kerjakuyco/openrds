@@ -154,4 +154,9 @@ vite.config.ts.timestamp-*
 # Nx (https://nx.dev/)
 .nx/cache
 .nx/workspace-data
+
+# OpenRDS native development state (credentials, metadata, backups)
+.openrds/
+/openrds
+/openrds.exe
 .nx/migrate-runs
