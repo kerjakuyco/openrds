@@ -96,10 +96,11 @@ func TestCappedInstanceDoesNotReuseOrDeleteMismatchedVolume(t *testing.T) {
 	name = r.Project + "_data"
 	for _, mismatch := range []string{"local|ext4||" + r.Project + "|data", "local|ext4|/dev/openrds/other|" + r.Project + "|data"} {
 		inspect = mismatch
-		for _, action := range []string{"start", "delete"} {
-			if err := m.change(t.Context(), "orders", action); err == nil {
-				t.Fatal("mismatched data volume accepted:", action)
-			}
+		if err := m.change(t.Context(), "orders", "start"); err == nil {
+			t.Fatal("mismatched data volume accepted for start")
+		}
+		if err := m.remove(t.Context(), "orders", false); err == nil {
+			t.Fatal("mismatched data volume accepted for delete")
 		}
 	}
 	if ups != 1 || downs != 0 || attaches < 1 {

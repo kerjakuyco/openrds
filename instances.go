@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -12,13 +14,17 @@ import (
 
 type instanceView struct {
 	instanceSpec
-	EngineLabel    string    `json:"engineLabel"`
-	Status         string    `json:"status"`
-	Busy           bool      `json:"busy"`
-	Created        time.Time `json:"createdAt"`
-	PendingRestore bool      `json:"pendingRestore"`
-	User           string    `json:"user"`
-	Database       string    `json:"database"`
+	EngineLabel    string         `json:"engineLabel"`
+	Status         string         `json:"status"`
+	Busy           bool           `json:"busy"`
+	Created        time.Time      `json:"createdAt"`
+	PendingRestore bool           `json:"pendingRestore"`
+	User           string         `json:"user"`
+	Database       string         `json:"database"`
+	Applied        *runtimeConfig `json:"applied,omitempty"` // in use until a restart applies pending changes
+	LatestBackup   *time.Time     `json:"latestBackupAt,omitempty"`
+	NextBackup     *time.Time     `json:"nextBackupAt,omitempty"`
+	Live           *point         `json:"live,omitempty"`
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -30,6 +36,20 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 	if err != nil {
 		return nil, fail(503, "Cannot read database status: "+err.Error())
 	}
+	backups, err := m.backups()
+	if err != nil {
+		return nil, err
+	}
+	automated := latestAutomated(all, backups)
+	latest := make(map[string]time.Time)
+	for _, r := range all {
+		for _, b := range backups {
+			if b.Name == r.Name && !b.Created.Before(r.Created) && b.Created.After(latest[r.Name]) {
+				latest[r.Name] = b.Created
+			}
+		}
+	}
+	now := time.Now().UTC()
 	result := make([]instanceView, 0, len(all))
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -39,8 +59,22 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 			state = "not provisioned"
 		}
 		eng := engines[r.Engine]
-		result = append(result, instanceView{r.instanceSpec, eng.title, state,
-			m.busy[r.Name], r.Created, r.PendingRestore, eng.user, eng.database})
+		v := instanceView{instanceSpec: r.instanceSpec, EngineLabel: eng.title, Status: state, Busy: m.busy[r.Name],
+			Created: r.Created, PendingRestore: r.PendingRestore, User: eng.user, Database: eng.database, Applied: r.Applied}
+		if v.BackupWindow == "" {
+			v.BackupWindow = defaultBackupWindow
+		}
+		if t, ok := latest[r.Name]; ok {
+			v.LatestBackup = &t
+		}
+		if r.BackupRetentionDays > 0 {
+			next := nextBackup(v.BackupWindow, automated[r.Name], now)
+			v.NextBackup = &next
+		}
+		if state == "running" {
+			v.Live = m.history.latest(r.Project, now)
+		}
+		result = append(result, v)
 	}
 	return result, nil
 }
@@ -137,6 +171,8 @@ func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err err
 	return writeJSON(m.recordPath(name), r)
 }
 
+// Create or start the container from the stored configuration. Compose
+// recreates it when settings changed, which applies pending modifications.
 func (m *manager) start(ctx context.Context, r record) error {
 	if r.DiskGiB > 0 {
 		if err := m.checkDiskRequest(ctx, r.DiskGiB); err != nil {
@@ -149,7 +185,18 @@ func (m *manager) start(ctx context.Context, r record) error {
 			return err
 		}
 	}
-	return m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db")
+	if err := m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db"); err != nil {
+		return err
+	}
+	if r.Applied != nil {
+		r.Applied = nil
+		return writeJSON(m.recordPath(r.Name), r)
+	}
+	return nil
+}
+
+func live(state string) bool {
+	return state == "running" || state == "starting" || state == "unhealthy" || state == "restarting"
 }
 
 func (m *manager) change(ctx context.Context, name, action string) (err error) {
@@ -158,42 +205,232 @@ func (m *manager) change(ctx context.Context, name, action string) (err error) {
 		return err
 	}
 	defer release()
-	var args []string
 	var label string
 	switch action {
 	case "start":
 		label = "Start database"
 	case "stop":
-		label, args = "Stop database", []string{"stop", "--timeout", "45", "db"}
-	case "delete":
-		label, args = "Delete database", []string{"down", "--volumes", "--timeout", "45"}
+		label = "Stop database"
+	case "reboot":
+		label = "Reboot database"
+		states, err := m.states(ctx)
+		if err != nil {
+			return fail(503, "Cannot read database status: "+err.Error())
+		}
+		if !live(states[r.Project]) {
+			return fail(409, "The database is not running. Start it instead.")
+		}
 	default:
 		return fail(404, "Unknown database action.")
 	}
 	finish := m.track(name, label)
 	defer func() { finish(err) }()
-	if action == "start" {
+	switch action {
+	case "start":
 		err = m.start(ctx, r)
-	} else {
-		if action == "delete" && r.DiskGiB > 0 {
-			err = m.checkExistingVolume(ctx, r)
-		}
-		if err == nil {
-			err = m.compose(ctx, r, nil, nil, args...)
+	case "stop":
+		err = m.compose(ctx, r, nil, nil, "stop", "--timeout", "45", "db")
+	case "reboot":
+		if err = m.compose(ctx, r, nil, nil, "stop", "--timeout", "45", "db"); err == nil {
+			err = m.start(ctx, r)
 		}
 	}
 	if err != nil {
 		return fail(502, label+" failed: "+err.Error())
 	}
-	if action == "delete" {
-		if r.DiskGiB > 0 {
-			if err := m.detachDisk(ctx, r); err != nil {
-				return fail(502, "The database was removed, but its disk image is still attached. Retry deletion. "+err.Error())
+	return nil
+}
+
+// Delete an instance and its data volume, optionally after a final snapshot.
+func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (err error) {
+	r, release, err := m.begin(name, nil, false)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if r.DeletionProtection {
+		return fail(409, "Deletion protection is on for this database. Modify the database to turn it off, then delete it.")
+	}
+	if finalBackup {
+		if r.PendingRestore {
+			return fail(409, "This instance has an incomplete restore, so it has no data to back up. Delete it without a final snapshot.")
+		}
+		finish := m.track(name, "Final snapshot")
+		_, err := m.snapshot(ctx, r, "manual", true)
+		finish(err)
+		if err != nil {
+			return fail(502, "The final snapshot failed, so the database was not deleted. Start the database to take one, or delete it without a final snapshot. "+describe(err))
+		}
+	}
+	finish := m.track(name, "Delete database")
+	defer func() { finish(err) }()
+	if r.DiskGiB > 0 {
+		err = m.checkExistingVolume(ctx, r)
+	}
+	if err == nil {
+		err = m.compose(ctx, r, nil, nil, "down", "--volumes", "--timeout", "45")
+	}
+	if err != nil {
+		return fail(502, "Delete database failed: "+err.Error())
+	}
+	if r.DiskGiB > 0 {
+		if err := m.detachDisk(ctx, r); err != nil {
+			return fail(502, "The database was removed, but its disk image is still attached. Retry deletion. "+err.Error())
+		}
+	}
+	m.history.forget(r.Project)
+	if err := os.Remove(m.overridePath(r)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Remove(m.recordPath(name))
+}
+
+// A partial update. Omitted fields keep their value; tags and parameters are
+// replaced as a whole when present.
+type modification struct {
+	CPUs                *float64          `json:"cpus"`
+	MemoryMiB           *int              `json:"memoryMiB"`
+	Port                *int              `json:"port"`
+	BackupRetentionDays *int              `json:"backupRetentionDays"`
+	BackupWindow        *string           `json:"backupWindow"`
+	DeletionProtection  *bool             `json:"deletionProtection"`
+	Tags                map[string]string `json:"tags"`
+	Parameters          map[string]string `json:"parameters"`
+	ApplyImmediately    bool              `json:"applyImmediately"`
+}
+
+type modifyResult struct {
+	Restarted      bool `json:"restarted"`
+	PendingRestart bool `json:"pendingRestart"`
+}
+
+// Settings that only need a record update apply at once. CPU, memory and
+// parameters need a new container: a running database restarts now when asked,
+// otherwise at its next restart. A port change always applies immediately, as in RDS.
+func (m *manager) modify(ctx context.Context, name string, mod modification) (result modifyResult, err error) {
+	r, release, err := m.begin(name, nil, false)
+	if err != nil {
+		return result, err
+	}
+	defer release()
+	if r.PendingRestore {
+		return result, fail(409, "This instance has an incomplete restore.")
+	}
+	next := r
+	next.Tags, next.Parameters = maps.Clone(r.Tags), maps.Clone(r.Parameters)
+	if mod.CPUs != nil {
+		next.CPUs = *mod.CPUs
+	}
+	if mod.MemoryMiB != nil {
+		next.MemoryMiB = *mod.MemoryMiB
+	}
+	if mod.Port != nil {
+		next.Port = *mod.Port
+	}
+	if mod.BackupRetentionDays != nil {
+		next.BackupRetentionDays = *mod.BackupRetentionDays
+	}
+	if mod.BackupWindow != nil {
+		next.BackupWindow = *mod.BackupWindow
+	}
+	if mod.DeletionProtection != nil {
+		next.DeletionProtection = *mod.DeletionProtection
+	}
+	if mod.Tags != nil {
+		next.Tags = mod.Tags
+	}
+	if mod.Parameters != nil {
+		next.Parameters = mod.Parameters
+	}
+	if len(next.Tags) == 0 {
+		next.Tags = nil
+	}
+	if len(next.Parameters) == 0 {
+		next.Parameters = nil
+	}
+	if next.BackupWindow == "" {
+		next.BackupWindow = defaultBackupWindow
+	}
+	if err := checkSpec(next.instanceSpec); err != nil {
+		return result, err
+	}
+	previous := r.instanceSpec
+	if previous.BackupWindow == "" {
+		previous.BackupWindow = defaultBackupWindow // records from before backup windows existed
+	}
+	before, _ := json.Marshal(previous)
+	after, _ := json.Marshal(next.instanceSpec)
+	if bytes.Equal(before, after) {
+		return result, nil
+	}
+	if next.Port != r.Port {
+		all, err := m.records()
+		if err != nil {
+			return result, err
+		}
+		for _, other := range all {
+			if other.Name != name && other.Port == next.Port {
+				return result, fail(409, fmt.Sprintf("Port %d is reserved by %s.", other.Port, other.Name))
 			}
 		}
-		return os.Remove(m.recordPath(name))
 	}
-	return nil
+	recreate := !next.runtime().equal(r.runtime()) || next.Port != r.Port
+	running := false
+	if recreate {
+		states, err := m.states(ctx)
+		if err != nil {
+			return result, fail(503, "Cannot read database status: "+err.Error())
+		}
+		running = live(states[r.Project])
+	}
+	finish := m.track(name, "Modify database")
+	defer func() { finish(err) }()
+	switch {
+	case running && (mod.ApplyImmediately || next.Port != r.Port):
+		next.Applied = nil
+		if err = m.save(next); err != nil {
+			return result, err
+		}
+		if err = m.start(ctx, next); err != nil {
+			return result, m.rollback(ctx, r, err)
+		}
+		result.Restarted = true
+	case running:
+		if next.Applied == nil {
+			current := r.runtime()
+			next.Applied = &current
+		}
+		if next.Applied.equal(next.runtime()) {
+			next.Applied = nil // the change was reverted before it was applied
+		}
+		if err = m.save(next); err != nil {
+			return result, err
+		}
+		result.PendingRestart = next.Applied != nil
+	default:
+		if err = m.save(next); err != nil {
+			return result, err
+		}
+	}
+	if next.BackupRetentionDays != r.BackupRetentionDays {
+		if err = m.retain(next); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+// Restore the previous configuration after a change that did not start, and
+// bring the database back with it.
+func (m *manager) rollback(ctx context.Context, previous record, cause error) error {
+	previous.Applied = nil
+	if err := writeJSON(m.recordPath(previous.Name), previous); err != nil {
+		return fail(502, "The change did not apply and the previous settings could not be saved. "+cause.Error())
+	}
+	if err := m.start(ctx, previous); err != nil {
+		return fail(502, "The change did not apply, and the database did not restart with its previous settings. Check its logs. "+cause.Error())
+	}
+	return fail(502, "The change did not apply, so the database is running with its previous settings again. "+cause.Error())
 }
 
 type usage struct {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -45,6 +46,28 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
+var chartRanges = map[string]time.Duration{"1h": time.Hour, "3h": 3 * time.Hour, "6h": 6 * time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour}
+
+type engineView struct {
+	Key          string      `json:"key"`
+	Title        string      `json:"title"`
+	DefaultPort  int         `json:"defaultPort"`
+	MinMemoryMiB int         `json:"minMemoryMiB"`
+	User         string      `json:"user"`
+	Database     string      `json:"database"`
+	SizeUnits    []string    `json:"sizeUnits,omitempty"`
+	Parameters   []parameter `json:"parameters"`
+}
+
+func engineCatalog() []engineView {
+	list := make([]engineView, 0, len(engineOrder))
+	for _, key := range engineOrder {
+		e := engines[key]
+		list = append(list, engineView{key, e.title, e.hostPort, e.minMemory, e.user, e.database, sizeUnits[key], e.parameters})
+	}
+	return list
+}
+
 type endpoint func(http.ResponseWriter, *http.Request) error
 
 func (f endpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +99,10 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		return err
 	}))
+	api.Handle("GET /api/engines", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		sendJSON(w, 200, engineCatalog())
+		return nil
+	}))
 	api.Handle("POST /api/instances", endpoint(func(w http.ResponseWriter, r *http.Request) error {
 		var spec instanceSpec
 		if err := decode(w, r, &spec); err != nil {
@@ -87,12 +114,8 @@ func handler(m *manager, a auth) http.Handler {
 		sendJSON(w, 201, map[string]string{"name": spec.Name})
 		return nil
 	}))
-	for _, op := range []string{"start", "stop", "delete"} {
-		pattern := "POST /api/instances/{name}/" + op
-		if op == "delete" {
-			pattern = "DELETE /api/instances/{name}"
-		}
-		api.Handle(pattern, endpoint(func(w http.ResponseWriter, r *http.Request) error {
+	for _, op := range []string{"start", "stop", "reboot"} {
+		api.Handle("POST /api/instances/{name}/"+op, endpoint(func(w http.ResponseWriter, r *http.Request) error {
 			if err := m.change(r.Context(), r.PathValue("name"), op); err != nil {
 				return err
 			}
@@ -100,6 +123,44 @@ func handler(m *manager, a auth) http.Handler {
 			return nil
 		}))
 	}
+	api.Handle("DELETE /api/instances/{name}", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		final := r.URL.Query().Get("finalSnapshot")
+		if final != "" && final != "true" && final != "false" {
+			return fail(400, "Set finalSnapshot to true or false.")
+		}
+		if err := m.remove(r.Context(), r.PathValue("name"), final == "true"); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	api.Handle("POST /api/instances/{name}/modify", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		var mod modification
+		if err := decode(w, r, &mod); err != nil {
+			return err
+		}
+		result, err := m.modify(r.Context(), r.PathValue("name"), mod)
+		if err == nil {
+			sendJSON(w, 200, result)
+		}
+		return err
+	}))
+	api.Handle("GET /api/instances/{name}/history", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		db, err := m.record(r.PathValue("name"))
+		if err != nil {
+			return err
+		}
+		key := r.URL.Query().Get("range")
+		if key == "" {
+			key = "1h"
+		}
+		span, ok := chartRanges[key]
+		if !ok {
+			return fail(400, "Choose a range of 1h, 3h, 6h, 12h or 24h.")
+		}
+		sendJSON(w, 200, m.history.view(db.Project, span, time.Now()))
+		return nil
+	}))
 	api.Handle("GET /api/instances/{name}/connection", endpoint(func(w http.ResponseWriter, r *http.Request) error {
 		db, err := m.record(r.PathValue("name"))
 		if err != nil {
@@ -165,9 +226,16 @@ func handler(m *manager, a auth) http.Handler {
 		return err
 	}))
 	api.Handle("POST /api/instances/{name}/backups", endpoint(func(w http.ResponseWriter, r *http.Request) error {
-		b, err := m.makeBackup(r.Context(), r.PathValue("name"))
+		b, err := m.makeBackup(r.Context(), r.PathValue("name"), "manual")
 		if err == nil {
 			sendJSON(w, 201, b)
+		}
+		return err
+	}))
+	api.Handle("POST /api/backups/{id}/keep", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		b, err := m.keepBackup(r.PathValue("id"))
+		if err == nil {
+			sendJSON(w, 200, b)
 		}
 		return err
 	}))
@@ -196,6 +264,9 @@ func handler(m *manager, a auth) http.Handler {
 		if err := decode(w, r, &spec); err != nil {
 			return err
 		}
+		if spec.Parameters == nil {
+			spec.Parameters = maps.Clone(b.Parameters) // omitted or null inherits; {} restores defaults
+		}
 		if err := m.provision(r.Context(), spec, &b); err != nil {
 			return err
 		}
@@ -203,11 +274,7 @@ func handler(m *manager, a auth) http.Handler {
 		return nil
 	}))
 	api.Handle("DELETE /api/backups/{id}", endpoint(func(w http.ResponseWriter, r *http.Request) error {
-		b, err := m.backup(r.PathValue("id"))
-		if err != nil {
-			return err
-		}
-		if err := m.deleteBackup(b); err != nil {
+		if err := m.deleteBackup(r.PathValue("id")); err != nil {
 			return err
 		}
 		w.WriteHeader(http.StatusNoContent)

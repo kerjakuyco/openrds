@@ -1,10 +1,12 @@
 """Exercise the installed control plane and both real database engines."""
 
+import datetime
 import json
 import os
 import secrets
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
@@ -58,6 +60,37 @@ def sql(engine, name, query):
                env={**os.environ, variable: c["password"]})
 
 
+PARAMETERS = {"postgres": ("max_connections", "150"), "mysql": ("max_connections", "300"), "valkey": ("maxmemory-policy", "allkeys-lru")}
+
+
+def setting(engine, name, key):
+    if engine == "postgres":
+        return sql(engine, name, f"SHOW {key}")
+    if engine == "mysql":
+        return sql(engine, name, f"SELECT @@{key}")
+    return sql(engine, name, ["CONFIG", "GET", key]).splitlines()[-1]
+
+
+def distant_window():
+    """A backup window 12 hours away, so the scheduler never competes with the test."""
+    start = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=12)
+    return f"{start:%H:%M}-{start + datetime.timedelta(minutes=30):%H:%M}"
+
+
+def refused(path, method, status):
+    try:
+        api(path, method)
+    except RuntimeError as err:
+        assert isinstance(err.__cause__, urllib.error.HTTPError) and err.__cause__.code == status, err
+    else:
+        raise AssertionError(f"{method} {path} was not refused")
+
+
+def container_of(network):
+    return cli("docker", "ps", "--filter", f"network={network}",
+               "--filter", "label=io.openrds.database=true", "--format", "{{.ID}}")
+
+
 def write_value(engine, name):
     if engine == "valkey":
         assert sql(engine, name, ["SET", "smoke", "42"]) == "OK"
@@ -85,11 +118,12 @@ def exercise(engine, quotas):
                 assert isinstance(err.__cause__, urllib.error.HTTPError) and err.__cause__.code == 422
             else:
                 raise AssertionError("unsupported quota accepted")
-        api("instances", "POST", {"name": name, "engine": engine, "port": port,
-                                  "cpus": 1, "memoryMiB": memory, "diskGiB": int(quotas)})
+        key, value = PARAMETERS[engine]
+        api("instances", "POST", {"name": name, "engine": engine, "port": port, "cpus": 1, "memoryMiB": memory,
+                                  "diskGiB": int(quotas), "backupRetentionDays": 1, "backupWindow": distant_window(), "deletionProtection": True,
+                                  "parameters": {key: value}, "tags": {"suite": "smoke"}})
         network = api(f"instances/{name}/connection")["network"]
-        container = cli("docker", "ps", "--filter", f"network={network}",
-                        "--filter", "label=io.openrds.database=true", "--format", "{{.ID}}")
+        container = container_of(network)
         limits = cli("docker", "inspect", "--format", "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}", container)
         assert limits == f"1000000000 {memory * 1024 * 1024}"
         internal_port = {"postgres": "5432/tcp", "mysql": "3306/tcp", "valkey": "6379/tcp"}[engine]
@@ -97,9 +131,26 @@ def exercise(engine, quotas):
         with socket.create_connection(("127.0.0.1", port), timeout=5):
             pass
         write_value(engine, name)
+        assert setting(engine, name, key) == value
         assert api(f"instances/{name}/metrics")["CPUPerc"]
         assert api(f"instances/{name}/logs")["text"]
         assert api(f"instances/{name}/storage")["usedBytes"] > 0
+        # A deferred change waits for a reboot; the reboot applies it and keeps the data.
+        change = api(f"instances/{name}/modify", "POST", {"memoryMiB": memory * 2})
+        assert change == {"restarted": False, "pendingRestart": True}, change
+        assert cli("docker", "inspect", "--format", "{{.HostConfig.Memory}}", container) == str(memory * 1024 * 1024)
+        api(f"instances/{name}/reboot", "POST")
+        db = next(d for d in api("instances") if d["name"] == name)
+        assert db["status"] == "running" and "applied" not in db and db["nextBackupAt"], db
+        container = container_of(network)
+        assert cli("docker", "inspect", "--format", "{{.HostConfig.Memory}}", container) == str(memory * 2 * 1024 * 1024)
+        assert read_value(engine, name) == "42" and setting(engine, name, key) == value
+        for _ in range(30):
+            history = api(f"instances/{name}/history?range=1h")
+            if history["points"]:
+                break
+            time.sleep(3)
+        assert history["available"] and history["points"][-1]["memory"] > 0, history
         backup = api(f"instances/{name}/backups", "POST")
         assert backup.get("diskGiB", 0) == int(quotas)
         assert backup["bytes"] == len(api(f"backups/{backup['id']}/download")) > 0
@@ -141,19 +192,28 @@ case "$message" in *"Disk quota exceeded"*|*"No space left on device"*) ;; *) ec
             assert filesystem_kb() < before + 200_000
         api(f"instances/{name}/start", "POST")
         assert read_value(engine, name) == "42"
-        api(f"instances/{name}", "DELETE")
-        api(f"backups/{backup['id']}/restore", "POST", {"name": target, "port": port})
+        refused(f"instances/{name}", "DELETE", 409)  # deletion protection
+        api(f"instances/{name}/modify", "POST", {"deletionProtection": False})
+        api(f"instances/{name}?finalSnapshot=true", "DELETE")
+        final = next(b for b in api("backups") if b["name"] == name and b.get("final"))
+        assert final["kind"] == "manual" and final["parameters"] == {key: value}
+        api(f"backups/{final['id']}/restore", "POST", {"name": target, "port": port})
         assert next(d for d in api("instances") if d["name"] == target)["diskGiB"] == int(quotas)
         assert read_value(engine, target) == "42"
+        assert setting(engine, target, key) == value  # parameters travel with the snapshot
         mode = "1 GiB limit enforced and resized" if quotas else "unsupported caps refused; uncapped volume"
-        print(f"{engine}: provision, connect, observe, restart, backup and restore passed ({mode})", flush=True)
+        print(f"{engine}: provision, parameters, deferred modify, reboot, history, backup, protection, "
+              f"final snapshot and restore passed ({mode})", flush=True)
     finally:
         # Clean up only resources created by this run.
         for db in api("instances"):
             if db["name"] in (target, name):
+                if db["deletionProtection"]:
+                    api(f"instances/{db['name']}/modify", "POST", {"deletionProtection": False})
                 api(f"instances/{db['name']}", "DELETE")
-        if backup:
-            api(f"backups/{backup['id']}", "DELETE")
+        for b in api("backups"):
+            if b["name"] == name:
+                api(f"backups/{b['id']}", "DELETE")
 
 
 if __name__ == "__main__":

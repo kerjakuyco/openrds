@@ -134,11 +134,11 @@ func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
 				t.Fatal(err)
 			}
 			source, _ := m.record("orders")
-			b, err := m.makeBackup(ctx, "orders")
+			b, err := m.makeBackup(ctx, "orders", "manual")
 			if err != nil || b.Bytes != int64(len(dump)) {
 				t.Fatalf("backup: %+v %v", b, err)
 			}
-			if err := m.change(ctx, "orders", "delete"); err != nil || deleted != source.Project {
+			if err := m.remove(ctx, "orders", false); err != nil || deleted != source.Project {
 				t.Fatalf("wrong project deleted: %s, %v", deleted, err)
 			}
 			reopened, err := openManager(m.dir, m.templates, m.docker)
@@ -182,14 +182,14 @@ func TestFailureKeepsRecoverableState(t *testing.T) {
 		t.Fatalf("could not retry: %v", err)
 	}
 	failure = "exec"
-	if _, err := m.makeBackup(ctx, spec.Name); err == nil {
+	if _, err := m.makeBackup(ctx, spec.Name, "manual"); err == nil {
 		t.Fatal("failed backup reported success")
 	}
 	if list, err := m.backups(); err != nil || len(list) != 0 {
 		t.Fatal("partial backup published")
 	}
 	failure = ""
-	b, err := m.makeBackup(ctx, spec.Name)
+	b, err := m.makeBackup(ctx, spec.Name, "manual")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,11 +201,11 @@ func TestFailureKeepsRecoverableState(t *testing.T) {
 	if err != nil || !r.PendingRestore {
 		t.Fatal("failed restore must stay marked incomplete")
 	}
-	if _, err := m.makeBackup(ctx, "restore"); err == nil {
+	if _, err := m.makeBackup(ctx, "restore", "manual"); err == nil {
 		t.Fatal("incomplete restore accepted as a recovery point")
 	}
 	failure = "down"
-	if err := m.change(ctx, spec.Name, "delete"); err == nil {
+	if err := m.remove(ctx, spec.Name, false); err == nil {
 		t.Fatal("failed delete reported success")
 	}
 	if _, err := m.record(spec.Name); err != nil {

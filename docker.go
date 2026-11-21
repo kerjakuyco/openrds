@@ -17,6 +17,8 @@ type engine struct {
 	title          string
 	scheme         string
 	port           int
+	hostPort       int // suggested first host port
+	minMemory      int // MiB
 	dataDir        string
 	user           string
 	database       string
@@ -24,26 +26,32 @@ type engine struct {
 	restoreStopped bool
 	dump           []string
 	restore        []string
+	parameters     []parameter
 }
+
+var engineOrder = []string{"postgres", "mysql", "valkey"}
 
 // Only these templates and commands can be run by the control plane.
 // Compose exec -T keeps database dumps binary-safe in both directions.
 var engines = map[string]engine{
 	"postgres": {
-		title: "PostgreSQL 17", scheme: "postgresql", port: 5432, dataDir: "/var/lib/postgresql/data", user: "openrds", database: "app", suffix: ".dump",
-		dump:    []string{"pg_dump", "-U", "openrds", "-d", "app", "--format=custom"},
-		restore: []string{"pg_restore", "-U", "openrds", "-d", "app", "--single-transaction", "--no-owner", "--no-privileges"},
+		title: "PostgreSQL 17", scheme: "postgresql", port: 5432, hostPort: 15432, minMemory: 128, dataDir: "/var/lib/postgresql/data", user: "openrds", database: "app", suffix: ".dump",
+		dump:       []string{"pg_dump", "-U", "openrds", "-d", "app", "--format=custom"},
+		restore:    []string{"pg_restore", "-U", "openrds", "-d", "app", "--single-transaction", "--no-owner", "--no-privileges"},
+		parameters: postgresParameters,
 	},
 	"mysql": {
-		title: "MySQL 8.4", scheme: "mysql", port: 3306, dataDir: "/var/lib/mysql", user: "openrds", database: "app", suffix: ".sql",
+		title: "MySQL 8.4", scheme: "mysql", port: 3306, hostPort: 13306, minMemory: 512, dataDir: "/var/lib/mysql", user: "openrds", database: "app", suffix: ".sql",
+		parameters: mysqlParameters,
 		// Keep the password out of argv. Root is used locally inside the
 		// container so routine, event and trigger definitions are included.
 		dump:    []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump -u root --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --routines --events --triggers --hex-blob app`},
 		restore: []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --binary-mode -u root app`},
 	},
 	"valkey": {
-		title: "Valkey 9.1", scheme: "redis", port: 6379, dataDir: "/data", user: "default", database: "0", suffix: ".rdb",
+		title: "Valkey 9.1", scheme: "redis", port: 6379, hostPort: 16379, minMemory: 128, dataDir: "/data", user: "default", database: "0", suffix: ".rdb",
 		restoreStopped: true,
+		parameters:     valkeyParameters,
 		// Progress from valkey-cli stays out of the backup stream.
 		dump: []string{"sh", "-ec", `REDISCLI_AUTH="$VALKEY_PASSWORD" valkey-cli --rdb /tmp/openrds.rdb >/dev/null && exec cat /tmp/openrds.rdb`},
 		// A running Valkey loads AOF ahead of RDB. Install the snapshot only
@@ -134,6 +142,13 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 	if r.DiskGiB > 0 {
 		base = append(base, "--file", filepath.Join(m.templates, "volume-quota.yaml"))
 		env = append(env, "OPENRDS_DISK_LINK="+r.Project)
+	}
+	if len(r.Parameters) > 0 {
+		path, err := m.writeOverride(r)
+		if err != nil {
+			return fmt.Errorf("writing engine parameters: %w", err)
+		}
+		base = append(base, "--file", path)
 	}
 	return m.docker.run(ctx, env, in, out, append(base, args...)...)
 }

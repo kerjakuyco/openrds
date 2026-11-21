@@ -1,0 +1,78 @@
+// Shared state: the inventory read from the control plane, refreshed on an
+// interval, plus operations this browser started and is still waiting on.
+import { api, toast } from "./lib.mjs";
+
+export const state = {
+  instances: null, backups: null, activity: null, host: null, engines: null,
+  signedIn: false, syncedAt: 0, problems: [],
+};
+
+const listeners = new Set();
+export const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+const emit = (changed) => listeners.forEach(fn => fn(changed));
+
+let syncID = 0;
+const RESOURCES = ["instances", "backups", "activity", "host"];
+
+export async function sync() {
+  if (!state.signedIn) return;
+  const id = ++syncID;
+  const results = await Promise.allSettled(RESOURCES.map(k => api(k)));
+  if (id !== syncID || !state.signedIn) return;
+  const changed = new Set(), problems = [];
+  results.forEach((res, i) => {
+    const key = RESOURCES[i];
+    if (res.status === "fulfilled") {
+      if (JSON.stringify(state[key]) !== JSON.stringify(res.value)) changed.add(key);
+      state[key] = res.value;
+    } else problems.push(`${key}: ${res.reason.message}`);
+  });
+  if (JSON.stringify(problems) !== JSON.stringify(state.problems)) changed.add("problems");
+  state.problems = problems;
+  state.syncedAt = Date.now();
+  emit(changed);
+}
+
+export async function loadEngines() {
+  if (!state.engines) state.engines = await api("engines");
+  return state.engines;
+}
+
+export const go = (hash) => { location.hash = hash; };
+export const engine = (key) => state.engines?.find(e => e.key === key);
+export const instance = (name) => state.instances?.find(d => d.name === name);
+
+export function reset() {
+  syncID++;
+  for (const key of RESOURCES) state[key] = null;
+  state.problems = [];
+  operations.clear();
+}
+
+// Operations run synchronously on the server and can take minutes. Track them
+// here so a toast reports the outcome after the operator navigates elsewhere.
+export const operations = new Map();
+let opID = 0;
+
+export function track(label, promise, { success, onDone } = {}) {
+  const id = ++opID;
+  operations.set(id, label);
+  emit(new Set(["operations"]));
+  sync();
+  promise.then(
+    (value) => { if (success !== false) toast(typeof success === "function" ? success(value) : (success || `${label} finished.`), "success"); onDone?.(null, value); },
+    (err) => { toast(err.message, "error", { title: `${label} failed` }); onDone?.(err); },
+  ).finally(() => {
+    operations.delete(id);
+    emit(new Set(["operations"]));
+    sync();
+  });
+  return promise;
+}
+
+let timer = 0;
+export function startPolling() {
+  clearInterval(timer);
+  timer = setInterval(() => { if (state.signedIn && !document.hidden) sync(); }, 15000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.signedIn) sync(); });
