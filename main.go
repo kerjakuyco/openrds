@@ -28,6 +28,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	prepare, cancelPrepare := context.WithTimeout(context.Background(), 2*time.Minute)
+	m.prepareDisks(prepare)
+	cancelPrepare()
 	srv := &http.Server{Addr: env("OPENRDS_LISTEN", "127.0.0.1:8080"), Handler: handler(m, auth{token}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

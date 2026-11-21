@@ -38,10 +38,19 @@ async function run() {
     await page.getByText("Resource limits", { exact: false }).first().click();
     await page.getByLabel("CPU cores").fill("0.5");
     await page.getByLabel("Memory (MiB)").fill("256");
+    const quotas = (await api("host")).volumeQuota.state === "supported";
+    const disk = page.getByLabel("Data volume (GiB)", { exact: true });
+    assert.equal(await disk.isEnabled(), true);
+    await disk.fill("20");
+    assert.equal(await disk.inputValue(), "20");
+    await disk.fill(quotas ? "2" : "");
     await page.locator("#editor-submit").click();
     const detail = page.locator("#detail");
     await detail.waitFor({ state: "visible", timeout: 360000 });
     await detail.getByText("0.5 cores").waitFor();
+    await detail.getByText("Data volume limit", { exact: true }).waitFor();
+    await detail.getByRole("button", { name: "Measure volume usage" }).click();
+    await detail.getByRole("status").filter({ hasText: quotas ? "used of 2 GiB" : "used · uncapped" }).waitFor();
     await detail.getByText("Memory / limit").waitFor();
     await detail.getByRole("button", { name: "Connection", exact: true }).click();
     await detail.getByRole("button", { name: "Reveal connection URI" }).click();
@@ -66,6 +75,7 @@ async function run() {
     await backup.getByRole("button", { name: "Restore" }).click();
     assert.equal(await page.getByLabel("Instance name").inputValue(), `${name}-restore`);
     assert.equal(await page.getByLabel("Engine", { exact: true }).isDisabled(), true);
+    assert.equal(await disk.inputValue(), quotas ? "2" : "");
     await page.locator("#editor").getByRole("button", { name: "Cancel" }).click();
     await page.getByRole("link", { name: "Activity", exact: true }).click();
     await page.locator("#result-filter").selectOption("completed");

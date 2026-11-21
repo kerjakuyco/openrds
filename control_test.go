@@ -103,7 +103,7 @@ func TestSessionAndSecretBoundaries(t *testing.T) {
 }
 
 func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
-	for _, key := range []string{"postgres", "mysql"} {
+	for _, key := range []string{"postgres", "mysql", "valkey"} {
 		t.Run(key, func(t *testing.T) {
 			ctx := t.Context()
 			dump := []byte("logical\x00backup\xff")
@@ -114,7 +114,7 @@ func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
 					return fmt.Errorf("wrong engine template")
 				}
 				switch args[5] {
-				case "exec":
+				case "exec", "run":
 					if in != nil {
 						var err error
 						restored, err = io.ReadAll(in)
@@ -122,8 +122,10 @@ func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
 					}
 					_, err := out.Write(dump)
 					return err
-				case "down":
-					deleted = args[2]
+				case "down", "stop", "up":
+					if args[5] == "down" {
+						deleted = args[2]
+					}
 				}
 				return nil
 			})

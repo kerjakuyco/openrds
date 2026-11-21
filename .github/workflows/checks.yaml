@@ -3,7 +3,7 @@ on: [push, pull_request]
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -14,7 +14,7 @@ jobs:
       - run: go vet ./...
       - run: node --check web/app.js
       - run: sh install.sh
-      - run: python3 scripts/smoke.py
+      - run: OPENRDS_REQUIRE_QUOTA=1 python3 scripts/smoke.py
       - name: Exercise the dashboard in Chrome
         run: |
           npm install --prefix "$RUNNER_TEMP/openrds-ui" playwright-core@1.61.1

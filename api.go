@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -106,12 +105,13 @@ func handler(m *manager, a auth) http.Handler {
 		if err != nil {
 			return err
 		}
-		u := url.URL{Scheme: engines[db.Engine].scheme, User: url.UserPassword("openrds", db.Password),
-			Host: "127.0.0.1:" + strconv.Itoa(db.Port), Path: "/app"}
+		eng := engines[db.Engine]
+		u := url.URL{Scheme: eng.scheme, User: url.UserPassword(eng.user, db.Password),
+			Host: "127.0.0.1:" + strconv.Itoa(db.Port), Path: "/" + eng.database}
 		internal := u
 		alias := "openrds-" + db.Name
 		internal.Host = alias + ":" + strconv.Itoa(engines[db.Engine].port)
-		sendJSON(w, 200, map[string]any{"host": "127.0.0.1", "port": db.Port, "user": "openrds", "database": "app", "password": db.Password, "uri": u.String(),
+		sendJSON(w, 200, map[string]any{"host": "127.0.0.1", "port": db.Port, "user": eng.user, "database": eng.database, "password": db.Password, "uri": u.String(),
 			"network": db.Project + "_default", "networkHost": alias, "networkURI": internal.String()})
 		return nil
 	}))
@@ -127,6 +127,26 @@ func handler(m *manager, a auth) http.Handler {
 		text, err := m.logs(r.Context(), r.PathValue("name"))
 		if err == nil {
 			sendJSON(w, 200, map[string]string{"text": text})
+		}
+		return err
+	}))
+	api.Handle("POST /api/instances/{name}/disk", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		var body struct {
+			DiskGiB int `json:"diskGiB"`
+		}
+		if err := decode(w, r, &body); err != nil {
+			return err
+		}
+		if err := m.resizeDisk(r.Context(), r.PathValue("name"), body.DiskGiB); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	api.Handle("GET /api/instances/{name}/storage", endpoint(func(w http.ResponseWriter, r *http.Request) error {
+		used, err := m.volumeUsage(r.Context(), r.PathValue("name"))
+		if err == nil {
+			sendJSON(w, 200, map[string]int64{"usedBytes": used})
 		}
 		return err
 	}))
@@ -172,7 +192,7 @@ func handler(m *manager, a auth) http.Handler {
 		if err != nil {
 			return err
 		}
-		var spec instanceSpec
+		spec := instanceSpec{DiskGiB: b.DiskGiB}
 		if err := decode(w, r, &spec); err != nil {
 			return err
 		}
@@ -222,9 +242,7 @@ func handler(m *manager, a auth) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.Header().Set("Cache-Control", "no-store")
-		}
+		w.Header().Set("Cache-Control", "no-store")
 		safe.ServeHTTP(w, r)
 	})
 }

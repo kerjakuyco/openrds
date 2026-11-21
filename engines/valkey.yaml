@@ -1,0 +1,41 @@
+services:
+  db:
+    image: valkey/valkey:9.1-alpine
+    restart: unless-stopped
+    cpus: ${OPENRDS_DB_CPUS:-0}
+    mem_limit: ${OPENRDS_DB_MEMORY:-0}
+    labels:
+      io.openrds.database: "true"
+    environment:
+      VALKEY_PASSWORD: ${OPENRDS_DB_PASSWORD:?missing database password}
+    command:
+      - valkey-server
+      - --requirepass
+      - ${OPENRDS_DB_PASSWORD:?missing database password}
+      - --dir
+      - /data
+      - --maxmemory
+      - ${OPENRDS_VALKEY_MAXMEMORY:-0}
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:${OPENRDS_DB_PORT:?missing host port}:6379"
+    volumes:
+      - data:/data
+    networks:
+      default:
+        aliases: ["${OPENRDS_DB_ALIAS:?missing instance alias}"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$VALKEY_PASSWORD\" valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  data:

@@ -4,7 +4,12 @@ COPY go.mod *.go ./
 COPY web ./web
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/openrds .
 
-FROM docker:29-cli
+FROM alpine:3.22 AS disk-helper
+RUN apk add --no-cache util-linux e2fsprogs e2fsprogs-extra
+COPY disk-helper.sh /usr/local/bin/disk-helper
+ENTRYPOINT ["/usr/local/bin/disk-helper"]
+
+FROM docker:29-cli AS runtime
 LABEL org.opencontainers.image.source="https://github.com/kerjakuyco/openrds" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /opt/openrds

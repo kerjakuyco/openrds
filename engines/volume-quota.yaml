@@ -1,0 +1,15 @@
+# Applied with an engine template when the instance has a disk limit.
+# The device symlink is attached by disk-helper before Compose starts.
+services:
+  db:
+    entrypoint:
+      - sh
+      - -c
+      - rmdir /var/lib/postgresql/data/lost+found /var/lib/mysql/lost+found /data/lost+found 2>/dev/null || true; exec docker-entrypoint.sh "$@"
+      - openrds
+volumes:
+  data:
+    driver: local
+    driver_opts:
+      type: ext4
+      device: /dev/openrds/${OPENRDS_DISK_LINK:?missing disk link}

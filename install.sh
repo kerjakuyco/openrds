@@ -10,7 +10,8 @@ major=${version%%.*}
 case "$major" in ''|*[!0-9]*) die "Could not determine the Docker Engine version: $version";; esac
 [ "$major" -ge 28 ] || die "Use Docker Engine 28 or newer for loopback-only published ports."
 docker compose version >/dev/null || die "Install the Docker Compose plugin: https://docs.docker.com/compose/install/linux/"
-docker compose up --detach --build --wait --wait-timeout 120
+docker compose --profile helper build
+docker compose up --detach --wait --wait-timeout 120
 address=$(docker compose port openrds 8080)
 port=${address##*:}
 printf '\nOpenRDS is ready at http://%s on this VPS.\n' "$address"

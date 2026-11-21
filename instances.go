@@ -17,6 +17,8 @@ type instanceView struct {
 	Busy           bool      `json:"busy"`
 	Created        time.Time `json:"createdAt"`
 	PendingRestore bool      `json:"pendingRestore"`
+	User           string    `json:"user"`
+	Database       string    `json:"database"`
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -36,8 +38,9 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		if state == "" {
 			state = "not provisioned"
 		}
-		result = append(result, instanceView{r.instanceSpec, engines[r.Engine].title, state,
-			m.busy[r.Name], r.Created, r.PendingRestore})
+		eng := engines[r.Engine]
+		result = append(result, instanceView{r.instanceSpec, eng.title, state,
+			m.busy[r.Name], r.Created, r.PendingRestore, eng.user, eng.database})
 	}
 	return result, nil
 }
@@ -45,6 +48,9 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 // Retain metadata (and any provisioned volume) on Docker failure so the
 // operator can retry Start or explicitly delete the instance.
 func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup) (err error) {
+	if err := m.checkDiskRequest(ctx, spec.DiskGiB); err != nil {
+		return err // reject before reserving a name/port or touching an instance
+	}
 	var input *os.File
 	if from != nil {
 		spec.Engine = from.Engine
@@ -65,18 +71,85 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	}
 	finish := m.track(r.Name, action)
 	defer func() { finish(err) }()
-	if err := m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db"); err != nil {
+	if err := m.start(ctx, r); err != nil {
 		return fail(502, "Provisioning did not finish. The instance was kept for inspection. "+err.Error())
 	}
 	if from != nil {
-		args := append([]string{"exec", "-T", "db"}, engines[r.Engine].restore...)
-		if err := m.compose(ctx, r, input, nil, args...); err != nil {
+		if err := m.restoreInto(ctx, r, input); err != nil {
 			return fail(502, "Restore did not finish. The new instance is marked incomplete; the backup is intact. "+err.Error())
 		}
 		r.PendingRestore = false
 		return writeJSON(m.recordPath(r.Name), r)
 	}
 	return nil
+}
+
+func (m *manager) restoreInto(ctx context.Context, r record, input *os.File) error {
+	eng := engines[r.Engine]
+	if !eng.restoreStopped {
+		args := append([]string{"exec", "-T", "db"}, eng.restore...)
+		return m.compose(ctx, r, input, nil, args...)
+	}
+	if err := m.compose(ctx, r, nil, nil, "stop", "--timeout", "30", "db"); err != nil {
+		return err
+	}
+	script := eng.restore[len(eng.restore)-1]
+	if err := m.compose(ctx, r, input, nil, "run", "--rm", "--no-deps", "-T", "--entrypoint", "sh", "db", "-ec", script); err != nil {
+		return err
+	}
+	return m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db")
+}
+
+func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err error) {
+	if gib == 0 {
+		return fail(400, "A disk limit cannot be removed in place. Restore a backup into an uncapped instance instead.")
+	}
+	if err := m.checkDiskRequest(ctx, gib); err != nil {
+		return err
+	}
+	r, release, err := m.begin(name, nil, false)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if r.DiskGiB == 0 {
+		return fail(409, "This instance has no disk limit. Restore a backup into a new instance to add one.")
+	}
+	if r.PendingRestore {
+		return fail(409, "This instance has an incomplete restore.")
+	}
+	if r.DiskGiB == gib {
+		return nil
+	}
+	states, err := m.states(ctx)
+	if err != nil {
+		return fail(503, "Cannot read database status: "+err.Error())
+	}
+	if state := states[r.Project]; state != "" && state != "stopped" {
+		return fail(409, "Stop the database before changing its disk limit.")
+	}
+	finish := m.track(name, "Resize disk")
+	defer func() { finish(err) }()
+	if err = m.diskHelper(ctx, "resize", r, gib); err != nil {
+		return fail(502, "Disk resize did not finish. "+err.Error())
+	}
+	r.DiskGiB = gib
+	return writeJSON(m.recordPath(name), r)
+}
+
+func (m *manager) start(ctx context.Context, r record) error {
+	if r.DiskGiB > 0 {
+		if err := m.checkDiskRequest(ctx, r.DiskGiB); err != nil {
+			return err
+		}
+		if err := m.checkExistingVolume(ctx, r); err != nil {
+			return err
+		}
+		if err := m.attachDisk(ctx, r); err != nil {
+			return err
+		}
+	}
+	return m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db")
 }
 
 func (m *manager) change(ctx context.Context, name, action string) (err error) {
@@ -89,7 +162,7 @@ func (m *manager) change(ctx context.Context, name, action string) (err error) {
 	var label string
 	switch action {
 	case "start":
-		label, args = "Start database", []string{"up", "--detach", "--wait", "--wait-timeout", "180", "db"}
+		label = "Start database"
 	case "stop":
 		label, args = "Stop database", []string{"stop", "--timeout", "45", "db"}
 	case "delete":
@@ -99,10 +172,25 @@ func (m *manager) change(ctx context.Context, name, action string) (err error) {
 	}
 	finish := m.track(name, label)
 	defer func() { finish(err) }()
-	if err := m.compose(ctx, r, nil, nil, args...); err != nil {
+	if action == "start" {
+		err = m.start(ctx, r)
+	} else {
+		if action == "delete" && r.DiskGiB > 0 {
+			err = m.checkExistingVolume(ctx, r)
+		}
+		if err == nil {
+			err = m.compose(ctx, r, nil, nil, args...)
+		}
+	}
+	if err != nil {
 		return fail(502, label+" failed: "+err.Error())
 	}
 	if action == "delete" {
+		if r.DiskGiB > 0 {
+			if err := m.detachDisk(ctx, r); err != nil {
+				return fail(502, "The database was removed, but its disk image is still attached. Retry deletion. "+err.Error())
+			}
+		}
 		return os.Remove(m.recordPath(name))
 	}
 	return nil
@@ -117,10 +205,11 @@ type usage struct {
 }
 
 type hostInfo struct {
-	Name        string `json:"name"`
-	CPUs        int    `json:"cpus"`
-	MemoryBytes int64  `json:"memoryBytes"`
-	Version     string `json:"dockerVersion"`
+	Name        string       `json:"name"`
+	CPUs        int          `json:"cpus"`
+	MemoryBytes int64        `json:"memoryBytes"`
+	Version     string       `json:"dockerVersion"`
+	VolumeQuota quotaSupport `json:"volumeQuota"`
 }
 
 func (m *manager) host(ctx context.Context) (hostInfo, error) {
@@ -131,6 +220,9 @@ func (m *manager) host(ctx context.Context) (hostInfo, error) {
 		return host, fail(503, "Cannot read host capacity: "+err.Error())
 	}
 	err := json.Unmarshal(out.Bytes(), &host)
+	if err == nil {
+		host.VolumeQuota = m.volumeQuota(ctx)
+	}
 	return host, err
 }
 

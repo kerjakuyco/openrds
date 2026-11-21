@@ -1,6 +1,6 @@
 # OpenRDS
 
-OpenRDS is an MIT-licensed database control plane for a single Linux VPS. Install it on your server, open the dashboard, and provision PostgreSQL or MySQL with a persistent data volume, a private endpoint, and generated credentials.
+OpenRDS is an MIT-licensed database control plane for a single Linux VPS. Install it on your server, open the dashboard, and provision PostgreSQL, MySQL, or Valkey with a persistent data volume, a private endpoint, and generated credentials.
 
 ## Install on a VPS
 
@@ -25,13 +25,21 @@ Visit **http://127.0.0.1:8080** and paste the token. Both the dashboard and data
 
 ## Create and connect
 
-1. Select **New database**, choose PostgreSQL 17 or MySQL 8.4 LTS, and pick a host port. Optional CPU and memory limits apply to that instance’s container.
-2. Choose **Inspect → Connection → Reveal connection URI**. The initial database is `app` and the user is `openrds`.
+1. Select **New database**, choose PostgreSQL 17, MySQL 8.4 LTS, or Valkey 9.1, and pick a host port. Under **Resource limits** you can set CPU cores, memory, and a hard limit on the instance’s data volume.
+2. Choose **Inspect → Connection → Reveal connection URI**. PostgreSQL and MySQL create the database `app` and user `openrds`. Valkey uses Redis database `0` and the `default` user; any Redis client can connect.
 3. Applications on the VPS can use the URI directly. From another computer, run the SSH command shown in the Connection tab first. For a containerized app, expand **Connect an application container** to get the exact network command and internal URI.
 
 Each instance gets a separate Compose project, network, volume, and random password. Stop/Start preserves the volume. Delete removes that instance’s volume; saved backups have their own lifecycle.
 
-The initial PostgreSQL role administers its isolated cluster; the MySQL user has privileges on `app`. You can create narrower roles for application workloads using your usual SQL client.
+The initial PostgreSQL role administers its isolated cluster; the MySQL user has privileges on `app`. You can create narrower roles for application workloads using your usual SQL client. Valkey stores an RDB snapshot and writes it again on a clean shutdown. If you set a memory limit, Valkey’s `maxmemory` is 75% of that limit and it refuses writes instead of evicting keys.
+
+### Limit an instance’s disk usage
+
+Set **Data volume (GiB)** when creating or restoring an instance. For example, `20` (API: `"diskGiB": 20`) gives that database a fixed-size ext4 filesystem. Docker has no portable volume-size setting, so OpenRDS stores a sparse disk image in the `openrds_disk_images` volume, attaches it with a loop device, and mounts it through the normal local volume driver. Writes past the filesystem fail. Usable space is slightly less than the requested size because ext4 keeps its own metadata. The image is a ceiling, not reserved free space. Docker logs, image layers and OpenRDS backups are outside the cap. **Inspect → Measure volume usage** estimates allocated data-file space on demand.
+
+This needs rootful Docker on Linux, because attaching the image uses a short-lived privileged helper (`openrds-disk-helper`). The database container itself stays unprivileged. Each capped database uses one loop device until it is deleted. After a daemon reboot, OpenRDS reattaches those devices when it starts; a database container that restarts first will retry until the device is back. Rootless Docker and daemons that cannot create loop devices show **Not enforceable here** and reject a capped request before creating an instance. Leave the field blank (API: `diskGiB: 0`) for a regular volume.
+
+Stop a capped database and choose **Apply size** to increase or decrease its limit. Growing extends the ext4 filesystem. Shrinking is refused when the data does not fit, and the previous size is kept. The database stays stopped until you start it again. A limit cannot be added to or removed from an existing volume in place: restore a backup into a new instance for that change. Restores inherit the source cap unless you override it; backups from before this feature default to uncapped.
 
 ## Operate and recover
 
@@ -42,9 +50,9 @@ The initial PostgreSQL role administers its isolated cluster; the MySQL user has
 | **Backups** | Create a logical backup from an instance’s Overview tab. Download it, restore it to a **new** name and port, or remove the backup file. |
 | **Activity** | Review the last 200 operation events, including starts, completions, and failures. |
 
-Backups cover the **`app` database**: PostgreSQL uses a custom-format `pg_dump`; MySQL uses `mysqldump` with routines, events and triggers. These are logical backups, not whole-server snapshots: additional databases, cluster roles, replication state, and point-in-time recovery are outside their scope. MySQL’s consistent snapshot applies to transactional tables; avoid schema changes during a dump. A restore uses fresh connection credentials and leaves the source and backup intact. If an import fails, the target is marked **Restore incomplete**.
+Backups cover one database: PostgreSQL uses a custom-format `pg_dump` of `app`; MySQL uses `mysqldump` of `app` with routines, events and triggers; Valkey writes an RDB snapshot. These are logical backups, not whole-server snapshots: additional databases, cluster roles, replication state, and point-in-time recovery are outside their scope. MySQL’s consistent snapshot applies to transactional tables; avoid schema changes during a dump. A restore uses fresh connection credentials and leaves the source and backup intact. Valkey is stopped while the snapshot replaces its data files, then started so it loads that snapshot. If an import fails, the target is marked **Restore incomplete**.
 
-Backups are initially stored **on the same VPS**. Download a copy to independent storage to recover from losing the host. Downloaded `.dump` and `.sql` files can also be restored with standard `pg_restore` and `mysql` tools.
+Backups are initially stored **on the same VPS**. Download a copy to independent storage to recover from losing the host. Downloaded `.dump`, `.sql`, and `.rdb` files can also be restored with standard `pg_restore`, `mysql`, and Valkey or Redis tools.
 
 ### Where state lives
 
@@ -69,12 +77,13 @@ curl -fsS -H "Authorization: Bearer $TOKEN" \
 | Method | Path (under `/api`) |
 | --- | --- |
 | GET / POST | `/instances` |
-| GET | `/host` — Docker host name, CPU count, memory capacity and engine version |
-| GET | `/instances/{name}/connection`, `/instances/{name}/metrics`, `/instances/{name}/logs` |
+| GET | `/host` — Docker host name, CPU count, memory capacity, engine version and `volumeQuota.state` (`supported`, `unsupported` or `unknown`) |
+| GET | `/instances/{name}/connection`, `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/backups` |
+| POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
 | DELETE | `/instances/{name}` |
 | GET | `/backups`, `/backups/{id}/download`, `/activity` |
-| POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine is inherited |
+| POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine and data-volume limit are inherited. Set `diskGiB` to override the limit. |
 | DELETE | `/backups/{id}` |
 
 Operations are synchronous; the first provision may take several minutes to pull the image. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
@@ -91,6 +100,6 @@ go run .
 
 Native development also needs the Docker CLI, daemon and Compose plugin for database operations. Local state defaults to `.openrds/` and the listener to `127.0.0.1:8080`; override with `OPENRDS_DATA_DIR` and `OPENRDS_LISTEN`.
 
-CI installs the packaged dashboard on Linux, exercises both engines against real Docker with `python3 scripts/smoke.py`, and runs a desktop/mobile Chrome workflow with `scripts/ui-smoke.cjs`. The SQL check writes a row, restarts the instance, deletes the source, and reads the same row from a restored backup.
+CI installs the packaged dashboard on Linux, exercises PostgreSQL, MySQL, and Valkey against real Docker with `python3 scripts/smoke.py`, and runs a desktop/mobile Chrome workflow with `scripts/ui-smoke.cjs`. The check writes a value, restarts the instance, deletes the source, and reads the same value from a restored backup.
 
 [MIT license](LICENSE)

@@ -6,3 +6,4 @@
 !engines/
 !engines/**
 !LICENSE
+!disk-helper.sh

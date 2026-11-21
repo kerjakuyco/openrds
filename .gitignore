@@ -159,4 +159,6 @@ vite.config.ts.timestamp-*
 .openrds/
 /openrds
 /openrds.exe
+__pycache__/
+*.pyc
 .nx/migrate-runs

@@ -34,6 +34,7 @@ type instanceSpec struct {
 	Port      int     `json:"port"`
 	CPUs      float64 `json:"cpus"`
 	MemoryMiB int     `json:"memoryMiB"`
+	DiskGiB   int     `json:"diskGiB"`
 }
 
 // Never serialize record in API responses: it contains database credentials.
@@ -53,6 +54,7 @@ type manager struct {
 	mu         sync.Mutex
 	busy       map[string]bool
 	activityMu sync.Mutex
+	quotaCache quotaCache
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
@@ -151,7 +153,7 @@ func (m *manager) begin(name string, create *instanceSpec, restoring bool) (reco
 	}
 	if create != nil {
 		if _, ok := engines[create.Engine]; !ok {
-			return r, nil, fail(400, "Choose postgres or mysql.")
+			return r, nil, fail(400, "Choose postgres, mysql, or valkey.")
 		}
 		if create.Port < 1024 || create.Port > 65535 {
 			return r, nil, fail(400, "Choose a host port between 1024 and 65535.")

@@ -8,33 +8,52 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 type engine struct {
-	title   string
-	scheme  string
-	port    int
-	suffix  string
-	dump    []string
-	restore []string
+	title          string
+	scheme         string
+	port           int
+	dataDir        string
+	user           string
+	database       string
+	suffix         string
+	restoreStopped bool
+	dump           []string
+	restore        []string
 }
 
 // Only these templates and commands can be run by the control plane.
 // Compose exec -T keeps database dumps binary-safe in both directions.
 var engines = map[string]engine{
 	"postgres": {
-		title: "PostgreSQL 17", scheme: "postgresql", port: 5432, suffix: ".dump",
+		title: "PostgreSQL 17", scheme: "postgresql", port: 5432, dataDir: "/var/lib/postgresql/data", user: "openrds", database: "app", suffix: ".dump",
 		dump:    []string{"pg_dump", "-U", "openrds", "-d", "app", "--format=custom"},
 		restore: []string{"pg_restore", "-U", "openrds", "-d", "app", "--single-transaction", "--no-owner", "--no-privileges"},
 	},
 	"mysql": {
-		title: "MySQL 8.4", scheme: "mysql", port: 3306, suffix: ".sql",
+		title: "MySQL 8.4", scheme: "mysql", port: 3306, dataDir: "/var/lib/mysql", user: "openrds", database: "app", suffix: ".sql",
 		// Keep the password out of argv. Root is used locally inside the
 		// container so routine, event and trigger definitions are included.
 		dump:    []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump -u root --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --routines --events --triggers --hex-blob app`},
 		restore: []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --binary-mode -u root app`},
+	},
+	"valkey": {
+		title: "Valkey 9.1", scheme: "redis", port: 6379, dataDir: "/data", user: "default", database: "0", suffix: ".rdb",
+		restoreStopped: true,
+		// Progress from valkey-cli stays out of the backup stream.
+		dump: []string{"sh", "-ec", `REDISCLI_AUTH="$VALKEY_PASSWORD" valkey-cli --rdb /tmp/openrds.rdb >/dev/null && exec cat /tmp/openrds.rdb`},
+		// A running Valkey loads AOF ahead of RDB. Install the snapshot only
+		// while the server is stopped, then start it so the snapshot is loaded.
+		restore: []string{"sh", "-ec", `set -eu
+cat > /data/dump.rdb.new
+magic=$(head -c 5 /data/dump.rdb.new)
+[ "$magic" = REDIS ]
+mv /data/dump.rdb.new /data/dump.rdb
+rm -rf /data/appendonlydir /data/appendonly.aof`},
 	},
 }
 
@@ -69,7 +88,7 @@ func (dockerCLI) run(ctx context.Context, env []string, in io.Reader, out io.Wri
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, &diagnostics
 	// Database engines commonly write their normal server logs to stderr.
 	// Using the same comparable writer lets os/exec serialize both streams.
-	if len(args) > 5 && args[0] == "compose" && args[5] == "logs" {
+	if len(args) > 0 && args[0] == "compose" && slices.Contains(args, "logs") {
 		cmd.Stderr = out
 	}
 	if err := cmd.Run(); err != nil {
@@ -91,6 +110,13 @@ func (dockerCLI) run(ctx context.Context, env []string, in io.Reader, out io.Wri
 	return nil
 }
 
+func valkeyMaxMemory(memoryMiB int) string {
+	if memoryMiB <= 0 {
+		return "0"
+	}
+	return strconv.FormatInt(int64(memoryMiB)*1024*1024*3/4, 10)
+}
+
 func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Writer, args ...string) error {
 	if _, ok := engines[r.Engine]; !ok {
 		return fmt.Errorf("unknown stored engine %q", r.Engine)
@@ -103,6 +129,11 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		"OPENRDS_DB_MEMORY=" + strconv.FormatInt(int64(r.MemoryMiB)*1024*1024, 10),
 		"OPENRDS_DB_PASSWORD=" + r.Password,
 		"OPENRDS_ROOT_PASSWORD=" + r.RootPassword,
+		"OPENRDS_VALKEY_MAXMEMORY=" + valkeyMaxMemory(r.MemoryMiB),
+	}
+	if r.DiskGiB > 0 {
+		base = append(base, "--file", filepath.Join(m.templates, "volume-quota.yaml"))
+		env = append(env, "OPENRDS_DISK_LINK="+r.Project)
 	}
 	return m.docker.run(ctx, env, in, out, append(base, args...)...)
 }

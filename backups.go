@@ -15,6 +15,7 @@ type backup struct {
 	Engine  string    `json:"engine"`
 	Created time.Time `json:"createdAt"`
 	Bytes   int64     `json:"bytes"`
+	DiskGiB int       `json:"diskGiB,omitempty"`
 }
 
 func (m *manager) backupDir() string { return filepath.Join(m.dir, "backups") }
@@ -105,7 +106,7 @@ func (m *manager) makeBackup(ctx context.Context, name string) (b backup, err er
 	if info.Size() == 0 {
 		return b, fail(502, "The database returned an empty backup.")
 	}
-	b = backup{randomHex(16), name, r.Engine, time.Now().UTC(), info.Size()}
+	b = backup{ID: randomHex(16), Name: name, Engine: r.Engine, Created: time.Now().UTC(), Bytes: info.Size(), DiskGiB: r.DiskGiB}
 	if err := writeJSON(filepath.Join(stage, "meta.json"), b); err != nil {
 		return b, err
 	}

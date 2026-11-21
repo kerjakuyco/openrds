@@ -47,7 +47,12 @@ function bytes(n) {
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return `${Number(n.toFixed(i ? 1 : 0))} ${units[i]}`;
 }
-const engineLabel = (key) => key === "postgres" ? "PostgreSQL 17" : "MySQL 8.4";
+const engineInfo = {
+  postgres: { label: "PostgreSQL 17", port: 15432, tone: "blue" },
+  mysql: { label: "MySQL 8.4", port: 13306, tone: "amber" },
+  valkey: { label: "Valkey 9.1", port: 16379, tone: "purple" },
+};
+const engineLabel = (key) => engineInfo[key]?.label || key;
 const pretty = (v) => v.charAt(0).toUpperCase() + v.slice(1);
 const attention = (d) => !d.busy && (d.pendingRestore || !["running", "stopped", "starting"].includes(d.status));
 const running = (d) => d.status === "running" && !d.pendingRestore;
@@ -126,6 +131,7 @@ async function sync() {
   $("link-state").textContent = missing.length ? "Degraded" : "Host connected";
   $("link-state").title = `Last checked ${new Date().toLocaleTimeString()}`;
   if (changed) render();
+  if ($("editor").open && !saving) updateDiskField();
   if ($("detail").open && data.instances) {
     const current = data.instances.find(d => d.name === selected);
     if (!current) $("detail").close();
@@ -172,8 +178,13 @@ function render() {
   if (page === "overview") {
     const list = data.instances, bk = data.backups;
     const host = data.host;
-    const hostLine = (label, value) => make("div", "host-line", make("span", "muted", label), make("strong", "", value));
-    $("host-info").replaceChildren(...(host ? [hostLine("Node", host.name), hostLine("CPU", `${host.cpus} cores`), hostLine("Memory", bytes(host.memoryBytes)), hostLine("Docker Engine", host.dockerVersion)] : [make("p", "muted", "Waiting for Docker host information…")]));
+    const hostLine = (label, value, title = "") => {
+      const strong = make("strong", "", value); if (title) strong.title = title;
+      return make("div", "host-line", make("span", "muted", label), strong);
+    };
+    const quota = host?.volumeQuota;
+    const quotaValue = quota?.state === "supported" ? "Available" : quota?.state === "unsupported" ? "Unavailable" : "Unknown";
+    $("host-info").replaceChildren(...(host ? [hostLine("Node", host.name), hostLine("CPU", `${host.cpus} cores`), hostLine("Memory", bytes(host.memoryBytes)), hostLine("Docker Engine", host.dockerVersion), hostLine("Volume quotas", quotaValue, quota?.message || "")] : [make("p", "muted", "Waiting for Docker host information…")]));
     $("stats").replaceChildren(
       stat("Databases", list?.length ?? "—", "Provisioned instances", "db", "blue", () => openFilter("")),
       stat("Running", list?.filter(running).length ?? "—", "Online instances", "pulse", "mint", () => openFilter("running")),
@@ -206,7 +217,7 @@ function renderFleet() {
   }
   target.replaceChildren(table(["Instance", "Status", "Host port", "Details"], list.map(d => {
     const name = button("", () => showDetail(d.name), "db-name");
-    name.append(glyph("db", d.engine === "postgres" ? "blue" : "amber"), make("span", "", make("strong", "", d.name), make("small", "", d.engineLabel)));
+    name.append(glyph("db", engineInfo[d.engine]?.tone || "mint"), make("span", "", make("strong", "", d.name), make("small", "", d.engineLabel)));
     const open = button("Inspect", () => showDetail(d.name), "text-btn"); open.setAttribute("aria-label", `Inspect ${d.name}`);
     return [name, statusChip(d), make("code", "", String(d.port)), open];
   })));
@@ -237,7 +248,7 @@ function renderActivity() {
 $("result-filter").oninput = renderActivity;
 
 function suggestedPort(engine) {
-  let port = engine === "postgres" ? 15432 : 13306;
+  let port = engineInfo[engine]?.port || 15432;
   while (data.instances?.some(d => d.port === port)) port++;
   return port;
 }
@@ -246,16 +257,28 @@ function engineChanged() {
   $("db-port").value = suggestedPort(eng); $("db-memory").min = eng === "mysql" ? 512 : 128;
 }
 $("db-engine").onchange = engineChanged;
+function updateDiskField() {
+  const quota = data.host?.volumeQuota, chipNode = $("disk-chip");
+  const state = quota?.state || "unknown";
+  const available = state === "supported";
+  chipNode.className = `chip ${available ? "good" : state === "unsupported" ? "warn" : "quiet"}`;
+  chipNode.textContent = available ? "Enforceable" : state === "unsupported" ? "Not enforceable here" : "Checking host";
+  $("disk-hint").textContent = available
+    ? "Fixed-size ext4 volume for this database. Usable space is slightly less than the number you enter. Backups are stored separately."
+    : (quota?.message || "Checking whether this host can enforce a data-volume limit.") + " You can still enter a size; leave it blank for an uncapped volume.";
+}
+$("db-disk").oninput = updateDiskField;
 function openEditor(backup = null) {
   if (!saving) {
     restoreFrom = backup; $("editor-form").reset(); note("editor-note");
-    $("editor-form").querySelector("details").open = false;
+    $("editor-form").querySelector("details").open = Boolean(backup?.diskGiB);
     $("editor-kicker").textContent = backup ? "Recovery" : "Provisioning";
     $("editor-title").textContent = backup ? "Restore into a new database" : "New database";
     $("editor-description").textContent = backup ? `Restore the ${when(backup.createdAt)} backup of ${backup.name}. The source database stays available.` : "Provision a private database with its own persistent volume and credentials.";
     $("editor-submit").textContent = backup ? "Restore database" : "Create database";
     $("db-name").value = backup ? `${backup.name.slice(0, 32)}-restore` : "";
     $("db-engine").value = backup?.engine || "postgres"; $("db-engine").disabled = Boolean(backup);
+    $("db-disk").value = backup?.diskGiB || ""; updateDiskField();
     engineChanged();
   }
   $("editor").showModal(); if (!saving) $("db-name").focus();
@@ -263,7 +286,7 @@ function openEditor(backup = null) {
 $("new-db").onclick = () => openEditor();
 $("editor-form").onsubmit = async (e) => {
   e.preventDefault(); if (saving) return;
-  const b = restoreFrom, spec = { name: $("db-name").value.trim(), engine: $("db-engine").value, port: Number($("db-port").value), cpus: Number($("db-cpus").value), memoryMiB: Number($("db-memory").value) };
+  const b = restoreFrom, spec = { name: $("db-name").value.trim(), engine: $("db-engine").value, port: Number($("db-port").value), cpus: Number($("db-cpus").value), memoryMiB: Number($("db-memory").value), diskGiB: Number($("db-disk").value) };
   const fields = $("editor-form").querySelectorAll("input,select,button[type=submit]");
   saving = true; fields.forEach(f => { f.disabled = true; });
   const progress = `${b ? "Restoring" : "Provisioning"} ${spec.name}… The first image pull may take a few minutes. You can close this dialog while it runs.`;
@@ -274,7 +297,7 @@ $("editor-form").onsubmit = async (e) => {
     inspect = $("editor").open; $("editor").close(); note("notice", `${spec.name} is ready.`);
   } catch (err) { note("editor-note", err.message, true); note("notice", err.message, true); }
   finally {
-    saving = false; fields.forEach(f => { f.disabled = false; }); $("db-engine").disabled = Boolean(b);
+    saving = false; fields.forEach(f => { f.disabled = false; }); $("db-engine").disabled = Boolean(b); updateDiskField();
     await sync();
   }
   if (inspect && signedIn && data.instances?.some(d => d.name === spec.name)) showDetail(spec.name);
@@ -314,7 +337,8 @@ function renderDetail() {
       finally { b.disabled = false; }
     });
     secret.append(reveal);
-    body.replaceChildren(make("div", "facts", fact("Host on VPS", "127.0.0.1"), fact("Port", String(d.port)), fact("Database", "app"), fact("User", "openrds")),
+    body.replaceChildren(make("div", "facts", fact("Host on VPS", "127.0.0.1"), fact("Port", String(d.port)), fact("Database", d.database), fact("User", d.user)),
+      ...(d.engine === "valkey" ? [make("p", "muted", "Use any Redis client. This URI speaks the Redis protocol.")] : []),
       block("Connection URI", secret), block("Connect from your computer",
         make("p", "muted", "Replace user@your-vps with your SSH login. Keep the tunnel open, then use the connection URI locally."),
         make("pre", "", `ssh -N -L ${d.port}:127.0.0.1:${d.port} user@your-vps`)));
@@ -334,15 +358,48 @@ function renderDetail() {
     const active = ["running", "starting", "unhealthy", "restarting"].includes(d.status);
     const toggle = button(active ? "Stop database" : "Start database", b => runAction(b, d, active ? "stop" : "start", active ? "Stopping" : "Starting"));
     const backup = button("Create backup", b => runAction(b, d, "backups", "Backing up"), "primary");
+    const measured = make("span", "muted");
+    const measure = button("Measure volume usage", async b => {
+      b.disabled = true; measured.textContent = "Measuring allocated files…";
+      try {
+        const { usedBytes } = await api(`instances/${d.name}/storage`);
+        measured.textContent = `${bytes(usedBytes)} used${d.diskGiB ? ` of ${d.diskGiB} GiB` : " · uncapped"}`;
+      } catch (err) { measured.textContent = err.message; }
+      finally { b.disabled = false; }
+    }, "text-btn");
+    measured.setAttribute("role", "status"); measure.disabled = !active || d.busy;
     toggle.disabled = d.busy; backup.disabled = d.busy || !running(d);
     body.replaceChildren(statusChip(d));
     if (d.pendingRestore && !d.busy) body.append(make("p", "notice error", "Restore incomplete. Inspect the logs and restore the backup into a fresh instance before using this data."));
     body.append(block("Instance configuration", make("div", "facts", fact("Private endpoint", `127.0.0.1:${d.port}`), fact("Created", when(d.createdAt)),
-      fact("CPU limit", d.cpus ? `${d.cpus} cores` : "Uncapped"), fact("Memory limit", d.memoryMiB ? `${d.memoryMiB} MiB` : "Uncapped"))),
+      fact("CPU limit", d.cpus ? `${d.cpus} cores` : "Uncapped"), fact("Memory limit", d.memoryMiB ? `${d.memoryMiB} MiB` : "Uncapped"),
+      fact("Data volume limit", d.diskGiB ? `${d.diskGiB} GiB` : "Uncapped")), diskResize(d), make("div", "row", measure, measured)),
       block("Live resource usage", metrics), block("Operations", make("div", "row", backup, toggle)),
       make("div", "bottom-action", button("Delete database…", () => confirmDelete(`Delete ${d.name}?`, "This removes the database container and its data volume. Saved backups remain in the backup library.", () => api(`instances/${d.name}`, { method: "DELETE" })), "text-btn destructive")));
     sampleMetrics(d.name, id);
   }
+}
+function diskResize(d) {
+  if (!d.diskGiB) return make("p", "muted", "This database has no disk limit. Restore a backup into a new instance to add one.");
+  const input = document.createElement("input");
+  input.type = "number"; input.min = "1"; input.max = "65536"; input.step = "1"; input.value = String(d.diskGiB);
+  input.className = "resize-size"; input.setAttribute("aria-label", `New data volume size for ${d.name} in GiB`);
+  const stopped = ["stopped", "not provisioned"].includes(d.status) && !d.busy;
+  const apply = button("Apply size", async b => {
+    const next = Number(input.value);
+    if (!Number.isInteger(next) || next < 1) { note("detail-note", "Enter a whole number of GiB.", true); return; }
+    b.disabled = true; note("detail-note", `Changing ${d.name} to ${next} GiB…`);
+    try {
+      await api(`instances/${d.name}/disk`, { method: "POST", body: { diskGiB: next } });
+      note("detail-note", `${d.name} now has a ${next} GiB data volume.`);
+      note("notice", `${d.name} now has a ${next} GiB data volume.`);
+    } catch (err) { note("detail-note", err.message, true); note("notice", err.message, true); }
+    finally { b.disabled = false; await sync(); }
+  });
+  apply.disabled = !stopped;
+  return make("div", "resize", make("div", "row", input, apply), make("p", "muted", stopped
+    ? "Increase or decrease the limit. A smaller size is refused if the data does not fit."
+    : "Stop the database before changing this limit."));
 }
 async function sampleMetrics(name, id) {
   const target = $("metrics");

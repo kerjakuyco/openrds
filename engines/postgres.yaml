@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:17-alpine
+    command: ["postgres"]
     restart: unless-stopped
     cpus: ${OPENRDS_DB_CPUS:-0}
     mem_limit: ${OPENRDS_DB_MEMORY:-0}
