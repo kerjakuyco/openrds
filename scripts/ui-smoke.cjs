@@ -51,11 +51,17 @@ async function run() {
       await page.getByRole("button", { name: "Create my account" }).click();
     }
     await page.locator(".dash-hero h1").waitFor();
-    await page.getByText("Get started with OpenRDS").waitFor();
+    // A new server offers its engines; with databases, the next step instead.
+    const firstRun = page.getByRole("heading", { name: "Create your first database" });
+    await firstRun.or(page.getByLabel("Next step")).first().waitFor();
 
-    // Create through the sectioned form.
-    await page.locator('nav#nav [data-nav="databases"]').click();
-    await page.locator("#new-db").click();
+    // Create through the sectioned form, starting from the dashboard's engine picker when it is there.
+    if (await firstRun.isVisible()) {
+      await page.getByRole("button", { name: /^PostgreSQL 17/ }).click();
+    } else {
+      await page.locator('nav#nav [data-nav="databases"]').click();
+      await page.locator("#new-db").click();
+    }
     await page.getByRole("heading", { name: "Create database", level: 1 }).waitFor();
     await page.getByLabel("DB instance identifier").fill(name);
     await page.getByText("Dev and test", { exact: true }).click();
@@ -77,13 +83,15 @@ async function run() {
     await page.locator("h1 .status").filter({ hasText: "Running" }).waitFor({ timeout: 360000 });
     await page.getByText("0.5 vCPU · 256 MiB").first().waitFor();
 
-    // Connection guide: reveal the password, then switch to an app in a container on the VPS.
-    await page.getByRole("button", { name: "Reveal password" }).click();
-    const envLine = await page.locator("pre").filter({ hasText: /DATABASE_URL=postgresql:\/\/openrds:[a-f0-9]{48}@/ }).innerText();
-    assert.ok(/^DATABASE_URL=postgresql:\/\/openrds:[a-f0-9]{48}@127\.0\.0\.1:\d+\/app$/.test(envLine), `Expected a loopback URI with the password, got ${envLine}`);
-    await page.getByRole("button", { name: "In a Docker container here" }).click();
-    await page.locator("pre").filter({ hasText: `@openrds-${name}:5432/app` }).waitFor();
-    await page.locator("pre").filter({ hasText: "docker network connect" }).waitFor();
+    // Connection guide: one string to copy; show the password, then open the code examples.
+    const conn = page.locator(".conn-string pre");
+    await conn.filter({ hasText: "openrds:••••••••@" }).waitFor();
+    await page.getByRole("button", { name: "Show password" }).click();
+    const uri = await conn.filter({ hasText: /openrds:[a-f0-9]{48}@/ }).innerText();
+    assert.ok(/^postgresql:\/\/openrds:[a-f0-9]{48}@127\.0\.0\.1:\d+\/app$/.test(uri), `Expected a loopback URI with the password, got ${uri}`);
+    await page.getByText("Code examples and options").click();
+    await page.getByLabel("Language or tool").selectOption("node");
+    await page.locator("pre").filter({ hasText: "new pg.Pool" }).waitFor();
 
     // Database users: create a read-only user and see its password once,
     // change the owner password, then delete the user.
@@ -111,9 +119,9 @@ async function run() {
 
     // Network access: open a public port for one address, then close it.
     await page.getByRole("tab", { name: "Connectivity & security" }).click();
-    const network = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Network access" }) });
-    await network.getByText("Private.", { exact: false }).waitFor();
-    await network.getByRole("button", { name: "Edit" }).click();
+    const network = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Connectivity & security" }) });
+    await network.getByText("Off", { exact: true }).waitFor();
+    await network.getByRole("button", { name: "Edit network" }).click();
     dialog = page.getByRole("dialog");
     await dialog.getByRole("switch", { name: /Public access/ }).check();
     const publicPort = await freePort();
@@ -121,13 +129,15 @@ async function run() {
     await dialog.getByRole("button", { name: "Add source" }).click();
     await dialog.getByPlaceholder("203.0.113.7 or 203.0.113.0/24").fill("203.0.113.7");
     await dialog.getByRole("button", { name: "Save network access" }).click();
-    await network.getByText(`Public on port ${publicPort}.`).waitFor({ timeout: 60000 });
-    await network.getByRole("cell", { name: "203.0.113.7/32" }).waitFor();
+    await network.getByText(`On · port ${publicPort}`).waitFor({ timeout: 60000 });
+    await page.locator(".conn-string pre").filter({ hasText: `:${publicPort}/app` }).waitFor(); // the internet string appears
+    const firewall = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: /^Firewall rules/ }) });
+    await firewall.getByRole("cell", { name: "203.0.113.7/32" }).waitFor();
     await page.getByText("TLS is not required", { exact: false }).waitFor();
-    await network.getByRole("button", { name: "Edit" }).click();
+    await network.getByRole("button", { name: "Edit network" }).click();
     await page.getByRole("dialog").getByRole("switch", { name: /Public access/ }).uncheck();
     await page.getByRole("dialog").getByRole("button", { name: "Save network access" }).click();
-    await network.getByText("Private.", { exact: false }).waitFor({ timeout: 60000 });
+    await network.getByText("Off", { exact: true }).waitFor({ timeout: 60000 });
     assert.ok(await page.getByRole("link", { name: "CA certificate" }).getAttribute("href") === "/api/tls/ca.pem");
 
     // Monitoring renders four charts and their table view.
@@ -144,8 +154,14 @@ async function run() {
     const row = page.locator("tr").filter({ hasText: "max_connections" });
     await row.getByText("120", { exact: true }).waitFor();
     await row.getByText("Applied").waitFor();
-    await page.getByRole("button", { name: "Measure volume usage" }).click();
+    await page.getByRole("button", { name: "Measure usage" }).click();
     await page.getByRole("status").filter({ hasText: quotas ? "used of 2 GiB" : "used · uncapped" }).waitFor();
+    // Settings change in place, one at a time.
+    const backupsRow = page.locator(".set-row").filter({ hasText: "Automated backups" });
+    await backupsRow.getByRole("button", { name: "Change" }).click();
+    await page.getByRole("dialog").getByLabel("Keep daily backups for").selectOption("3");
+    await page.getByRole("dialog").getByRole("button", { name: "Save backups" }).click();
+    await backupsRow.getByText("3 days", { exact: false }).waitFor({ timeout: 30000 });
 
     // Snapshot from the maintenance tab
     await page.getByRole("tab", { name: "Maintenance & backups" }).click();
@@ -178,6 +194,14 @@ async function run() {
     await page.locator("#search").fill("env=ci");
     await page.getByRole("link", { name: `Open ${name}` }).waitFor();
     assert.equal(await page.locator("#fleet-list tbody tr").count(), 1);
+
+    // Automated backups: one row per database, changed in place.
+    await page.locator('nav#nav [data-nav="automated"]').click();
+    const schedule = page.locator(".sched-row").filter({ hasText: name });
+    await schedule.getByText("Kept 3 days", { exact: false }).waitFor();
+    await schedule.getByRole("button", { name: "Change" }).click();
+    await page.getByRole("dialog").getByRole("heading", { name: "Automated backups" }).waitFor();
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
 
     // Restore form is prefilled from the snapshot.
     await page.locator('nav#nav [data-nav="snapshots"]').click();

@@ -1,9 +1,11 @@
 // Snapshots and automated backups: the recovery library.
-import { h, icon, api, modal, dataTable, empty, panel, bytes, when, ago, plural, windowLabel, toast, keyValues } from "./lib.mjs";
+import { h, icon, api, modal, dataTable, empty, panel, bytes, when, ago, plural, windowLabel, toast, btn, menu, isLive } from "./lib.mjs";
 import { state, subscribe, sync, instance, engine, can } from "./store.mjs";
 import { markDownloaded } from "./start.mjs";
+import { editBackups } from "./settings.mjs";
 
 const kindLabel = (b) => b.final ? "Final snapshot" : b.kind === "automated" ? "Automated" : "Manual";
+const BADGE = { postgres: "PG", mysql: "My", valkey: "Vk" };
 
 function confirmDeleteBackup(b) {
   modal({
@@ -20,26 +22,73 @@ function confirmDeleteBackup(b) {
 async function keep(b) {
   try {
     await api(`backups/${b.id}/keep`, { method: "POST" });
-    toast(`Kept as a snapshot. It won’t expire.`, "success");
+    toast("Kept as a snapshot. It won’t expire.", "success");
   } catch (err) { toast(err.message, "error", { title: "Could not keep the backup" }); }
   await sync();
 }
 
-export function backupTable(list, { showInstance = true, sort = { key: "created", dir: "desc" }, onSort } = {}) {
+function download(b) {
+  markDownloaded();
+  location.href = `/api/backups/${b.id}/download`; // an attachment, so the page stays
+}
+
+// Restore is the main action; the rest sit in a small menu.
+function backupActions(b) {
+  return h("div", { class: "cell-actions" },
+    h("a", { class: "text-btn", href: `#/snapshots/${b.id}/restore`, "aria-label": `Restore the ${when(b.createdAt)} backup of ${b.name}` }, icon("restore"), "Restore"),
+    menu("", [
+      { label: "Download", icon: "download", run: () => download(b) },
+      b.kind === "automated" ? { label: "Keep as snapshot", icon: "shield", run: () => keep(b) } : null,
+      "-",
+      { label: "Delete", icon: "trash", danger: true, run: () => confirmDeleteBackup(b) },
+    ].filter(Boolean), { cls: "small ghost icon-only", labelIcon: "more", chevron: false, ariaLabel: `More actions for the ${when(b.createdAt)} backup of ${b.name}` }));
+}
+
+export function backupTable(list, { showInstance = true, showType = true, sort = { key: "created", dir: "desc" }, onSort } = {}) {
   const columns = [
-    { key: "created", label: "Created", sort: b => Date.parse(b.createdAt), value: b => h("div", { class: "stack" }, h("strong", null, when(b.createdAt)), h("small", null, ago(b.createdAt))) },
-    showInstance && { key: "name", label: "DB instance", sort: b => b.name, value: b => h("div", { class: "stack" },
+    { key: "created", label: "Backup", sort: b => Date.parse(b.createdAt), value: b => h("div", { class: "stack" }, h("strong", null, when(b.createdAt)), h("small", null, ago(b.createdAt))) },
+    showInstance && { key: "name", label: "Database", sort: b => b.name, value: b => h("div", { class: "stack" },
       instance(b.name) ? h("a", { href: `#/databases/${b.name}` }, b.name) : h("span", null, b.name, h("small", null, " (deleted)")), h("small", null, engine(b.engine)?.title || b.engine)) },
-    { key: "kind", label: "Type", sort: kindLabel, value: b => h("span", { class: `chip ${b.final ? "info" : b.kind === "automated" ? "neutral" : "good"}` }, kindLabel(b)) },
+    showType && { key: "kind", label: "Type", sort: kindLabel, value: b => h("span", { class: `chip ${b.final ? "info" : b.kind === "automated" ? "neutral" : "good"}` }, kindLabel(b)) },
     { key: "size", label: "Size", sort: b => b.bytes, cls: "num", value: b => bytes(b.bytes) },
     { key: "expires", label: "Expires", sort: b => b.expiresAt ? Date.parse(b.expiresAt) : Infinity, value: b => b.expiresAt ? h("span", { title: when(b.expiresAt) }, ago(b.expiresAt)) : h("span", { class: "muted" }, "Never") },
-    can("operator") && { key: "actions", label: "Actions", value: b => h("div", { class: "cell-actions" },
-      h("a", { class: "text-btn", href: `#/snapshots/${b.id}/restore`, "aria-label": `Restore the ${when(b.createdAt)} backup of ${b.name}` }, icon("restore"), "Restore"),
-      h("a", { class: "text-btn", href: `/api/backups/${b.id}/download`, download: "", onclick: markDownloaded, "aria-label": `Download the ${when(b.createdAt)} backup of ${b.name}` }, icon("download"), "Download"),
-      b.kind === "automated" && h("button", { type: "button", class: "text-btn", onclick: () => keep(b), title: "Keep as a snapshot" }, icon("shield"), "Keep"),
-      h("button", { type: "button", class: "text-btn danger", onclick: () => confirmDeleteBackup(b), "aria-label": `Delete the ${when(b.createdAt)} backup of ${b.name}` }, icon("trash"), "Delete")) },
+    can("operator") && { key: "actions", label: h("span", { class: "sr-only" }, "Actions"), cls: "actions", value: backupActions },
   ].filter(Boolean);
   return dataTable({ columns, rows: list, sortKey: sort.key, sortDir: sort.dir, onSort, caption: "Backups" });
+}
+
+// One database's schedule: what runs, when it last ran and when it runs next.
+function scheduleRow(d, stored) {
+  const on = d.backupRetentionDays > 0;
+  const paused = on && !isLive(d);
+  const when2 = (label, value) => h("div", { class: "sched-when" }, h("small", null, label), h("span", null, value));
+  let action = null;
+  if (can("operator")) {
+    action = btn(on ? "Change" : "Turn on", () => editBackups(d, { suggest: 7 }), on ? "small" : "small primary");
+    action.disabled = d.busy || d.pendingRestore;
+  }
+  return h("div", { class: "sched-row" },
+    h("div", { class: "sched-db" },
+      h("span", { class: `engine-badge ${d.engine}`, "aria-hidden": "true" }, BADGE[d.engine]),
+      h("span", { class: "stack" }, h("a", { href: `#/databases/${d.name}/backups` }, h("strong", null, d.name)), h("small", null, d.engineLabel))),
+    h("div", { class: "sched-plan" }, on
+      ? [h("strong", null, `Daily, ${windowLabel(d.backupWindow)}`), h("small", null, `Kept ${plural(d.backupRetentionDays, "day")} · ${plural(stored, "backup")} stored`)]
+      : [h("span", { class: "status warn" }, icon("alert"), "Off"), h("small", null, "No automatic backups.")]),
+    when2("Last backup", d.latestBackupAt ? h("span", { title: when(d.latestBackupAt) }, ago(d.latestBackupAt)) : "None yet"),
+    when2("Next backup", !on ? "—" : paused ? h("span", { class: "muted" }, "Paused while stopped") : d.nextBackupAt ? h("span", { title: when(d.nextBackupAt) }, ago(d.nextBackupAt)) : "—"),
+    h("div", { class: "sched-action" }, action));
+}
+
+function schedules(dbs, backups) {
+  const on = dbs.filter(d => d.backupRetentionDays > 0).length;
+  const fill = h("span");
+  fill.style.width = `${dbs.length ? (on / dbs.length * 100).toFixed(1) : 0}%`;
+  const all = on === dbs.length;
+  return panel("Schedules", { description: "Times in UTC." },
+    h("div", { class: `coverage${all ? " full" : ""}` },
+      h("span", { class: "coverage-text" }, icon(all ? "ok" : "alert"), h("strong", null, `${on} of ${plural(dbs.length, "database")}`), on === 1 && dbs.length === 1 ? " backs up daily" : " back up daily"),
+      h("span", { class: "coverage-bar", "aria-hidden": "true" }, fill)),
+    h("div", { class: "sched-list" }, dbs.map(d => scheduleRow(d, backups.filter(b => b.kind === "automated" && b.name === d.name && Date.parse(b.createdAt) >= Date.parse(d.createdAt)).length))));
 }
 
 export function backupsView(kind) {
@@ -52,14 +101,12 @@ export function backupsView(kind) {
   const count = h("span", { class: "counter" });
   const totals = h("p", { class: "muted" });
   const main = h("section", { class: "panel" },
-    h("header", { class: "panel-head" }, h("div", null, h("h2", null, automated ? "Automated backups" : "Manual snapshots", count), totals),
+    h("header", { class: "panel-head" }, h("div", null, h("h2", null, automated ? "Backups" : "Snapshots", count), totals),
       h("div", { class: "panel-actions" }, filter)),
     listSlot);
   const el = h("div", null,
     h("div", { class: "page-head" }, h("div", null, h("h1", null, automated ? "Automated backups" : "Snapshots"),
-      h("p", { class: "muted" }, automated
-        ? "Daily backups, removed after their retention period."
-        : "Backups you take. They stay until you delete them.")),
+      h("p", { class: "muted" }, automated ? "Daily backups, kept for the days you choose." : "Backups you take. They stay until you delete them.")),
       h("div", { class: "page-actions" }, h("a", { class: "btn", href: automated ? "#/snapshots" : "#/automated-backups" }, icon(automated ? "camera" : "history"), automated ? "View snapshots" : "View automated backups"))),
     h("div", { class: "stack-gap" }, automated ? settingsSlot : null, main));
 
@@ -69,48 +116,24 @@ export function backupsView(kind) {
   }
 
   function render() {
-    const all = state.backups;
-    if (!all) { listSlot.replaceChildren(empty("archive", "Reading backups…", "")); return; }
+    const all = state.backups, dbs = state.instances || [];
+    if (automated) settingsSlot.replaceChildren(dbs.length ? schedules(dbs, all || []) : panel("Schedules", {}, empty("db", "No databases yet", "Create a database to back it up.")));
+    if (!all) { listSlot.replaceChildren(empty("archive", "Loading backups…", "")); return; }
     const mine = all.filter(b => automated ? b.kind === "automated" : b.kind !== "automated");
     const names = [...new Set(mine.map(b => b.name))].sort();
     if (ui.instance && !names.includes(ui.instance)) ui.instance = "";
+    filter.hidden = names.length < 2;
     filter.replaceChildren(h("option", { value: "" }, "All databases"), ...names.map(n => h("option", { value: n, selected: n === ui.instance }, n)));
     const list = mine.filter(b => !ui.instance || b.name === ui.instance);
     count.textContent = String(list.length);
-    totals.textContent = `${bytes(list.reduce((n, b) => n + b.bytes, 0))} on this server. Download copies to keep them safe.`;
-    listSlot.replaceChildren(list.length ? backupTable(list, { sort: ui.sort, onSort }) : empty(automated ? "history" : "camera",
-      automated ? "No automated backups yet" : "No snapshots yet",
-      automated ? "Turn them on under Modify." : "Use Actions → Take snapshot on a database."));
-    if (automated) renderSettings();
-  }
-
-  function renderSettings() {
-    const dbs = state.instances || [];
-    const rows = dbs.map(d => ({ d, count: (state.backups || []).filter(b => b.kind === "automated" && b.name === d.name && Date.parse(b.createdAt) >= Date.parse(d.createdAt)).length }));
-    settingsSlot.replaceChildren(panel("Backup schedule by database", { counter: dbs.length, description: "Times in UTC. Stopped databases are skipped." },
-      dbs.length ? dataTable({
-        caption: "Backup schedule", rows,
-        columns: [
-          { key: "name", label: "DB instance", value: r => h("a", { href: `#/databases/${r.d.name}/backups` }, r.d.name) },
-          { key: "retention", label: "Retention", value: r => r.d.backupRetentionDays ? plural(r.d.backupRetentionDays, "day") : h("span", { class: "chip warn" }, "Off") },
-          { key: "window", label: "Window", value: r => r.d.backupRetentionDays ? windowLabel(r.d.backupWindow) : "—" },
-          { key: "latest", label: "Latest backup", value: r => r.d.latestBackupAt ? h("span", { title: when(r.d.latestBackupAt) }, ago(r.d.latestBackupAt)) : "None" },
-          { key: "next", label: "Next automated", value: r => r.d.nextBackupAt ? h("span", { title: when(r.d.nextBackupAt) }, ago(r.d.nextBackupAt)) : "—" },
-          { key: "count", label: "Kept", cls: "num", value: r => String(r.count) },
-        ],
-      }) : empty("db", "No databases", "Create a database to schedule backups.")));
+    totals.textContent = list.length ? `${bytes(list.reduce((n, b) => n + b.bytes, 0))} on this server. Download copies to keep them safe.` : "";
+    const next = dbs.filter(d => d.nextBackupAt && isLive(d)).map(d => d.nextBackupAt).sort()[0];
+    listSlot.replaceChildren(list.length ? backupTable(list, { showType: !automated, sort: ui.sort, onSort }) : automated
+      ? empty("history", "No automated backups yet", next ? `The first one runs ${ago(next)}.` : "Turn on a schedule above.")
+      : empty("camera", "No snapshots yet", "Use Actions → Take snapshot on a database."));
   }
 
   render();
   const stop = subscribe((changed) => { if (changed.has("backups") || changed.has("instances")) render(); });
   return { el, title: automated ? "Automated backups" : "Snapshots", nav: automated ? "automated" : "snapshots", crumbs: [[automated ? "Automated backups" : "Snapshots"]], destroy: stop };
-}
-
-export function backupSummary(d) {
-  return keyValues([
-    ["Automated backups", d.backupRetentionDays ? `On · kept ${plural(d.backupRetentionDays, "day")}` : "Off"],
-    ["Backup window", d.backupRetentionDays ? windowLabel(d.backupWindow) : "—"],
-    ["Latest backup", d.latestBackupAt ? `${when(d.latestBackupAt)} (${ago(d.latestBackupAt)})` : "None yet"],
-    ["Next automated backup", d.nextBackupAt ? `${when(d.nextBackupAt)} (${ago(d.nextBackupAt)})` : "—"],
-  ]);
 }

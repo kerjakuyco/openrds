@@ -1,17 +1,10 @@
-// "Connect your application": pick where the app runs and its language, then
-// copy the tunnel or network step, the environment variable and the code.
-import { h, icon, btn, api, toast, codeBlock, alertBox, nextId } from "./lib.mjs";
+// "Connect your application": the connection string to copy, a second one
+// for the internet while public access is on, and code examples tucked away.
+import { h, icon, btn, api, toast, codeBlock, alertBox, nextId, copyText } from "./lib.mjs";
 
-const INTERNAL_PORT = { postgres: 5432, mysql: 3306, valkey: 6379 };
 const PLACEHOLDER = "<password>";
+const MASK = "••••••••";
 export const markConnected = () => { try { localStorage.setItem("openrds-connected", "1"); } catch { /* private mode */ } };
-
-const WHERE = [
-  ["vps", "On this VPS", "server"],
-  ["container", "In a Docker container here", "box"],
-  ["computer", "On my computer", "laptop"],
-  ["internet", "Over the internet", "globe"], // only while public access is on
-];
 
 // Which user the guide shows, per database, so other pages can preselect one.
 const chosenUser = new Map();
@@ -167,19 +160,19 @@ REDIS_PASSWORD=${p.password}` })],
   ],
 };
 
-// Whether snippets use TLS: always when it is required, and over the
+// Whether a string uses TLS: always when it is required, and over the
 // internet whenever the engine offers it next to plain text.
 const usesTLS = (d, where) => d.tlsReady && (d.requireTLS || (where === "internet" && d.engine !== "valkey"));
 
-function settings(d, eng, where, c, user) {
-  const container = where === "container", internet = where === "internet";
-  const host = container ? `openrds-${d.name}` : internet ? (d.publicHost || "YOUR_SERVER_ADDRESS") : "127.0.0.1";
-  const port = container ? INTERNAL_PORT[d.engine] : internet ? d.publicPort : d.port;
-  const password = c?.password || PLACEHOLDER;
+function settings(d, eng, where, user, password) {
+  const internet = where === "internet";
+  const host = internet ? (d.publicHost || "YOUR_SERVER_ADDRESS") : "127.0.0.1";
+  const port = internet ? d.publicPort : d.port;
   const tls = usesTLS(d, where);
   const scheme = { postgres: "postgresql", mysql: "mysql", valkey: tls ? "rediss" : "redis" }[d.engine];
   const query = tls && d.engine === "postgres" ? "?sslmode=verify-full&sslrootcert=openrds-ca.pem" : "";
-  return { host, port, user, password, db: eng.database, tls, uri: `${scheme}://${user}:${password}@${host}:${port}/${eng.database}${query}` };
+  const uriWith = (pw) => `${scheme}://${user}:${pw}@${host}:${port}/${eng.database}${query}`;
+  return { host, port, user, password, db: eng.database, tls, uri: uriWith(password), uriWith };
 }
 
 // Command-line clients need their own TLS flags.
@@ -190,90 +183,107 @@ function tlsCommand(d, p, code) {
   return code;
 }
 
-let remembered = { where: "vps", stack: {} };
+let remembered = { stack: {} };
 try { remembered = { ...remembered, ...JSON.parse(localStorage.getItem("openrds-connect") || "{}") }; } catch { /* private mode */ }
 const remember = () => { try { localStorage.setItem("openrds-connect", JSON.stringify(remembered)); } catch { /* private mode */ } };
 
 export function connectGuide(d, eng, { canReveal }) {
   const stacks = STACKS[d.engine];
-  const places = WHERE.filter(([key]) => key !== "internet" || d.publicAccess);
-  let where = places.some(([key]) => key === remembered.where) ? remembered.where : "vps";
-  let stack = remembered.stack[d.engine] || stacks[0][0], c = null;
+  const saved = remembered.stack[d.engine];
+  let stack = stacks.some(([key]) => key === saved) ? saved : (stacks[1] || stacks[0])[0];
   const users = [eng.user, ...(d.users || []).map(u => u.name)];
   let user = users.includes(chosenUser.get(d.name)) ? chosenUser.get(d.name) : eng.user;
-  const whereButtons = places.map(([key, label]) => h("button", { type: "button", "aria-pressed": String(key === where), onclick: () => { where = key; remembered.where = key; remember(); render(); } }, label));
-  const stackID = nextId("stack");
-  const stackSelect = h("select", { id: stackID }, stacks.map(([key, label]) => h("option", { value: key, selected: key === stack }, label)));
+  let c = null, shown = false;
+
+  async function load() {
+    c ||= await api(`instances/${d.name}/connection${user === eng.user ? "" : `?user=${encodeURIComponent(user)}`}`);
+    return c;
+  }
+  const visible = () => shown && c ? c.password : canReveal ? MASK : PLACEHOLDER;
+
+  // A connection string with its show and copy buttons. Copy fetches the
+  // password itself, so one click is enough.
+  const shows = [];
+  function stringRow(where, title) {
+    const pre = h("pre");
+    const show = h("button", { type: "button", class: "icon-btn ghost", "aria-pressed": "false", "aria-label": "Show password" }, icon("eye"));
+    show.addEventListener("click", async () => {
+      if (!shown) {
+        try { await load(); } catch (err) { toast(err.message, "error"); return; }
+      }
+      shown = !shown;
+      render();
+    });
+    shows.push(show);
+    const copy = btn([icon("copy"), "Copy"], async () => {
+      try {
+        if (canReveal) await load();
+        const ok = await copyText(settings(d, eng, where, user, "").uriWith(c?.password || PLACEHOLDER));
+        toast(ok ? (c ? "Copied, with the password." : "Copied.") : "Copy failed. Select and copy it.", ok ? "success" : "warn");
+        if (ok) markConnected();
+      } catch (err) { toast(err.message, "error"); }
+    }, "small");
+    const row = h("div", { class: "code-wrap" }, h("p", { class: "conn-label" }, title),
+      h("div", { class: "code conn-string" }, pre, h("div", { class: "conn-actions" }, canReveal ? show : null, copy)));
+    row.update = () => { pre.textContent = settings(d, eng, where, user, visible()).uri; };
+    return row;
+  }
+  const local = stringRow("vps", "Connection string");
+  const remote = d.publicAccess ? stringRow("internet", "From the internet") : null;
+  const notes = h("div", { class: "conn-after" });
+
+  // Code examples and another user, out of the way until wanted.
+  const stackID = nextId("stack"), userID = nextId("as");
+  const stackSelect = h("select", { id: stackID }, stacks.map(([key, title]) => h("option", { value: key, selected: key === stack }, title)));
   stackSelect.addEventListener("change", () => { stack = stackSelect.value; remembered.stack[d.engine] = stack; remember(); render(); });
-  const userID = nextId("as");
   const userSelect = h("select", { id: userID }, users.map(name => h("option", { value: name, selected: name === user }, name === eng.user ? `${name} (owner)` : name)));
-  userSelect.addEventListener("change", () => { user = userSelect.value; chosenUser.set(d.name, user); c = null; render(); });
-  const credentials = h("div", { class: "credentials" });
-  const steps = h("ol", { class: "steps" });
-
-  async function reveal(b) {
-    b.disabled = true;
-    try { c = await api(`instances/${d.name}/connection${user === eng.user ? "" : `?user=${encodeURIComponent(user)}`}`); render(); }
-    catch (err) { toast(err.message, "error"); b.disabled = false; }
-  }
-
-  function step(title, ...body) {
-    steps.append(h("li", null, h("h4", null, title), ...body));
-  }
+  userSelect.addEventListener("change", () => { user = userSelect.value; chosenUser.set(d.name, user); c = null; shown = false; render(); });
+  const example = h("div", { class: "conn-example" });
+  const more = h("details", { class: "disclosure conn-more", open: user !== eng.user },
+    h("summary", null, "Code examples and options"),
+    h("div", { class: "conn-options" },
+      h("div", { class: "conn-controls" },
+        h("div", { class: "control" }, h("label", { class: "field-label", for: stackID }, "Language or tool"), stackSelect),
+        users.length > 1 ? h("div", { class: "control" }, h("label", { class: "field-label", for: userID }, "Connect as"), userSelect) : null),
+      example));
 
   function render() {
-    whereButtons.forEach((b, i) => b.setAttribute("aria-pressed", String(places[i][0] === where)));
-    const p = settings(d, eng, where, c, user);
-    credentials.replaceChildren(c
-      ? h("p", { class: "muted" }, icon("key"), " The snippets include the password. Keep them out of version control.", " ", btn("Hide password", () => { c = null; render(); }, "small ghost"))
-      : canReveal
-        ? h("div", { class: "row" }, h("span", { class: "muted" }, "Password hidden."), btn([icon("eye"), "Reveal password"], reveal, "small"))
-        : alertBox("Viewers can’t see passwords. Ask an operator.", "info"));
-    steps.replaceChildren();
-    if (where === "internet") {
-      step("Allow your app’s address", h("p", { class: "muted" },
-        "Add it under Network access.", d.publicHost ? "" : " Replace YOUR_SERVER_ADDRESS with your server’s IP or hostname."),
-        p.tls ? null : alertBox("Not encrypted. Turn on Require TLS first.", "warn"));
+    for (const b of shows) {
+      b.setAttribute("aria-pressed", String(shown));
+      b.setAttribute("aria-label", shown ? "Hide password" : "Show password");
     }
-    if (p.tls) {
-      step("Download the CA certificate", h("p", { class: "muted" }, "Save it next to your app."),
-        h("a", { class: "btn small", href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, icon("download"), "Download openrds-ca.pem"));
-    }
-    if (where === "computer") {
-      step("Open an SSH tunnel", h("p", { class: "muted" }, "Use your SSH login. Keep it running."),
-        codeBlock(`ssh -N -L ${d.port}:127.0.0.1:${d.port} user@your-vps`));
-    }
-    if (where === "container") {
-      step("Join the database’s network",
-        c ? codeBlock(`docker network connect ${c.network} YOUR_APP_CONTAINER`)
-          : h("p", { class: "muted" }, canReveal ? "Reveal the password to see it." : "Ask an operator for it."),
-        c && h("details", { class: "disclosure" }, h("summary", null, "Using Docker Compose?"), codeBlock(`services:
-  app:
-    networks: [default, ${d.name}-db]
+    local.update();
+    remote?.update();
 
-networks:
-  ${d.name}-db:
-    external: true
-    name: ${c.network}`, { caption: "compose.yaml" })));
+    const tls = usesTLS(d, "vps") || (d.publicAccess && usesTLS(d, "internet"));
+    const list = [];
+    if (tls) {
+      list.push(h("p", { class: "conn-note" }, icon("lock"), " Uses TLS. ",
+        h("a", { href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, "Download the CA certificate"), " and keep it next to your app."));
     }
-    const out = stacks.find(([key]) => key === stack)[2](p);
-    const code = stack === "cli" ? tlsCommand(d, p, out.code) : out.code;
-    const tlsNote = p.tls && stack !== "cli" ? h("p", { class: "muted" }, icon("lock"), " ", TLS_NOTE[d.engine]) : null;
-    if (out.env) step("Add to your environment", codeBlock(out.env, { caption: ".env", onCopy: markConnected }), !code && tlsNote);
-    if (code) step(out.env ? "Read them in your code" : "Connect", codeBlock(code, { onCopy: markConnected }), out.note && h("p", { class: "muted" }, out.note), tlsNote);
-    if (!out.code) step("Restart your app");
+    if (d.publicAccess) {
+      list.push(h("p", { class: "conn-note" }, icon("globe"), " Allow your app’s address under Firewall rules.", d.publicHost ? "" : " Replace YOUR_SERVER_ADDRESS with your server’s IP."));
+      if (!usesTLS(d, "internet")) list.push(alertBox("Internet traffic isn’t encrypted. Turn on Require TLS first.", "warn"));
+    }
+    if (!canReveal) list.push(alertBox("Viewers can’t see passwords. Ask an operator.", "info"));
+    notes.replaceChildren(...list);
+
+    // Snippets get a placeholder rather than the mask, so copying them never copies dots.
+    const ex = settings(d, eng, "vps", user, shown && c ? c.password : PLACEHOLDER);
+    const out = stacks.find(([key]) => key === stack)[2](ex);
+    const code = stack === "cli" ? tlsCommand(d, ex, out.code) : out.code;
+    example.replaceChildren(...[
+      out.env && codeBlock(out.env, { caption: ".env", onCopy: markConnected }),
+      code && codeBlock(code, { onCopy: markConnected }),
+      out.note && h("p", { class: "muted" }, out.note),
+      ex.tls && stack !== "cli" && d.engine !== "postgres" ? h("p", { class: "muted" }, icon("lock"), " ", TLS_NOTE[d.engine]) : null,
+    ].filter(Boolean));
   }
   render();
 
   const el = h("section", { class: "panel connect-guide" },
-    h("header", { class: "panel-head" }, h("div", null, h("h2", null, icon("link"), "Connect your application"),
-      h("p", { class: "muted" }, "Pick where your app runs and its language."))),
-    h("div", { class: "panel-body" },
-      h("div", { class: "guide-controls" },
-        h("div", { class: "control" }, h("span", { class: "field-label", id: `${stackID}-where` }, "Where does your app run?"),
-          h("div", { class: "segmented", role: "group", "aria-labelledby": `${stackID}-where` }, whereButtons)),
-        h("div", { class: "control" }, h("label", { class: "field-label", for: stackID }, "Language or tool"), stackSelect),
-        users.length > 1 ? h("div", { class: "control" }, h("label", { class: "field-label", for: userID }, "Connect as"), userSelect) : null),
-      credentials, steps));
+    h("header", { class: "panel-head" },
+      h("div", null, h("h2", null, icon("link"), "Connect your application"), h("p", { class: "muted" }, "Copy this into your app’s settings."))),
+    h("div", { class: "panel-body" }, local, remote, notes, more));
   return { el };
 }

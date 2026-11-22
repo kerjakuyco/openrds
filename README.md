@@ -27,7 +27,7 @@ Then visit **http://127.0.0.1:8080** and create your administrator account; ther
 ## Create and connect
 
 1. Choose **Databases → Create database**. Pick PostgreSQL 17, MySQL 8.4 LTS, or Valkey 9.1, and a template: **Production** (daily backups kept 7 days, deletion protection, 2 vCPU · 4 GiB) or **Dev and test** (backups kept 1 day, 0.5 vCPU · 512 MiB). Then adjust the size, data volume limit, host port, backup window, engine parameters and tags. The summary shows how the CPU and memory limits add up against the host before you create anything.
-2. Open the database. Its **Connectivity & security** tab has a connection guide: choose where your application runs (on the VPS, in a container on the VPS, on your computer, or over the internet when public access is on), which database user it signs in as, and its language or framework, such as Node.js, Python, Go, Prisma, Django, Laravel, Java or the command-line client. It shows the steps in order: the SSH tunnel or Docker network command when one is needed, the environment variables, and the code that reads them. Operators reveal the password into the snippets; viewers see a placeholder.
+2. Open the database. Its **Connectivity & security** tab shows the connection string to copy, with the password hidden until you show or copy it, and a second one for the internet while public access is on. **Code examples and options** has ready snippets for Node.js, Python, Go, Prisma, Django, Laravel, Java and command-line clients, and lets you connect as another database user. Viewers see a placeholder instead of the password. From your computer, open an SSH tunnel to the port first: `ssh -N -L PORT:127.0.0.1:PORT you@your-server`.
 3. PostgreSQL and MySQL create the database `app` and user `openrds`. Valkey uses Redis database `0` and the `default` user; any Redis client can connect.
 
 Each instance gets a separate Compose project, network, volume, and random password. Stop/Start and Reboot preserve the volume. Delete removes that instance’s volume; snapshots and automated backups have their own lifecycle.
@@ -46,6 +46,8 @@ Every database starts private: its port is published on the VPS loopback interfa
 Databases created by earlier versions get TLS, password changes and database users after one reboot.
 
 ## Modify, reboot and protect
+
+For one change at a time, use the database's **Configuration** tab: each setting (instance size, host port, storage, automated backups, Require TLS, deletion protection and engine parameters) has its own **Change** button or switch, and changes that need a restart ask whether to apply now or at the next restart.
 
 **Modify** changes the CPU and memory limits, host port, backup retention and window, engine parameters, deletion protection, Require TLS and tags. It ends with a summary of modifications showing each attribute’s current and new value:
 
@@ -106,10 +108,10 @@ Accounts decide who can do what once connected; the network decides who can conn
 
 | Console area | What you can do |
 | --- | --- |
-| **Getting started** | Follow a checklist that ticks itself off: create a database, connect an application, turn on automated backups, keep a copy off the VPS, and invite your team. It also explains the main ideas in plain language. The dashboard shows it until you finish or hide it. |
-| **Dashboard** | See database, snapshot and backup counts, recommendations (unhealthy databases, backups off or missing, pending restarts, unprotected databases tagged `env=production`, databases without a memory limit), host CPU and memory allocation, and recent events. |
-| **Databases** | Filter by name, port, tag, engine or status; sort by any column; select a database and use **Modify** or **Actions** (start, stop, reboot, take snapshot, delete). Each database has tabs for connectivity, monitoring, logs and events, configuration and parameters, maintenance and backups, and tags. |
-| **Snapshots** and **Automated backups** | Restore, download, keep or delete recovery points, and review each database’s backup schedule, latest backup and next backup. |
+| **Getting started** | Follow a checklist that ticks itself off: create a database, connect an application, turn on automated backups, keep a copy off the VPS, and invite your team. It also explains the main ideas in plain language. The dashboard shows the next step until you finish or hide it. |
+| **Dashboard** | On a new server, pick an engine to create your first database. Afterwards, see your databases with live CPU and memory, the next getting-started step, recommendations (unhealthy databases, backups off or missing, pending restarts, unprotected production databases, open or unencrypted public databases), resources with CPU and memory allocation, and recent activity. |
+| **Databases** | Filter by name, port, tag, engine or status; sort by any column; select a database and use **Modify** or **Actions** (start, stop, reboot, take snapshot, delete). Each database page follows the RDS console: a summary, then tabs for connectivity and security, database users, monitoring, logs and events, configuration and parameters, maintenance and backups, and tags. |
+| **Snapshots** and **Automated backups** | Restore, download, keep or delete recovery points. Automated backups shows how many databases back up daily and one row per database with its schedule, last and next backup, and a **Turn on** or **Change** button that edits the schedule in place. |
 | **Events** | Review the last 1,000 operations with who ran them and failure details, filtered by database or user, outcome or text. The sidebar counts new failures since your last visit. |
 | **Users** and **Account** | Admins invite people and change roles. Everyone can rename themselves, change their password and sign out other sessions. |
 

@@ -1,12 +1,13 @@
 // One database: summary, actions and tabs, like a managed-database console.
-import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
+import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, infoPanel, windowLabel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
 import { state, subscribe, instance, engine, loadEngines, sync, go, track, can } from "./store.mjs";
 import { connectGuide } from "./connect.mjs";
 import { timeChart, chartGroup } from "./charts.mjs";
 import { databaseActions, takeSnapshot, confirmReboot } from "./actions.mjs";
-import { backupTable, backupSummary } from "./backups.mjs";
+import { backupTable } from "./backups.mjs";
 import { tagEditor } from "./forms.mjs";
-import { networkPanel, encryptionPanel, usersTab } from "./security.mjs";
+import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
+import { settingsPanel, editParameters, editBackups } from "./settings.mjs";
 
 const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["logs", "Logs & events"],
   ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
@@ -25,14 +26,11 @@ const pendingChanges = (d) => {
 
 function connectivityTab(d) {
   const eng = engine(d.engine);
+  const all = state.instances || [];
   const el = h("div", { class: "stack-gap" },
+    ...connectivityPanel(d, all),
     connectGuide(d, eng, { canReveal: can("operator") }).el,
-    h("div", { class: "tab-grid" }, networkPanel(d, state.instances || []), encryptionPanel(d)),
-    panel("Endpoint & port", {}, keyValues([["Endpoint", h("code", null, "127.0.0.1")], ["Port", h("code", null, String(d.port))],
-      ["Public endpoint", d.publicAccess ? h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`) : "Off"],
-      ["Owner user", h("code", null, eng.user)], [d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)],
-      ["Container DNS name", h("code", null, `openrds-${d.name}`)], ["Protocol", d.engine === "valkey" ? "Redis (RESP)" : d.engineLabel],
-      ["Database users", String(1 + (d.users || []).length)]], "cols-4")));
+    firewallPanel(d, all));
   return { el };
 }
 
@@ -120,39 +118,6 @@ function logsTab(d) {
 export const resultChip = (r) => h("span", { class: `status ${r === "completed" ? "good" : r === "failed" ? "critical" : "info"}` },
   icon(r === "completed" ? "ok" : r === "failed" ? "error" : "pending"), r.charAt(0).toUpperCase() + r.slice(1));
 
-function storagePanel(d) {
-  const measured = h("span", { role: "status", class: "muted" });
-  const measure = btn([icon("disk"), "Measure volume usage"], async (b) => {
-    b.disabled = true; measured.textContent = "Measuring allocated files…";
-    try {
-      const { usedBytes } = await api(`instances/${d.name}/storage`);
-      measured.textContent = `${bytes(usedBytes)} used${d.diskGiB ? ` of ${d.diskGiB} GiB` : " · uncapped"}`;
-    } catch (err) { measured.textContent = err.message; }
-    finally { b.disabled = false; }
-  }, "small");
-  measure.disabled = !isLive(d) || d.busy;
-  const body = [keyValues([["Data volume limit", d.diskGiB ? `${d.diskGiB} GiB` : "Uncapped"]]), h("div", { class: "row" }, measure, measured)];
-  if (d.diskGiB && can("operator")) {
-    const stopped = ["stopped", "not provisioned"].includes(d.status) && !d.busy;
-    const input = h("input", { type: "number", min: "1", max: "65536", step: "1", value: String(d.diskGiB), class: "num", "aria-label": `New data volume size for ${d.name} in GiB` });
-    const apply = btn("Apply size", async (b) => {
-      const next = Number(input.value);
-      if (!Number.isInteger(next) || next < 1) { toast("Enter a whole number of GiB.", "error"); return; }
-      b.disabled = true;
-      try {
-        await track(`Resize ${d.name}`, api(`instances/${d.name}/disk`, { method: "POST", body: { diskGiB: next } }), { success: `${d.name} now has a ${next} GiB data volume.` });
-      } catch { /* reported by the toast */ }
-      finally { b.disabled = false; }
-    }, "small");
-    apply.disabled = !stopped;
-    body.push(h("div", { class: "resize" }, h("div", { class: "row" }, input, h("span", { class: "muted" }, "GiB"), apply),
-      h("p", { class: "muted" }, stopped ? "Grow or shrink the volume. Shrinking needs room for the data." : "Stop the database to change this limit.")));
-  } else if (!d.diskGiB) {
-    body.push(h("p", { class: "muted" }, "To add a limit, restore a snapshot into a new database with one."));
-  }
-  return panel("Storage", {}, ...body);
-}
-
 function configurationTab(d) {
   const eng = engine(d.engine);
   const params = Object.entries(d.parameters || {}).sort();
@@ -162,22 +127,27 @@ function configurationTab(d) {
   const paramRows = [...params.map(([k, v]) => ({ k, v, pending: Boolean(d.applied) && applied[k] !== v })), ...removed.map(k => ({ k, v: null, pending: true }))];
   const el = h("div", { class: "stack-gap" },
     d.applied && alertBox(`Applies at next restart: ${pendingChanges(d).join(", ")}.`, "info"),
-    h("div", { class: "tab-grid" },
-      panel("Instance configuration", { actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Modify")] : [] }, keyValues([
-        ["Engine", d.engineLabel], ["Created", when(d.createdAt)],
-        ["CPU limit", d.cpus ? `${d.cpus} vCPU` : "Unlimited"], ["Memory limit", d.memoryMiB ? mib(d.memoryMiB) : "Unlimited"],
-        ["Host port", String(d.port)], ["Deletion protection", d.deletionProtection ? "On" : "Off"],
-      ], "cols-2")),
-      storagePanel(d)),
+    settingsPanel(d),
     panel("Engine parameters", { counter: params.length, description: "Unlisted settings use the default.",
-      actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("sliders"), "Edit parameters")] : [] },
+      actions: can("operator") ? [editButton(d, [icon("sliders"), "Edit parameters"], () => editParameters(d))] : [] },
     paramRows.length ? dataTable({ caption: "Engine parameters", rows: paramRows, columns: [
       { key: "k", label: "Parameter", cls: "wrap", value: r => h("div", { class: "stack" }, h("code", null, r.k), h("small", null, describe(r.k)?.description || "")) },
       { key: "v", label: "Value", value: r => r.v === null ? h("span", { class: "muted" }, "Default") : h("code", null, r.v === "" ? "(empty)" : r.v) },
       { key: "d", label: "Default", value: r => h("code", { class: "muted" }, describe(r.k)?.default || "(empty)") },
       { key: "s", label: "Status", value: r => r.pending ? h("span", { class: "status info" }, icon("pending"), "Pending restart") : h("span", { class: "status good" }, icon("ok"), "Applied") },
-    ] }) : empty("sliders", "Engine defaults", "No custom settings.")));
+    ] }) : empty("sliders", "Engine defaults", "No custom settings.")),
+    infoPanel("Details", [
+      ["Instance", [["DB identifier", d.name], ["Engine", d.engineLabel], ["Created", when(d.createdAt)]]],
+      ["Database", [[d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)], ["Owner user", h("code", null, eng.user)], ["Database users", String(1 + (d.users || []).length)]]],
+    ]));
   return { el };
+}
+
+// A button that opens a settings editor, unless the database is busy.
+function editButton(d, label, run) {
+  const b = btn(label, run, "small");
+  b.disabled = d.busy || d.pendingRestore;
+  return b;
 }
 
 function backupsTab(d) {
@@ -197,11 +167,16 @@ function backupsTab(d) {
   }), "small");
   const snap = btn([icon("camera"), "Take snapshot"], () => takeSnapshot(d), "small primary");
   snap.disabled = d.busy || !isRunning(d);
+  const on = d.backupRetentionDays > 0;
   const el = h("div", { class: "stack-gap" },
-    h("div", { class: "tab-grid" },
-      panel("Automated backups", { actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Change")] : [] }, backupSummary(d)),
-      panel("Deletion protection", { actions: can("operator") ? [toggle] : [] }, h("p", { class: "protection" }, icon("shield"), d.deletionProtection ? "On. It can’t be deleted." : "Off. It can be deleted."))),
-    panel("Snapshots and backups", { description: "Restoring creates a new database.", actions: can("operator") ? [snap] : [] }, list));
+    infoPanel("Maintenance & backups", [
+      ["Backup", [["Automated backups", on ? h("span", { class: "status good" }, icon("ok"), "On") : h("span", { class: "status warn" }, icon("alert"), "Off")],
+        ["Retention period", on ? plural(d.backupRetentionDays, "day") : "—"], ["Backup window", on ? windowLabel(d.backupWindow) : "—"]]],
+      ["Recovery points", [["Latest backup", d.latestBackupAt ? `${when(d.latestBackupAt)} (${ago(d.latestBackupAt)})` : "None yet"],
+        ["Next automated backup", d.nextBackupAt ? `${when(d.nextBackupAt)} (${ago(d.nextBackupAt)})` : "—"]]],
+      ["Protection", [["Deletion protection", h("span", { class: "row tight" }, d.deletionProtection ? "On" : "Off", can("operator") ? toggle : null)]]],
+    ], { actions: can("operator") ? [editButton(d, [icon("edit"), "Change"], () => editBackups(d)), snap] : [] }),
+    panel("Snapshots and backups", { description: "Restoring creates a new database." }, list));
   render(d);
   return { el, update: render };
 }
@@ -231,7 +206,8 @@ const SIGNATURE = {
   users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, state.me?.role]),
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
   logs: () => "",
-  configuration: d => JSON.stringify([d.status, d.busy, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection]),
+  configuration: d => JSON.stringify([d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
+    d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.users, state.me?.role]),
   backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.latestBackupAt, d.nextBackupAt]),
   tags: d => JSON.stringify(d.tags || {}),
 };
@@ -241,16 +217,13 @@ function summary(d) {
   const live = d.live;
   const cpu = live ? live.cpu / base : null;
   const memShare = live && d.memoryMiB ? live.memory / (d.memoryMiB * 1048576) * 100 : null;
-  return panel("Summary", {}, keyValues([
-    ["Status", status(d)],
-    ["Access", h("span", { class: "with-icon" }, icon(d.publicAccess ? "globe" : "lock"), d.publicAccess ? `Public · port ${d.publicPort}` : "Private", d.requireTLS ? " · TLS" : "")],
-    ["Endpoint", h("code", null, `127.0.0.1:${d.port}`)],
-    ["Size", sizeLabel(d)],
-    ["CPU", live ? h("span", { class: "with-meter" }, percent(cpu), meter(cpu, 100, `CPU ${percent(cpu)} of ${d.cpus ? "the limit" : "the host"}`)) : "—"],
-    ["Memory", live ? h("span", { class: "with-meter" }, `${bytes(live.memory)}${d.memoryMiB ? ` of ${mib(d.memoryMiB)}` : ""}`, memShare !== null && meter(memShare, 100, `Memory ${percent(memShare)} of the limit`)) : "—"],
-    ["Storage", d.diskGiB ? `${d.diskGiB} GiB limit` : "Uncapped volume"],
-    ["Automated backups", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} retention` : h("span", { class: "status warn" }, icon("alert"), "Off")],
-  ], "cols-4"));
+  return infoPanel("Summary", [
+    [null, [["DB identifier", d.name], ["Engine", d.engineLabel]]],
+    [null, [["Status", status(d)], ["Access", h("span", { class: "with-icon" }, icon(d.publicAccess ? "globe" : "lock"), d.publicAccess ? `Public · port ${d.publicPort}` : "Private", d.requireTLS ? " · TLS" : "")]]],
+    [null, [["Size", sizeLabel(d)], ["CPU", live ? h("span", { class: "with-meter" }, percent(cpu), meter(cpu, 100, `CPU ${percent(cpu)} of ${d.cpus ? "the limit" : "the host"}`)) : "—"]]],
+    [null, [["Memory", live ? h("span", { class: "with-meter" }, `${bytes(live.memory)}${d.memoryMiB ? ` of ${mib(d.memoryMiB)}` : ""}`, memShare !== null && meter(memShare, 100, `Memory ${percent(memShare)} of the limit`)) : "—"],
+      ["Automated backups", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} retention` : h("span", { class: "status warn" }, icon("alert"), "Off")]]],
+  ], { cls: "summary-panel" });
 }
 
 function banners(d) {

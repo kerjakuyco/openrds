@@ -1,6 +1,6 @@
 // Who can reach a database and with which credentials: network access with a
 // firewall, encryption in transit, and database users.
-import { h, icon, btn, api, toast, modal, panel, keyValues, dataTable, alertBox, empty, when, ago, chip, codeBlock, nextId, help, menu, isLive, isRunning } from "./lib.mjs";
+import { h, icon, btn, api, toast, modal, panel, infoPanel, keyValues, dataTable, alertBox, empty, when, ago, chip, codeBlock, nextId, help, menu, isLive, isRunning } from "./lib.mjs";
 import { engine, sync, can, go } from "./store.mjs";
 import { confirmReboot } from "./actions.mjs";
 import { connectAs } from "./connect.mjs";
@@ -29,7 +29,7 @@ export function accessBlocker(d) {
   return "";
 }
 
-function upgradeNotice(d) {
+export function upgradeNotice(d) {
   if (d.tlsReady || d.status === "not provisioned") return null;
   const reboot = can("operator") ? btn([icon("reboot"), "Reboot now"], () => confirmReboot(d), "small") : null;
   if (reboot) reboot.disabled = d.busy || !isLive(d);
@@ -218,22 +218,45 @@ function editNetwork(d, all, { addSource = "" } = {}) {
   });
 }
 
-export function networkPanel(d, all) {
-  const attempts = h("div", { class: "attempts" });
-  const edit = can("operator") ? [btn([icon("edit"), "Edit"], () => editNetwork(d, all), "small")] : [];
-  const status = d.publicAccess
-    ? h("p", { class: "protection" }, icon("globe"), h("span", null, h("strong", null, `Public on port ${d.publicPort}. `), "Only listed sources can connect."))
-    : h("p", { class: "protection" }, icon("lock"), h("span", null, h("strong", null, "Private. "), "Reachable only from this server and SSH tunnels."));
+// The RDS-style overview: endpoint and port, networking, security.
+export function connectivityPanel(d, all) {
+  const eng = engine(d.engine);
+  const rules = d.firewall || [];
+  const tls = !d.tlsReady ? chip("After a reboot", "neutral")
+    : d.requireTLS ? chip("Required", "good") : d.engine === "valkey" ? chip("Off", "warn") : chip("Optional", "info");
+  const names = ["localhost", "127.0.0.1", `openrds-${d.name}`, d.publicHost].filter(Boolean);
+  const actions = [];
+  if (can("operator")) actions.push(btn([icon("globe"), "Edit network"], () => editNetwork(d, all), "small"));
+  actions.push(h("a", { class: "btn small", href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, icon("download"), "CA certificate"));
   const warnings = [];
-  if (d.publicAccess && !(d.firewall || []).length) warnings.push(alertBox("No sources yet, so nothing can connect.", "warn"));
-  if (d.publicAccess && everyone(d.firewall)) warnings.push(alertBox("Anyone can try to connect. Limit it if you can.", "warn"));
+  if (d.publicAccess && !rules.length) warnings.push(alertBox("No sources yet, so nothing can connect.", "warn"));
+  if (d.publicAccess && everyone(rules)) warnings.push(alertBox("Anyone can try to connect. Limit it if you can.", "warn"));
   if (d.publicAccess && !d.requireTLS) warnings.push(alertBox("TLS is not required, so traffic isn’t encrypted. Turn it on under Modify.", "warn"));
-  const rules = d.publicAccess || (d.firewall || []).length
-    ? dataTable({ caption: "Allowed sources", rows: d.firewall || [], columns: [
-      { key: "cidr", label: "Allowed source", value: r => h("code", null, r.cidr) },
-      { key: "description", label: "Description", value: r => r.description || h("span", { class: "muted" }, "—") },
-    ] })
-    : null;
+  return [upgradeNotice(d), infoPanel("Connectivity & security", [
+    ["Endpoint & port", [
+      ["Endpoint", h("code", null, "127.0.0.1")],
+      ["Port", h("code", null, String(d.port))],
+      ["Container DNS name", h("code", null, `openrds-${d.name}`)],
+    ]],
+    ["Networking", [
+      ["Public access", d.publicAccess ? h("span", { class: "status info" }, icon("globe"), `On · port ${d.publicPort}`) : h("span", { class: "status good" }, icon("lock"), "Off")],
+      ["Public endpoint", d.publicAccess ? h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`) : "—"],
+      ["Allowed sources", d.publicAccess ? String(rules.length) : "—"],
+    ]],
+    ["Security", [
+      ["Require TLS", tls],
+      ["Certificate valid for", h("span", null, ...names.flatMap((n, i) => [i ? ", " : "", h("code", null, n)]))],
+      ["Owner user", h("code", null, eng.user)],
+    ]],
+  ], { actions }), ...warnings].filter(Boolean);
+}
+
+// Like security group rules: the sources allowed through the public port,
+// and who has tried it.
+export function firewallPanel(d, all) {
+  const rules = d.firewall || [];
+  if (!d.publicAccess && !rules.length) return null;
+  const attempts = h("div", { class: "attempts" });
   async function loadAttempts() {
     if (!d.publicAccess || !can("operator")) return;
     try {
@@ -249,28 +272,13 @@ export function networkPanel(d, all) {
     } catch { /* the panel works without the log */ }
   }
   loadAttempts();
-  return panel("Network access", { description: "Who can connect from outside.", actions: edit },
-    status, ...warnings,
-    d.publicAccess ? keyValues([["Public endpoint", h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`)], ["Allowed sources", String((d.firewall || []).length)]], "cols-2") : null,
-    rules, attempts);
-}
-
-export function encryptionPanel(d) {
-  const state = !d.tlsReady ? ["After the next reboot", "neutral"]
-    : d.requireTLS ? ["Required", "good"]
-      : d.engine === "valkey" ? ["Off", "warn"] : ["Available, not required", "info"];
-  const names = ["localhost", "127.0.0.1", `openrds-${d.name}`, d.publicHost].filter(Boolean);
-  return panel("Encryption in transit", {
-    description: "Encrypts traffic to the database.",
-    actions: [h("a", { class: "btn small", href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, icon("download"), "CA certificate"),
-      can("operator") ? h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Change") : null].filter(Boolean),
+  return panel("Firewall rules", {
+    counter: rules.length, description: d.publicAccess ? "Only these sources can connect." : "Used when public access is on.",
+    actions: can("operator") ? [btn([icon("edit"), "Edit"], () => editNetwork(d, all), "small")] : [],
   },
-  keyValues([
-    ["TLS", chip(state[0], state[1])],
-    ["Certificate", "Signed by this server’s CA"],
-    ["Valid for", h("span", null, ...names.flatMap((n, i) => [i ? ", " : "", h("code", null, n)]))],
-    ["Clients", d.engine === "valkey" ? (d.requireTLS ? "Use rediss:// with the CA certificate." : "Plain text.") : `Use ${d.engine === "mysql" ? "ssl-mode=VERIFY_IDENTITY" : "sslmode=verify-full"} with the CA certificate.`],
-  ], "stacked"),
-  d.engine === "valkey" && !d.requireTLS && d.tlsReady ? h("p", { class: "muted small" }, "Requiring TLS makes Valkey TLS-only.") : null,
-  upgradeNotice(d));
+  rules.length ? dataTable({ caption: "Allowed sources", rows: rules, columns: [
+    { key: "cidr", label: "Source", value: r => h("code", null, r.cidr) },
+    { key: "description", label: "Description", value: r => r.description || h("span", { class: "muted" }, "—") },
+  ] }) : h("p", { class: "muted" }, "No sources yet."),
+  attempts);
 }

@@ -399,9 +399,14 @@ function heading(title, description) {
   return h("div", { class: "page-head" }, h("div", null, h("h1", null, title), description && h("p", { class: "muted" }, description)));
 }
 
+// The dashboard can preselect an engine for the next create form.
+let preferred = null;
+export const preferEngine = (key) => { preferred = key; };
+
 export async function createView() {
   await loadEngines();
-  const first = state.engines[0];
+  const first = state.engines.find(e => e.key === preferred) || state.engines[0];
+  preferred = null;
   const start = freeWindow();
   const t = TEMPLATES.production;
   const f = databaseForm({ mode: "create", eng: first, initial: { engine: first.key, template: "production", size: t.size, cpus: 2, memoryMiB: 4096, port: suggestPort(first.key), retention: t.retention, window: formatWindow(start, 30), protection: t.protection, tags: {}, parameters: {} } });
@@ -503,3 +508,6 @@ function review(d, spec) {
     },
   });
 }
+
+// Shared with the settings editors on the database page.
+export { SIZES, RETENTION, LENGTHS, parseWindow, formatWindow, hhmm, field, choiceCards, select };

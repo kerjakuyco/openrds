@@ -1,21 +1,23 @@
-// The landing page: how everything is doing at a glance, and where to go next.
+// The landing page: a guided start for a new server, then how everything is
+// doing and the one thing to do next.
 import { h, icon, panel, empty, status, statusOf, bytes, mib, plural, ago, isLive, isRunning, needsAttention, percent } from "./lib.mjs";
-import { state, subscribe, can } from "./store.mjs";
-import { startCard } from "./start.mjs";
-import { showDatabases, cpuShare } from "./databases.mjs";
+import { state, subscribe, can, go } from "./store.mjs";
+import { steps, dismissed, hideStart } from "./start.mjs";
+import { cpuShare } from "./databases.mjs";
+import { preferEngine } from "./forms.mjs";
 
 const DAY = 86400000;
 const CARDS = 6;
+const ENGINES = [
+  ["postgres", "PG", "PostgreSQL 17", "Powerful SQL with JSON."],
+  ["mysql", "My", "MySQL 8.4", "The popular SQL database."],
+  ["valkey", "Vk", "Valkey 9.1", "Fast cache and key-value store."],
+];
 
 function greeting(me) {
   const hour = new Date().getHours();
   const part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   return me && !me.token ? `${part}, ${me.name.split(/\s+/)[0]}` : part;
-}
-
-function tile(label, value, hint, symbol, href, filter = null) {
-  const open = filter === null ? null : (e) => { e.preventDefault(); showDatabases(filter); };
-  return h("a", { class: "stat", href, onclick: open }, h("span", { class: "stat-label" }, label, icon(symbol)), h("span", { class: "stat-value" }, String(value)), h("small", null, hint));
 }
 
 function bar(share) {
@@ -79,79 +81,101 @@ function databaseCard(d, host) {
       h("a", { class: "connect", href: `#/databases/${d.name}/connectivity` }, "Connect", icon("arrow"))));
 }
 
+// A new server: pick an engine and go.
+function firstRun() {
+  if (!can("operator")) return h("div", { class: "panel" }, empty("db", "No databases yet", "Ask an operator to create one."));
+  const pick = (key) => { preferEngine(key); go("#/databases/new"); };
+  return h("div", { class: "first-run" },
+    h("section", { class: "panel first-pick", "aria-labelledby": "first-title" },
+      h("div", { class: "first-head" }, h("h2", { id: "first-title" }, "Create your first database"), h("p", { class: "muted" }, "Pick an engine. It’s ready in about a minute.")),
+      h("div", { class: "engine-picks" }, ENGINES.map(([key, badge, title, text]) =>
+        h("button", { type: "button", class: "engine-pick", onclick: () => pick(key) },
+          h("span", { class: `engine-badge ${key}`, "aria-hidden": "true" }, badge),
+          h("span", { class: "stack" }, h("strong", null, title), h("small", null, text)),
+          icon("arrow"))))),
+    h("ol", { class: "how-it-works", "aria-label": "How it works" },
+      [["db", "Create", "Choose an engine and a size."], ["link", "Connect", "Copy a ready-made snippet."], ["history", "Relax", "Backups run every day."]].map(([symbol, title, text], i) =>
+        h("li", null, h("span", { class: "how-icon" }, icon(symbol)), h("span", null, h("small", null, `Step ${i + 1}`), h("strong", null, title), h("span", { class: "muted" }, text))))));
+}
+
+// The next unfinished getting-started step, one at a time.
+function nextStep() {
+  const list = steps();
+  const next = list.find(s => !s.done);
+  if (!next || dismissed()) return null;
+  const done = list.filter(s => s.done).length;
+  const operate = can("operator") || ["connect", "offsite", "account"].includes(next.id);
+  return h("section", { class: "next-step", "aria-label": "Next step" },
+    h("span", { class: "next-icon" }, icon("spark")),
+    h("div", null, h("p", { class: "kicker" }, `Next step · ${done + 1} of ${list.length}`), h("strong", null, next.title), h("p", { class: "muted" }, next.text)),
+    h("div", { class: "next-actions" },
+      operate ? h("a", { class: "btn primary small", href: next.href }, next.action) : null,
+      h("a", { class: "btn ghost small", href: "#/getting-started" }, "All steps"),
+      h("button", { type: "button", class: "icon-btn ghost", "aria-label": "Hide the next step", title: "Hide. Reopen it from Getting started.", onclick: hideStart }, icon("close"))));
+}
+
 export function dashboardView() {
   const hero = h("div", { class: "dash-hero" });
-  const start = h("div");
-  const tiles = h("div", { class: "stats" });
-  const cards = h("section", { "aria-labelledby": "dash-dbs" });
-  const attention = h("div"), capacity = h("div"), activity = h("div");
-  const el = h("div", null, hero, start, tiles, h("div", { class: "dash-main" }, cards, h("div", { class: "side-stack" }, attention, capacity, activity)));
+  const body = h("div");
+  const el = h("div", null, hero, body);
 
   function render() {
     const dbs = state.instances, backups = state.backups, host = state.host, now = Date.now();
     const trouble = dbs?.filter(needsAttention).length || 0, up = dbs?.filter(isRunning).length || 0;
-    const summary = !dbs ? [h("span", null, "Reading your databases…")]
-      : !dbs.length ? [h("span", null, "No databases yet.")]
+    const summary = !dbs ? [h("span", null, "Loading…")]
+      : !dbs.length ? [h("span", null, "Welcome to OpenRDS.")]
         : trouble ? [h("span", { class: "dot critical" }), h("span", null, `${plural(trouble, "database")} ${trouble === 1 ? "needs" : "need"} attention`)]
           : up === dbs.length ? [h("span", { class: "dot good" }), h("span", null, dbs.length === 1 ? "Your database is running" : `All ${dbs.length} databases are running`)]
             : [h("span", { class: "dot neutral" }), h("span", null, `${up} of ${plural(dbs.length, "database")} running`)];
     hero.replaceChildren(
       h("div", null, h("p", { class: "kicker" }, "Dashboard"), h("h1", null, greeting(state.me)), h("p", { class: "summary" }, summary)),
-      can("operator") ? h("div", { class: "page-actions" }, h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database")) : "");
+      can("operator") && dbs?.length ? h("div", { class: "page-actions" }, h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database")) : "");
 
-    const card = dbs ? startCard() : null;
-    start.replaceChildren(...(card ? [card] : []));
-    start.className = card ? "dash-start" : "";
+    if (!dbs) { body.replaceChildren(h("div", { class: "panel" }, empty("db", "Loading your databases…", ""))); return; }
+    if (!dbs.length) { body.replaceChildren(firstRun()); return; }
 
-    const manual = backups?.filter(b => b.kind !== "automated") || [];
-    const auto = backups?.filter(b => b.kind === "automated") || [];
-    tiles.replaceChildren(
-      tile("Databases", dbs?.length ?? "—", dbs ? `${up} running` : "Reading…", "db", "#/databases", ""),
-      tile("Needs attention", dbs ? trouble : "—", trouble ? "Check these first" : "All healthy", "alert", "#/databases", "attention"),
-      tile("Snapshots", backups ? manual.length : "—", backups ? `${bytes(manual.reduce((n, b) => n + b.bytes, 0))} stored` : "Reading…", "camera", "#/snapshots"),
-      tile("Automated backups", backups ? auto.length : "—", dbs ? `${dbs.filter(d => d.backupRetentionDays).length} of ${dbs.length} scheduled` : "Reading…", "history", "#/automated-backups"));
+    const sorted = [...dbs].sort((a, b) => needsAttention(b) - needsAttention(a) || a.name.localeCompare(b.name));
+    const cards = h("section", { "aria-labelledby": "dash-dbs" },
+      h("div", { class: "section-head" }, h("h2", { id: "dash-dbs" }, "Your databases"), h("a", { href: "#/databases" }, `View all ${dbs.length}`)),
+      h("div", { class: "db-cards" }, sorted.slice(0, CARDS).map(d => databaseCard(d, host)),
+        can("operator") && dbs.length < CARDS ? h("a", { class: "db-card add", href: "#/databases/new" }, icon("plus"), "Create database") : null));
 
-    const sorted = [...(dbs || [])].sort((a, b) => needsAttention(b) - needsAttention(a) || a.name.localeCompare(b.name));
-    cards.replaceChildren(
-      h("div", { class: "section-head" }, h("h2", { id: "dash-dbs" }, "Your databases"), dbs?.length ? h("a", { href: "#/databases" }, `View all ${dbs.length}`) : ""),
-      !dbs ? h("div", { class: "panel" }, empty("db", "Reading your databases…", ""))
-        : h("div", { class: "db-cards" }, sorted.slice(0, CARDS).map(d => databaseCard(d, host)),
-          can("operator") && dbs.length < CARDS ? h("a", { class: "db-card add", href: "#/databases/new" }, icon("plus"), dbs.length ? "Create another database" : "Create your first database") : null,
-          !dbs.length && !can("operator") ? h("div", { class: "panel" }, empty("db", "No databases yet", "Ask an operator to create one.")) : null));
-
-    const list = dbs ? recommendations(dbs, now) : [];
-    attention.replaceChildren(panel("Needs attention", { counter: dbs && list.length ? list.length : null },
-      !dbs ? empty("pulse", "Checking…", "") : list.length ? h("ul", { class: "attention" }, list.slice(0, 5).map(r => h("li", { class: r.tone },
+    const list = recommendations(dbs, now);
+    const attention = panel("Needs attention", { counter: list.length || null },
+      list.length ? h("ul", { class: "attention" }, list.slice(0, 4).map(r => h("li", { class: r.tone },
         icon(r.tone === "critical" ? "error" : r.tone === "warn" ? "alert" : "info"),
         h("div", null, h("strong", null, r.title), h("p", { class: "muted" }, r.detail)),
         can("operator") || r.href.endsWith("/logs") ? h("a", { class: "btn small", href: r.href }, r.action) : null)))
-        : h("div", { class: "all-good" }, icon("ok"), h("div", null, h("strong", null, "All clear"), h("p", { class: "muted" }, "Nothing needs you.")))));
+        : h("div", { class: "all-good" }, icon("ok"), h("div", null, h("strong", null, "All clear"), h("p", { class: "muted" }, "Nothing needs you."))));
 
-    if (!host) capacity.replaceChildren(panel("Server capacity", {}, empty("host", "Reading the server…", "")));
-    else {
-      const live = (dbs || []).filter(isLive);
-      const cpu = live.reduce((n, d) => n + (d.cpus || 0), 0), mem = live.reduce((n, d) => n + (d.memoryMiB || 0), 0) * 1048576;
-      const used = live.reduce((n, d) => n + (d.live?.memory || 0), 0);
-      const line = (label, value, share) => h("div", { class: "cap-line" }, h("div", null, h("span", null, label), h("strong", null, value)), bar(share));
-      capacity.replaceChildren(panel("Server capacity", { description: host.name },
-        h("div", { class: "cap" },
-          line("Memory in use", `${bytes(used)} of ${bytes(host.memoryBytes)}`, used / host.memoryBytes),
-          line("Memory limits", `${bytes(mem)} of ${bytes(host.memoryBytes)}`, mem / host.memoryBytes),
-          line("CPU limits", `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`, cpu / host.cpus)),
-        h("p", { class: "muted small" }, `Docker ${host.dockerVersion} · disk limits ${host.volumeQuota?.state === "supported" ? "on" : "unavailable"}`)));
-    }
+    const manual = backups?.filter(b => b.kind !== "automated") || [];
+    const scheduled = dbs.filter(d => d.backupRetentionDays).length;
+    const row = (symbol, label, value, href) => h("a", { class: "res-row", href }, icon(symbol), h("span", null, label), h("strong", null, value), icon("chevron-right"));
+    const live = dbs.filter(isLive);
+    const cpu = live.reduce((n, d) => n + (d.cpus || 0), 0), mem = live.reduce((n, d) => n + (d.memoryMiB || 0), 0) * 1048576;
+    const line = (label, value, share) => h("div", { class: "cap-line" }, h("div", null, h("span", null, label), h("strong", null, value)), bar(share));
+    const resources = panel("Resources", {},
+      h("div", { class: "res-list" },
+        row("db", "Databases", `${up} of ${dbs.length} running`, "#/databases"),
+        row("camera", "Snapshots", backups ? `${manual.length} · ${bytes(manual.reduce((n, b) => n + b.bytes, 0))}` : "—", "#/snapshots"),
+        row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/automated-backups")),
+      host ? h("div", { class: "cap" },
+        line("Memory limits", `${bytes(mem)} of ${bytes(host.memoryBytes)}`, mem / host.memoryBytes),
+        line("CPU limits", `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`, cpu / host.cpus)) : null);
 
     // One line per action: its outcome, or "started" while it still runs.
     const all = state.activity || [];
     const key = (e) => `${e.name}|${e.action}|${e.actor}`; // newest first, so an outcome comes before its start
-    const events = all.filter((e, i) => e.result !== "started" || !all.slice(0, i).some(x => x.result !== "started" && key(x) === key(e))).slice(0, 6);
-    activity.replaceChildren(panel("Recent activity", { actions: [h("a", { class: "btn small ghost", href: "#/events" }, "View all")] },
-      !state.activity ? empty("bell", "Reading history…", "") : events.length ? h("ul", { class: "activity" }, events.map(e => h("li", { class: e.result },
+    const events = all.filter((e, i) => e.result !== "started" || !all.slice(0, i).some(x => x.result !== "started" && key(x) === key(e))).slice(0, 5);
+    const activity = panel("Recent activity", { actions: [h("a", { class: "btn small ghost", href: "#/events" }, "View all")] },
+      events.length ? h("ul", { class: "activity" }, events.map(e => h("li", { class: e.result },
         icon(e.result === "completed" ? "ok" : e.result === "failed" ? "error" : "pending"),
         h("div", null, h("strong", null, e.action),
           h("small", { class: "muted" }, e.kind === "user" ? e.name : h("a", { href: `#/databases/${e.name}` }, e.name),
             e.actor && e.actor !== "system" && e.actor !== e.name ? ` · ${e.actor}` : "", ` · ${ago(e.at, now)}`)))))
-        : empty("bell", "Nothing yet", "Actions show up here.")));
+        : empty("bell", "Nothing yet", "Actions show up here."));
+
+    body.replaceChildren(...[nextStep(), h("div", { class: "dash-main" }, cards, h("div", { class: "side-stack" }, attention, resources, activity))].filter(Boolean));
   }
   render();
   const stop = subscribe(render);

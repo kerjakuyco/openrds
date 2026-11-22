@@ -742,6 +742,7 @@ td.actions { text-align: right; width: 1% }
 .steps > li > .btn { justify-self: start }
 .attempts:not(:empty) { margin-top: 18px }
 .modal .form-grid input { width: 100% }
+.modal .form-grid { align-items: start }
 /* With "Connect as", the guide has three controls. */
 .guide-controls:has(> .control:nth-child(3)) { grid-template-columns: auto minmax(170px, 1fr) minmax(150px, 1fr) }
 @media (max-width: 1280px) {
@@ -837,3 +838,125 @@ td.actions { text-align: right; width: 1% }
 @media (prefers-reduced-motion: reduce) {
   .login-wrap, .auth-form .btn.busy .icon { animation: none }
 }
+
+/* ---------- console-style details: columns of label/value pairs */
+.info-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) }
+.info-cols.n1 { grid-template-columns: minmax(0, 1fr) }
+.info-cols.n2 { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+.info-cols.n4 { grid-template-columns: repeat(4, minmax(0, 1fr)) }
+.info-col { min-width: 0; padding: 2px 24px 4px }
+.info-col:first-child { padding-left: 0 }
+.info-col:last-child { padding-right: 0 }
+.info-col + .info-col { border-left: 1px solid var(--line) }
+.info-col h3 { margin: 0 0 14px; font-size: 13px; font-weight: 700; color: var(--ink) }
+.info-col dl { display: grid; gap: 14px; margin: 0 }
+.info-col dt { margin-bottom: 3px; font-size: 12px; color: var(--muted) }
+.info-col dd { margin: 0; font-size: 14px; color: var(--ink); overflow-wrap: anywhere }
+.info-col code { font-size: 13px }
+.stack-tight { display: grid; gap: 6px; justify-items: start }
+.row.tight { gap: 10px }
+@media (max-width: 1100px) { .info-cols.n4 { grid-template-columns: repeat(2, minmax(0, 1fr)) } .info-cols.n4 .info-col:nth-child(3) { border-left: 0; padding-left: 0 } .info-cols.n4 .info-col:nth-child(n+3) { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line) } }
+@media (max-width: 760px) {
+  .info-cols, .info-cols.n2, .info-cols.n4 { grid-template-columns: minmax(0, 1fr) }
+  .info-col, .info-cols.n4 .info-col:nth-child(n+3) { padding: 16px 0 0; margin-top: 16px; border-left: 0; border-top: 1px solid var(--line) }
+  .info-col:first-child { padding-top: 0; margin-top: 0; border-top: 0 }
+}
+
+/* ---------- dashboard: first run, next step and resources */
+.first-run { display: grid; gap: 18px }
+.first-pick { padding: clamp(22px, 3vw, 32px) }
+.first-head h2 { font-size: clamp(20px, 2vw, 24px); letter-spacing: -.02em; margin: 0 0 6px }
+.engine-picks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 22px }
+.engine-pick { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 18px; text-align: left; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); cursor: pointer; transition: border-color .15s var(--ease), box-shadow .15s var(--ease), transform .15s var(--ease) }
+.engine-pick:hover { border-color: var(--line-strong); box-shadow: var(--shadow); transform: translateY(-1px) }
+.engine-pick:focus-visible { outline: none; box-shadow: var(--halo) }
+.engine-pick strong { display: block; font-size: 15px }
+.engine-pick small { color: var(--muted); font-size: 13px }
+.engine-pick > .icon { color: var(--muted); transition: transform .15s var(--ease) }
+.engine-pick:hover > .icon { transform: translateX(3px); color: var(--ink) }
+.engine-pick .engine-badge { width: 40px; height: 40px; font-size: 13px }
+.how-it-works { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px }
+.how-it-works li { display: flex; gap: 14px; align-items: flex-start; padding: 16px 18px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line) }
+.how-it-works small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted) }
+.how-it-works strong { display: block; margin: 2px 0 2px; font-size: 15px }
+.how-it-works .muted { font-size: 13px }
+.how-icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 10px; background: var(--surface); border: 1px solid var(--line) }
+.next-step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 16px 18px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface) }
+.next-step .kicker { margin: 0 0 2px }
+.next-step strong { display: block; font-size: 15px }
+.next-step p.muted { margin: 2px 0 0; font-size: 13px }
+.next-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: var(--accent); color: var(--on-accent) }
+.next-actions { display: flex; align-items: center; gap: 8px }
+.res-list { display: grid; margin: -4px 0 4px }
+.res-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 14px; gap: 10px; align-items: center; padding: 10px 0; color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); font-size: 13px }
+.res-row:last-child { border-bottom: 0 }
+.res-row .icon { width: 16px; height: 16px; color: var(--muted) }
+.res-row strong { font-weight: 600; font-variant-numeric: tabular-nums }
+.res-row:hover span { text-decoration: underline }
+@media (max-width: 900px) {
+  .engine-picks, .how-it-works { grid-template-columns: minmax(0, 1fr) }
+  .next-step { grid-template-columns: auto minmax(0, 1fr) }
+  .next-actions { grid-column: 1 / -1; justify-content: flex-start }
+}
+
+/* ---------- connect your application: one string, the rest tucked away */
+.conn-label { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--ink-2) }
+.conn-after:empty { display: none }
+.conn-string { align-items: center; padding: 6px 6px 6px 0; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--code-bg) }
+.conn-string pre { margin: 0; border: 0; background: transparent; padding: 8px 14px; white-space: pre-wrap; word-break: break-all }
+.conn-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0 }
+.conn-actions .icon-btn[aria-pressed="true"] { color: var(--accent-ink); background: var(--surface-3) }
+.conn-after { display: grid; gap: 8px }
+.conn-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; font-size: 13px; color: var(--muted) }
+.conn-note .icon { width: 15px; height: 15px }
+.conn-note a { color: var(--ink); font-weight: 600 }
+.conn-more { margin-top: 2px }
+.conn-options { display: grid; gap: 12px; margin-top: 12px }
+.conn-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 260px)); gap: 12px 16px }
+.conn-controls .control { display: grid; gap: 6px }
+.conn-controls select { width: 100% }
+.conn-example { display: grid; gap: 10px }
+
+/* ---------- settings: one row per setting, changed in place */
+.set-list { display: grid; margin: -4px 0 -6px }
+.set-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 1.4fr) auto; gap: 8px 20px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line) }
+.set-row:first-child { border-top: 0 }
+.set-label strong { display: block; font-size: 14px; font-weight: 650 }
+.set-label small { display: block; margin-top: 2px; font-size: 12px; color: var(--muted) }
+.set-value { min-width: 0; font-size: 14px; color: var(--ink); overflow-wrap: anywhere }
+.set-value .btn.ghost { margin-left: 4px }
+.set-action { display: flex; justify-content: flex-end; min-width: 84px }
+@media (max-width: 760px) {
+  .set-row { grid-template-columns: minmax(0, 1fr) auto }
+  .set-value { grid-column: 1; grid-row: 2 }
+  .set-action { grid-column: 2; grid-row: 1 / span 2 }
+}
+
+/* ---------- automated backups: coverage and one row per schedule */
+.coverage { display: grid; gap: 8px; padding: 2px 0 14px; border-bottom: 1px solid var(--line) }
+.coverage-text { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink-2) }
+.coverage-text .icon { width: 16px; height: 16px; color: var(--warn) }
+.coverage.full .coverage-text .icon { color: var(--good) }
+.coverage-bar { height: 6px; border-radius: 6px; background: var(--line); overflow: hidden }
+.coverage-bar span { display: block; height: 100%; border-radius: 6px; background: var(--meter-warn) }
+.coverage.full .coverage-bar span { background: var(--meter-ok) }
+.sched-list { display: grid; margin-bottom: -6px }
+.sched-row { display: grid; grid-template-columns: minmax(170px, 1.1fr) minmax(200px, 1.5fr) minmax(110px, .8fr) minmax(130px, .9fr) auto; gap: 8px 18px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line) }
+.sched-row:first-child { border-top: 0 }
+.sched-db { display: flex; align-items: center; gap: 12px; min-width: 0 }
+.sched-db a { color: var(--ink); text-decoration: none }
+.sched-db a:hover { text-decoration: underline }
+.sched-plan, .sched-when { display: grid; gap: 2px; min-width: 0 }
+.sched-plan strong { font-size: 14px; font-weight: 600 }
+.sched-plan small, .sched-when small { font-size: 12px; color: var(--muted) }
+.sched-when span { font-size: 14px }
+.sched-action { display: flex; justify-content: flex-end; min-width: 84px }
+.cell-actions .btn.icon-only { padding: 0 6px; min-width: 30px }
+@media (max-width: 900px) {
+  .sched-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto }
+  .sched-db { grid-column: 1 / 3 }
+  .sched-plan { grid-column: 1 / -1; grid-row: 2 }
+  .sched-action { grid-column: 3; grid-row: 1 }
+}
+.menu.floating { position: fixed; right: auto; bottom: auto; transform-origin: top center }
+td.actions .cell-actions { flex-wrap: nowrap; white-space: nowrap; justify-content: flex-end; align-items: center }

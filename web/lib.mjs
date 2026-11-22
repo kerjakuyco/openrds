@@ -188,15 +188,29 @@ export function menu(label, items, { cls = "", align = "end", labelIcon = null, 
   const wrap = h("div", { class: "menu-wrap" }, trigger, list);
   const entries = () => [...list.querySelectorAll("[role^=menuitem]:not([aria-disabled=true])")];
   const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
+  const away = () => close(false);
+  // Inside a scrolling table the menu would be clipped, so it floats over the
+  // page next to its button instead, above it when there is no room below.
+  function place() {
+    if (!wrap.closest(".table-wrap")) return false;
+    list.classList.add("floating");
+    const r = trigger.getBoundingClientRect(), w = list.offsetWidth, ht = list.offsetHeight;
+    const left = align === "end" ? r.right - w : r.left;
+    list.style.left = `${Math.max(8, Math.min(left, innerWidth - w - 8))}px`;
+    list.style.top = `${r.bottom + 6 + ht <= innerHeight ? r.bottom + 6 : Math.max(8, r.top - 6 - ht)}px`;
+    return true;
+  }
   function open() {
     list.hidden = false; trigger.setAttribute("aria-expanded", "true");
     document.addEventListener("pointerdown", outside);
+    if (place()) { addEventListener("scroll", away, true); addEventListener("resize", away); }
     entries()[0]?.focus();
   }
   function close(focus = true) {
     if (list.hidden) return;
     list.hidden = true; trigger.setAttribute("aria-expanded", "false");
     document.removeEventListener("pointerdown", outside);
+    removeEventListener("scroll", away, true); removeEventListener("resize", away);
     if (focus) trigger.focus();
   }
   trigger.addEventListener("click", () => list.hidden ? open() : close());
@@ -285,6 +299,16 @@ export function empty(symbol, title, hint, ...actions) {
 }
 
 // A sortable data table. columns: [{ key, label, value(row) -> node, sort(row) -> comparable, cls }]
+// A details panel in the style of a cloud console: columns, each with a
+// heading and stacked label/value pairs, separated by thin rules.
+export function infoPanel(title, columns, options = {}) {
+  const cols = columns.filter(Boolean);
+  return panel(title, { ...options, cls: `info-panel ${options.cls || ""}`.trim() },
+    h("div", { class: `info-cols n${cols.length}` }, cols.map(([heading, pairs]) => h("section", { class: "info-col" },
+      heading ? h("h3", null, heading) : null,
+      h("dl", null, pairs.filter(Boolean).map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, v ?? "—"))))))));
+}
+
 export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, rowClass, caption, id = null }) {
   const head = h("tr", null, columns.map(c => {
     const th = h("th", { scope: "col", class: c.cls || null });

@@ -35,6 +35,7 @@ export function steps() {
 
 export const remaining = () => steps().filter(s => !s.done).length;
 export const dismissed = () => flag("openrds-start-dismissed");
+export const hideStart = () => { setFlag("openrds-start-dismissed", true); window.dispatchEvent(new Event("openrds:start")); };
 
 function progress(list) {
   const done = list.filter(s => s.done).length;
@@ -50,18 +51,6 @@ function checklist(list, { compact = false } = {}) {
     h("span", { class: "check-mark", "aria-hidden": "true" }, s.done ? icon("check") : String(i + 1)),
     h("div", null, h("strong", null, s.title, s.done ? h("span", { class: "sr-only" }, " (done)") : null), !compact || !s.done ? h("p", { class: "muted" }, s.text) : null),
     !s.done && (operate || ["connect", "offsite", "account"].includes(s.id)) ? h("a", { class: "btn small", href: s.href }, s.action) : null)));
-}
-
-// The dashboard card, until every step is done or it is dismissed.
-export function startCard() {
-  const list = steps();
-  if (dismissed() || list.every(s => s.done)) return null;
-  const close = h("button", { type: "button", class: "icon-btn ghost", "aria-label": "Hide getting started", title: "Hide. Reopen it from the sidebar." }, icon("close"));
-  const card = panel("Get started with OpenRDS", { actions: [h("a", { class: "btn small", href: "#/getting-started" }, "Open the guide"), close],
-    description: "A few quick steps." }, progress(list), checklist(list, { compact: true }));
-  close.addEventListener("click", () => { setFlag("openrds-start-dismissed", true); card.remove(); window.dispatchEvent(new Event("openrds:start")); });
-  card.classList.add("start-card");
-  return card;
 }
 
 const CONCEPTS = [
