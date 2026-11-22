@@ -3,6 +3,7 @@ import { h, icon, api, modal, dataTable, empty, panel, bytes, when, ago, plural,
 import { state, subscribe, sync, instance, engine, can } from "./store.mjs";
 import { markDownloaded } from "./start.mjs";
 import { editBackups } from "./settings.mjs";
+import { storageCell } from "./storage.mjs";
 
 const kindLabel = (b) => b.final ? "Final snapshot" : b.kind === "automated" ? "Automated" : "Manual";
 const BADGE = { postgres: "PG", mysql: "My", valkey: "Vk" };
@@ -52,6 +53,7 @@ export function backupTable(list, { showInstance = true, showType = true, sort =
     showType && { key: "kind", label: "Type", sort: kindLabel, value: b => h("span", { class: `chip ${b.final ? "info" : b.kind === "automated" ? "neutral" : "good"}` }, kindLabel(b)) },
     { key: "size", label: "Size", sort: b => b.bytes, cls: "num", value: b => bytes(b.bytes) },
     { key: "expires", label: "Expires", sort: b => b.expiresAt ? Date.parse(b.expiresAt) : Infinity, value: b => b.expiresAt ? h("span", { title: when(b.expiresAt) }, ago(b.expiresAt)) : h("span", { class: "muted" }, "Never") },
+    state.storage?.enabled && { key: "offsite", label: "Storage", value: storageCell },
     can("operator") && { key: "actions", label: h("span", { class: "sr-only" }, "Actions"), cls: "actions", value: backupActions },
   ].filter(Boolean);
   return dataTable({ columns, rows: list, sortKey: sort.key, sortDir: sort.dir, onSort, caption: "Backups" });

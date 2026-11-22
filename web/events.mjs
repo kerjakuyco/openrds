@@ -34,7 +34,7 @@ export function eventsView() {
     count.textContent = shown.length === all.length ? String(all.length) : `${shown.length} of ${all.length}`;
     list.replaceChildren(shown.length ? dataTable({ caption: "Events", rows: shown.slice(0, ui.limit), columns: [
       { key: "at", label: "Time", value: e => h("div", { class: "stack" }, h("span", null, when(e.at)), h("small", null, ago(e.at))) },
-      { key: "name", label: "Resource", value: e => e.kind === "user" ? h("span", { class: "resource" }, icon("users"), e.name)
+      { key: "name", label: "Resource", value: e => e.kind ? h("span", { class: "resource" }, icon(e.kind === "user" ? "users" : "cloud"), e.name)
         : instance(e.name) ? h("a", { href: `#/databases/${e.name}` }, e.name) : h("span", null, e.name) },
       { key: "action", label: "Operation", value: e => e.action },
       { key: "result", label: "Outcome", value: e => resultChip(e.result) },

@@ -57,6 +57,8 @@ function recommendations(dbs, now) {
   const older = dbs.filter(d => isRunning(d) && !d.tlsReady);
   if (older.length) add("info", `${plural(older.length, "database")} ${older.length === 1 ? "needs" : "need"} a reboot`, `To turn on TLS and users: ${older.slice(0, 4).map(d => d.name).join(", ")}${older.length > 4 ? "…" : ""}.`,
     `#/databases/${older[0].name}/connectivity`, "Review");
+  if (dbs.length && state.storage && !state.storage.enabled) add("info", "Backups are only on this server", "Copy them to S3-compatible storage.", "#/backup-storage", "Set up");
+  if (state.storage?.failed) add("warn", `${plural(state.storage.failed, "backup")} not copied to storage`, state.storage.lastError || "Copies failed.", "#/backup-storage", "Review");
   const uncapped = dbs.filter(d => isLive(d) && !d.memoryMiB);
   if (uncapped.length) add("info", `${plural(uncapped.length, "database")} without a memory limit`, "One could slow the others.", uncapped.length === 1 ? `#/databases/${uncapped[0].name}/modify` : "#/databases", "Review");
   return out;
@@ -158,7 +160,8 @@ export function dashboardView() {
       h("div", { class: "res-list" },
         row("db", "Databases", `${up} of ${dbs.length} running`, "#/databases"),
         row("camera", "Snapshots", backups ? `${manual.length} · ${bytes(manual.reduce((n, b) => n + b.bytes, 0))}` : "—", "#/snapshots"),
-        row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/automated-backups")),
+        row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/automated-backups"),
+        row("cloud", "Backup storage", state.storage?.enabled ? `${state.storage.copied} copied` : "Off", "#/backup-storage")),
       host ? h("div", { class: "cap" },
         line("Memory limits", `${bytes(mem)} of ${bytes(host.memoryBytes)}`, mem / host.memoryBytes),
         line("CPU limits", `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`, cpu / host.cpus)) : null);
@@ -171,7 +174,7 @@ export function dashboardView() {
       events.length ? h("ul", { class: "activity" }, events.map(e => h("li", { class: e.result },
         icon(e.result === "completed" ? "ok" : e.result === "failed" ? "error" : "pending"),
         h("div", null, h("strong", null, e.action),
-          h("small", { class: "muted" }, e.kind === "user" ? e.name : h("a", { href: `#/databases/${e.name}` }, e.name),
+          h("small", { class: "muted" }, e.kind ? e.name : h("a", { href: `#/databases/${e.name}` }, e.name),
             e.actor && e.actor !== "system" && e.actor !== e.name ? ` · ${e.actor}` : "", ` · ${ago(e.at, now)}`)))))
         : empty("bell", "Nothing yet", "Actions show up here."));
 

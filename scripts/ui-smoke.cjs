@@ -203,6 +203,13 @@ async function run() {
     await page.getByRole("dialog").getByRole("heading", { name: "Automated backups" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
 
+    // Backup storage: providers fill in their usual settings.
+    await page.locator('nav#nav [data-nav="storage"]').click();
+    await page.getByRole("heading", { name: "Connect storage" }).waitFor();
+    await page.getByText("Cloudflare R2", { exact: true }).click();
+    assert.equal(await page.getByLabel("Region", { exact: true }).inputValue(), "auto");
+    assert.ok((await page.getByLabel("Endpoint URL").inputValue()).includes("r2.cloudflarestorage.com"));
+
     // Restore form is prefilled from the snapshot.
     await page.locator('nav#nav [data-nav="snapshots"]').click();
     const snapshot = page.locator("tbody tr").filter({ hasText: name });
@@ -267,7 +274,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, backup storage, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

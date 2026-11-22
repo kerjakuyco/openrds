@@ -16,7 +16,7 @@ export const subscribe = (fn) => { listeners.add(fn); return () => listeners.del
 const emit = (changed) => listeners.forEach(fn => fn(changed));
 
 let syncID = 0;
-const RESOURCES = ["instances", "backups", "activity", "host"];
+const RESOURCES = ["instances", "backups", "activity", "host", "storage"];
 
 export async function sync() {
   if (!state.signedIn) return;

@@ -960,3 +960,11 @@ td.actions { text-align: right; width: 1% }
 }
 .menu.floating { position: fixed; right: auto; bottom: auto; transform-origin: top center }
 td.actions .cell-actions { flex-wrap: nowrap; white-space: nowrap; justify-content: flex-end; align-items: center }
+
+/* ---------- backup storage */
+.cards.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)) }
+.provider-cards .card-body { padding: 12px 14px; min-height: 0 }
+.storage-form { display: grid; gap: 14px }
+.storage-form .form-grid { align-items: start }
+.storage-points { margin-bottom: 2px }
+@media (max-width: 900px) { .cards.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)) } }

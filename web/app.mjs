@@ -6,6 +6,7 @@ import { databasesView } from "./databases.mjs";
 import { instanceView } from "./instance.mjs";
 import { createView, modifyView, restoreView } from "./forms.mjs";
 import { backupsView } from "./backups.mjs";
+import { storageView } from "./storage.mjs";
 import { eventsView } from "./events.mjs";
 import { usersView } from "./users.mjs";
 import { accountView } from "./account.mjs";
@@ -43,6 +44,7 @@ const ROUTES = [
   [/^\/snapshots\/([a-f0-9]{32})\/restore$/, operatorOnly(m => restoreView(m[1]))],
   [/^\/snapshots$/, () => backupsView("manual")],
   [/^\/automated-backups$/, () => backupsView("automated")],
+  [/^\/backup-storage$/, () => storageView()],
   [/^\/events$/, () => { markEventsSeen(); return eventsView(); }],
   [/^\/users$/, () => usersView()],
   [/^\/account$/, () => accountView({ onIdentity })],

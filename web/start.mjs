@@ -23,8 +23,8 @@ export function steps() {
       text: "Copy a snippet for your language." },
     { id: "backups", title: "Turn on automated backups", done: dbs.length > 0 && !unprotected, href: unprotected ? `#/databases/${unprotected.name}/modify` : "#/automated-backups", action: "Set a schedule",
       text: "Daily backups, kept as long as you choose." },
-    { id: "offsite", title: "Keep an offsite copy", done: flag("openrds-downloaded"), href: "#/snapshots", action: "View snapshots",
-      text: "Download a backup in case the server is lost." },
+    { id: "offsite", title: "Keep an offsite copy", done: flag("openrds-downloaded") || Boolean(state.storage?.enabled), href: "#/backup-storage", action: "Set up storage",
+      text: "Copy backups to S3-compatible storage." },
   );
   if (can("admin") && !state.me?.token) {
     list.push({ id: "team", title: "Invite your team", done: (state.users?.length || 0) > 1, href: "#/users", action: "Invite people",
