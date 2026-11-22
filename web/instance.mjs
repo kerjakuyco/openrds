@@ -71,7 +71,7 @@ function monitoringTab(d) {
           u ? panel("Live readings", {}, keyValues([["CPU", u.CPUPerc], ["Memory", u.MemUsage], ["Network in / out", u.NetIO], ["Disk read / write", u.BlockIO]], "cols-4")) : null);
       } else notice.replaceChildren();
       const step = Math.max(v.interval, v.range / 240);
-      charts.forEach(c => c.update({ points: v.points, from: v.now - v.range, to: v.now, step }));
+      charts.forEach(c => c.update({ points: v.points || [], from: v.now - v.range, to: v.now, step }));
       note.textContent = `A reading every ${v.interval} seconds, averaged to fit the range. Updated ${clock(Date.now())}.`;
     } catch (err) {
       charts.forEach(c => c.setLoading(false));
@@ -95,7 +95,7 @@ function logsTab(d) {
       first = false;
     } catch (err) { output.textContent = err.message; }
   }
-  const follow = h("input", { type: "checkbox", id: nextId("follow") });
+  const follow = h("input", { type: "checkbox", class: "switch", role: "switch", id: nextId("follow") });
   follow.addEventListener("change", () => { clearInterval(timer); if (follow.checked) { load(); timer = setInterval(() => { if (!document.hidden) load(); }, 10000); } });
   const events = h("div", { class: "flush" });
   function renderEvents() {
@@ -187,7 +187,7 @@ function backupsTab(d) {
   }
   const toggle = btn(d.deletionProtection ? "Turn off" : "Turn on", () => modal({
     title: d.deletionProtection ? "Turn off deletion protection?" : "Turn on deletion protection?", kicker: d.name, confirm: d.deletionProtection ? "Turn off" : "Turn on",
-    body: h("p", { class: "muted" }, d.deletionProtection ? "Anyone with the admin token will be able to delete this database." : "Deleting the database is refused until protection is turned off again."),
+    body: h("p", { class: "muted" }, d.deletionProtection ? "Any operator or administrator will be able to delete this database." : "Deleting the database is refused until protection is turned off again."),
     run: async () => {
       await api(`instances/${d.name}/modify`, { method: "POST", body: { deletionProtection: !d.deletionProtection } });
       toast(`Deletion protection is ${d.deletionProtection ? "off" : "on"} for ${d.name}.`, "success");

@@ -283,7 +283,7 @@ function databaseForm({ mode, eng, initial, source }) {
     params.onChange(changed);
     paramSlot.replaceChildren(params.el);
   }
-  const protection = h("input", { type: "checkbox", checked: v.protection, id: nextId("protect") });
+  const protection = h("input", { type: "checkbox", class: "switch", role: "switch", checked: v.protection, id: nextId("protect") });
   protection.addEventListener("change", () => { v.protection = protection.checked; changed(); });
   const tags = tagEditor(v.tags);
   tags.onChange(changed);

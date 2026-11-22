@@ -8,11 +8,11 @@ const { chromium } = require("playwright-core");
 
 const compose = (...args) => execFileSync("docker", ["compose", ...args], { encoding: "utf8" }).trim();
 const base = `http://${compose("port", "openrds", "8080")}`;
-const token = compose("exec", "-T", "openrds", "cat", "/var/lib/openrds/admin-token");
+const token = compose("exec", "-T", "openrds", "openrds", "api-key");
 const name = `ui-${randomBytes(5).toString("hex")}`;
 const admin = { username: `ci-${randomBytes(4).toString("hex")}`, password: randomBytes(12).toString("hex") };
 const viewer = { username: `${admin.username}-v`, password: randomBytes(12).toString("hex") };
-async function api(resource, method = "GET", body) {
+async function api(resource, method = "GET", body) { // authenticated with the API key
   const res = await fetch(`${base}/api/${resource}`, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
   assert.ok(res.ok, `${method} ${resource} returned ${res.status}`);
   return res.status === 204 ? null : res.json();
@@ -30,26 +30,27 @@ async function run() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
     const errors = [];
     page.on("pageerror", err => errors.push(err.message));
-    // A fresh install asks for the admin token and an administrator account;
-    // an installation that already has accounts offers the token as a fallback.
+    // A fresh install asks for the administrator account straight away. If
+    // accounts already exist, sign in through an invite made with the API key.
     await page.goto(base);
-    const setup = page.getByRole("heading", { name: "Set up OpenRDS" });
+    const setup = page.getByRole("heading", { name: "Create your administrator account" });
     const signIn = page.getByRole("heading", { name: "Open your workspace" });
     await setup.or(signIn).waitFor();
+    assert.equal(await page.getByLabel("Admin token").count(), 0, "setup must not ask for a token");
     if (await setup.isVisible()) {
-      await page.getByLabel("Admin token", { exact: true }).fill(token);
       await page.getByLabel("Your name").fill("CI Administrator");
       await page.getByLabel("Username", { exact: true }).fill(admin.username);
       await page.getByLabel("Password", { exact: true }).fill(admin.password);
       await page.getByLabel("Confirm password", { exact: true }).fill(admin.password);
-      await page.getByRole("button", { name: "Create administrator account" }).click();
+      await page.getByRole("button", { name: "Create account and continue" }).click();
     } else {
-      admin.username = "";
-      await page.getByRole("button", { name: "use the admin token" }).click();
-      await page.getByLabel("Admin token", { exact: true }).fill(token);
-      await page.getByRole("button", { name: "Sign in" }).click();
+      const invite = await api("users", "POST", { username: admin.username, name: "CI Administrator", role: "admin" });
+      await page.goto(`${base}/#/invite/${invite.secret}`);
+      await page.getByLabel("Choose a password", { exact: true }).fill(admin.password);
+      await page.getByLabel("Confirm password", { exact: true }).fill(admin.password);
+      await page.getByRole("button", { name: "Create my account" }).click();
     }
-    await page.getByRole("heading", { name: "Dashboard", level: 1 }).waitFor();
+    await page.locator(".dash-hero h1").waitFor();
     await page.getByText("Get started with OpenRDS").waitFor();
 
     // Create through the sectioned form.
@@ -78,7 +79,7 @@ async function run() {
 
     // Connection guide: reveal the password, then switch to an app in a container on the VPS.
     await page.getByRole("button", { name: "Reveal password" }).click();
-    const envLine = await page.locator("pre").filter({ hasText: "DATABASE_URL=" }).innerText();
+    const envLine = await page.locator("pre").filter({ hasText: /DATABASE_URL=postgresql:\/\/openrds:[a-f0-9]{48}@/ }).innerText();
     assert.ok(/^DATABASE_URL=postgresql:\/\/openrds:[a-f0-9]{48}@127\.0\.0\.1:\d+\/app$/.test(envLine), `Expected a loopback URI with the password, got ${envLine}`);
     await page.getByRole("button", { name: "In a Docker container here" }).click();
     await page.locator("pre").filter({ hasText: `@openrds-${name}:5432/app` }).waitFor();
@@ -172,7 +173,7 @@ async function run() {
     await guest.getByLabel("Choose a password", { exact: true }).fill(viewer.password);
     await guest.getByLabel("Confirm password", { exact: true }).fill(viewer.password);
     await guest.getByRole("button", { name: "Create my account" }).click();
-    await guest.getByRole("heading", { name: "Dashboard", level: 1 }).waitFor();
+    await guest.locator(".dash-hero h1").waitFor();
     assert.equal(await guest.locator("#nav-create").isVisible(), false, "viewers cannot create databases");
     assert.equal(await guest.locator('nav#nav [data-nav="users"]').isVisible(), false, "viewers cannot manage users");
     await guest.goto(`${base}/#/databases/${name}`);

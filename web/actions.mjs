@@ -39,7 +39,7 @@ export function confirmDelete(d, { after = "#/databases" } = {}) {
     return;
   }
   const canSnapshot = isRunning(d);
-  const final = h("input", { type: "checkbox", checked: canSnapshot, disabled: !canSnapshot, id: nextId("final") });
+  const final = h("input", { type: "checkbox", class: "switch", role: "switch", checked: canSnapshot, disabled: !canSnapshot, id: nextId("final") });
   modal({
     title: `Delete ${d.name}?`, kicker: "Delete database", confirm: "Delete", tone: "danger", typed: d.name,
     body: [
