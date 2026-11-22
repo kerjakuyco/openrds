@@ -22,6 +22,8 @@ type instanceView struct {
 	User           string         `json:"user"`
 	Database       string         `json:"database"`
 	Applied        *runtimeConfig `json:"applied,omitempty"` // in use until a restart applies pending changes
+	Users          []dbUserView   `json:"users"`
+	TLSReady       bool           `json:"tlsReady"` // the container has certificates and managed credentials
 	LatestBackup   *time.Time     `json:"latestBackupAt,omitempty"`
 	NextBackup     *time.Time     `json:"nextBackupAt,omitempty"`
 	Live           *point         `json:"live,omitempty"`
@@ -60,7 +62,8 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		}
 		eng := engines[r.Engine]
 		v := instanceView{instanceSpec: r.instanceSpec, EngineLabel: eng.title, Status: state, Busy: m.busy[r.Name],
-			Created: r.Created, PendingRestore: r.PendingRestore, User: eng.user, Database: eng.database, Applied: r.Applied}
+			Created: r.Created, PendingRestore: r.PendingRestore, User: eng.user, Database: eng.database, Applied: r.Applied,
+			Users: r.userViews(), TLSReady: r.Layout >= currentLayout}
 		if v.BackupWindow == "" {
 			v.BackupWindow = defaultBackupWindow
 		}
@@ -105,7 +108,7 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	}
 	finish := m.track(ctx, r.Name, action)
 	defer func() { finish(err) }()
-	if err := m.start(ctx, r); err != nil {
+	if err := m.start(ctx, &r); err != nil {
 		return fail(502, "Provisioning did not finish. The instance was kept for inspection. "+err.Error())
 	}
 	if from != nil {
@@ -173,26 +176,43 @@ func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err err
 
 // Create or start the container from the stored configuration. Compose
 // recreates it when settings changed, which applies pending modifications.
-func (m *manager) start(ctx context.Context, r record) error {
+// The record is updated to what now runs.
+func (m *manager) start(ctx context.Context, r *record) error {
 	if r.DiskGiB > 0 {
 		if err := m.checkDiskRequest(ctx, r.DiskGiB); err != nil {
 			return err
 		}
-		if err := m.checkExistingVolume(ctx, r); err != nil {
+		if err := m.checkExistingVolume(ctx, *r); err != nil {
 			return err
 		}
-		if err := m.attachDisk(ctx, r); err != nil {
+		if err := m.attachDisk(ctx, *r); err != nil {
 			return err
 		}
 	}
-	if err := m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db"); err != nil {
+	if err := m.compose(ctx, *r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db"); err != nil {
 		return err
 	}
-	if r.Applied != nil {
-		r.Applied = nil
-		return writeJSON(m.recordPath(r.Name), r)
+	if r.Applied != nil || r.Layout != currentLayout {
+		r.Applied, r.Layout = nil, currentLayout
+		if err := writeJSON(m.recordPath(r.Name), *r); err != nil {
+			return err
+		}
+	}
+	if r.PublicAccess {
+		if err := m.applyGateway(ctx, *r, *r, true); err != nil {
+			return fmt.Errorf("the database is running, but its public port did not open: %w", err)
+		}
 	}
 	return nil
+}
+
+// Stop the database, and its gateway so nothing listens for it.
+func (m *manager) stop(ctx context.Context, r record) error {
+	services := []string{"db"}
+	if r.PublicAccess {
+		services = append(services, "gateway")
+	}
+	return m.compose(ctx, r, nil, nil, append([]string{"stop", "--timeout", "45"}, services...)...)
 }
 
 func live(state string) bool {
@@ -227,12 +247,12 @@ func (m *manager) change(ctx context.Context, name, action string) (err error) {
 	defer func() { finish(err) }()
 	switch action {
 	case "start":
-		err = m.start(ctx, r)
+		err = m.start(ctx, &r)
 	case "stop":
-		err = m.compose(ctx, r, nil, nil, "stop", "--timeout", "45", "db")
+		err = m.stop(ctx, r)
 	case "reboot":
-		if err = m.compose(ctx, r, nil, nil, "stop", "--timeout", "45", "db"); err == nil {
-			err = m.start(ctx, r)
+		if err = m.stop(ctx, r); err == nil {
+			err = m.start(ctx, &r)
 		}
 	}
 	if err != nil {
@@ -268,7 +288,7 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 		err = m.checkExistingVolume(ctx, r)
 	}
 	if err == nil {
-		err = m.compose(ctx, r, nil, nil, "down", "--volumes", "--timeout", "45")
+		err = m.compose(ctx, r, nil, nil, "down", "--volumes", "--remove-orphans", "--timeout", "45")
 	}
 	if err != nil {
 		return fail(502, "Delete database failed: "+err.Error())
@@ -279,6 +299,7 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 		}
 	}
 	m.history.forget(r.Project)
+	m.forgetTLS(r)
 	if err := os.Remove(m.overridePath(r)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -296,6 +317,11 @@ type modification struct {
 	DeletionProtection  *bool             `json:"deletionProtection"`
 	Tags                map[string]string `json:"tags"`
 	Parameters          map[string]string `json:"parameters"`
+	RequireTLS          *bool             `json:"requireTLS"`
+	PublicAccess        *bool             `json:"publicAccess"`
+	PublicPort          *int              `json:"publicPort"`
+	PublicHost          *string           `json:"publicHost"`
+	Firewall            *[]firewallRule   `json:"firewall"`
 	ApplyImmediately    bool              `json:"applyImmediately"`
 }
 
@@ -304,9 +330,11 @@ type modifyResult struct {
 	PendingRestart bool `json:"pendingRestart"`
 }
 
-// Settings that only need a record update apply at once. CPU, memory and
-// parameters need a new container: a running database restarts now when asked,
-// otherwise at its next restart. A port change always applies immediately, as in RDS.
+// Settings that only need a record update apply at once. CPU, memory,
+// parameters, TLS and the public address (named in the certificate) need a
+// new container: a running database restarts now when asked, otherwise at its
+// next restart. A port change always applies immediately, as in RDS. Public
+// access and firewall rules apply at once through the gateway.
 func (m *manager) modify(ctx context.Context, name string, mod modification) (result modifyResult, err error) {
 	r, release, err := m.begin(name, nil, false)
 	if err != nil {
@@ -342,6 +370,25 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	if mod.Parameters != nil {
 		next.Parameters = mod.Parameters
 	}
+	if mod.RequireTLS != nil {
+		next.RequireTLS = *mod.RequireTLS
+	}
+	if mod.PublicAccess != nil {
+		next.PublicAccess = *mod.PublicAccess
+	}
+	if mod.PublicPort != nil {
+		next.PublicPort = *mod.PublicPort
+	}
+	if mod.PublicHost != nil {
+		next.PublicHost = strings.TrimSpace(*mod.PublicHost)
+	}
+	if mod.Firewall != nil {
+		rules, err := normalizeFirewall(*mod.Firewall)
+		if err != nil {
+			return result, err
+		}
+		next.Firewall = rules
+	}
 	if len(next.Tags) == 0 {
 		next.Tags = nil
 	}
@@ -351,7 +398,17 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	if next.BackupWindow == "" {
 		next.BackupWindow = defaultBackupWindow
 	}
+	all, err := m.records()
+	if err != nil {
+		return result, err
+	}
+	if next.PublicAccess && next.PublicPort == 0 {
+		next.PublicPort = suggestPublicPort(all, next.instanceSpec)
+	}
 	if err := checkSpec(next.instanceSpec); err != nil {
+		return result, err
+	}
+	if err := checkPorts(all, next.instanceSpec); err != nil {
 		return result, err
 	}
 	previous := r.instanceSpec
@@ -363,27 +420,22 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	if bytes.Equal(before, after) {
 		return result, nil
 	}
-	if next.Port != r.Port {
-		all, err := m.records()
-		if err != nil {
-			return result, err
-		}
-		for _, other := range all {
-			if other.Name != name && other.Port == next.Port {
-				return result, fail(409, fmt.Sprintf("Port %d is reserved by %s.", other.Port, other.Name))
-			}
-		}
-	}
 	recreate := !next.runtime().equal(r.runtime()) || next.Port != r.Port
+	gatewayChanged := next.PublicAccess != r.PublicAccess ||
+		next.PublicAccess && (next.PublicPort != r.PublicPort || allowList(next.Firewall) != allowList(r.Firewall))
 	running := false
-	if recreate {
+	if recreate || gatewayChanged {
 		states, err := m.states(ctx)
 		if err != nil {
 			return result, fail(503, "Cannot read database status: "+err.Error())
 		}
 		running = live(states[r.Project])
 	}
-	finish := m.track(ctx, name, "Modify database")
+	action := "Modify database"
+	if !recreate && gatewayChanged {
+		action = "Change network access"
+	}
+	finish := m.track(ctx, name, action)
 	defer func() { finish(err) }()
 	switch {
 	case running && (mod.ApplyImmediately || next.Port != r.Port):
@@ -391,10 +443,13 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 		if err = m.save(next); err != nil {
 			return result, err
 		}
-		if err = m.start(ctx, next); err != nil {
+		if err = m.start(ctx, &next); err != nil {
 			return result, m.rollback(ctx, r, err)
 		}
 		result.Restarted = true
+		if next.PublicAccess {
+			gatewayChanged = false // start brought the gateway up with the new settings
+		}
 	case running:
 		if next.Applied == nil {
 			current := r.runtime()
@@ -412,12 +467,35 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 			return result, err
 		}
 	}
+	if gatewayChanged {
+		if err = m.applyGateway(ctx, r, next, running); err != nil {
+			// Put the previous network settings back, so the record matches what runs.
+			back := next
+			back.PublicAccess, back.PublicPort, back.Firewall = r.PublicAccess, r.PublicPort, r.Firewall
+			if saveErr := m.save(back); saveErr == nil {
+				m.applyGateway(ctx, next, back, running)
+			}
+			return result, fail(502, "Network access did not change: the public port could not be opened. "+err.Error())
+		}
+	}
 	if next.BackupRetentionDays != r.BackupRetentionDays {
 		if err = m.retain(next); err != nil {
 			return result, err
 		}
 	}
 	return result, nil
+}
+
+// The engine's usual port when it is free, otherwise the next free one.
+func suggestPublicPort(all []record, s instanceSpec) int {
+	for port := engines[s.Engine].port; port < 65535; port++ {
+		probe := s
+		probe.PublicAccess, probe.PublicPort = true, port
+		if port != s.Port && checkPorts(all, probe) == nil {
+			return port
+		}
+	}
+	return 0
 }
 
 // Restore the previous configuration after a change that did not start, and
@@ -427,7 +505,7 @@ func (m *manager) rollback(ctx context.Context, previous record, cause error) er
 	if err := writeJSON(m.recordPath(previous.Name), previous); err != nil {
 		return fail(502, "The change did not apply and the previous settings could not be saved. "+cause.Error())
 	}
-	if err := m.start(ctx, previous); err != nil {
+	if err := m.start(ctx, &previous); err != nil {
 		return fail(502, "The change did not apply, and the database did not restart with its previous settings. Check its logs. "+cause.Error())
 	}
 	return fail(502, "The change did not apply, so the database is running with its previous settings again. "+cause.Error())
@@ -497,7 +575,11 @@ func (m *manager) logs(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	text := string(out.data)
-	for _, secret := range []string{r.Password, r.RootPassword} {
+	secrets := []string{r.Password, r.RootPassword}
+	for _, u := range r.Users {
+		secrets = append(secrets, u.Password)
+	}
+	for _, secret := range secrets {
 		if secret != "" {
 			text = strings.ReplaceAll(text, secret, "[redacted]")
 		}

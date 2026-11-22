@@ -1,0 +1,24 @@
+# Public access: forwards connections from allowed addresses to the database.
+services:
+  gateway:
+    image: ${OPENRDS_GATEWAY_IMAGE:?missing gateway image}
+    pull_policy: never
+    command: ["gateway"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    pids_limit: 512
+    labels:
+      io.openrds.gateway: "true"
+    environment:
+      OPENRDS_GATEWAY_TARGET: ${OPENRDS_GATEWAY_TARGET:?missing gateway target}
+      OPENRDS_GATEWAY_ALLOW: ${OPENRDS_GATEWAY_ALLOW:-}
+    ports:
+      - "0.0.0.0:${OPENRDS_GATEWAY_PUBLISH:?missing public port}:7000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -102,6 +102,9 @@ func handler(m *manager, a auth) http.Handler {
 		if err := decode(w, r, &spec); err != nil {
 			return err
 		}
+		if err := m.prepareNetwork(&spec); err != nil {
+			return err
+		}
 		if err := m.provision(r.Context(), spec, nil); err != nil {
 			return err
 		}
@@ -156,19 +159,88 @@ func handler(m *manager, a auth) http.Handler {
 		return nil
 	})
 	add("GET /api/instances/{name}/connection", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
-		db, err := m.record(r.PathValue("name"))
+		db, login, password, err := m.credentials(r.Context(), r.PathValue("name"), r.URL.Query().Get("user"))
 		if err != nil {
 			return err
 		}
 		eng := engines[db.Engine]
-		u := url.URL{Scheme: eng.scheme, User: url.UserPassword(eng.user, db.Password),
+		scheme := eng.scheme
+		if db.Engine == "valkey" && db.RequireTLS {
+			scheme = "rediss"
+		}
+		u := url.URL{Scheme: scheme, User: url.UserPassword(login, password),
 			Host: "127.0.0.1:" + strconv.Itoa(db.Port), Path: "/" + eng.database}
 		internal := u
 		alias := "openrds-" + db.Name
 		internal.Host = alias + ":" + strconv.Itoa(engines[db.Engine].port)
-		sendJSON(w, 200, map[string]any{"host": "127.0.0.1", "port": db.Port, "user": eng.user, "database": eng.database, "password": db.Password, "uri": u.String(),
+		sendJSON(w, 200, map[string]any{"host": "127.0.0.1", "port": db.Port, "user": login, "database": eng.database, "password": password, "uri": u.String(),
 			"network": db.Project + "_default", "networkHost": alias, "networkURI": internal.String()})
 		return nil
+	})
+	add("POST /api/instances/{name}/password", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		var body struct {
+			Password string `json:"password"`
+		}
+		if err := decode(w, r, &body); err != nil {
+			return err
+		}
+		password, err := m.changePassword(r.Context(), r.PathValue("name"), "", body.Password)
+		if err == nil {
+			sendJSON(w, 200, map[string]string{"password": password})
+		}
+		return err
+	})
+	add("POST /api/instances/{name}/users", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		var body struct {
+			Name     string `json:"name"`
+			Access   string `json:"access"`
+			Password string `json:"password"`
+		}
+		if err := decode(w, r, &body); err != nil {
+			return err
+		}
+		password, err := m.createUser(r.Context(), r.PathValue("name"), body.Name, body.Access, body.Password)
+		if err == nil {
+			sendJSON(w, 201, map[string]string{"name": body.Name, "password": password})
+		}
+		return err
+	})
+	add("POST /api/instances/{name}/users/{user}/password", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		var body struct {
+			Password string `json:"password"`
+		}
+		if err := decode(w, r, &body); err != nil {
+			return err
+		}
+		password, err := m.changePassword(r.Context(), r.PathValue("name"), r.PathValue("user"), body.Password)
+		if err == nil {
+			sendJSON(w, 200, map[string]string{"password": password})
+		}
+		return err
+	})
+	add("DELETE /api/instances/{name}/users/{user}", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		if err := m.deleteUser(r.Context(), r.PathValue("name"), r.PathValue("user")); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
+	add("GET /api/instances/{name}/connections", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		items, err := m.connectionAttempts(r.Context(), r.PathValue("name"))
+		if err == nil {
+			sendJSON(w, 200, items)
+		}
+		return err
+	})
+	add("GET /api/tls/ca.pem", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
+		ca, err := m.authority()
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Header().Set("Content-Disposition", `attachment; filename="openrds-ca.pem"`)
+		_, err = w.Write(ca.pem)
+		return err
 	})
 	add("GET /api/instances/{name}/metrics", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
 		u, err := m.metrics(r.Context(), r.PathValue("name"))
@@ -260,6 +332,9 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		if spec.Parameters == nil {
 			spec.Parameters = maps.Clone(b.Parameters) // omitted or null inherits; {} restores defaults
+		}
+		if err := m.prepareNetwork(&spec); err != nil {
+			return err
 		}
 		if err := m.provision(r.Context(), spec, &b); err != nil {
 			return err

@@ -113,17 +113,19 @@ func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
 				if args[0] != "compose" || filepath.Base(args[4]) != key+".yaml" {
 					return fmt.Errorf("wrong engine template")
 				}
-				switch args[5] {
+				switch verb := composeVerb(args); verb {
 				case "exec", "run":
+					if out != nil { // a dump; Valkey's reads the password first
+						_, err := out.Write(dump)
+						return err
+					}
 					if in != nil {
 						var err error
 						restored, err = io.ReadAll(in)
 						return err
 					}
-					_, err := out.Write(dump)
-					return err
 				case "down", "stop", "up":
-					if args[5] == "down" {
+					if verb == "down" {
 						deleted = args[2]
 					}
 				}
@@ -163,10 +165,10 @@ func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
 func TestFailureKeepsRecoverableState(t *testing.T) {
 	var failure string
 	m := testManager(t, func(_ context.Context, _ []string, _ io.Reader, out io.Writer, args ...string) error {
-		if args[5] == "exec" && out != nil {
+		if args[0] == "compose" && composeVerb(args) == "exec" && out != nil {
 			fmt.Fprint(out, "dump data")
 		}
-		if args[5] == failure {
+		if args[0] == "compose" && composeVerb(args) == failure {
 			return errors.New("engine unavailable")
 		}
 		return nil

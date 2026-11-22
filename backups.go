@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -109,7 +111,11 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 		return b, err
 	}
 	args := append([]string{"exec", "-T", "db"}, engines[r.Engine].dump...)
-	err = m.compose(ctx, r, nil, f, args...)
+	var input io.Reader
+	if engines[r.Engine].dumpAuth {
+		input = strings.NewReader(r.Password + "\n")
+	}
+	err = m.compose(ctx, r, input, f, args...)
 	if err == nil {
 		err = f.Sync()
 	}

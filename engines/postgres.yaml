@@ -15,6 +15,11 @@ services:
       - "127.0.0.1:${OPENRDS_DB_PORT:?missing host port}:5432"
     volumes:
       - data:/var/lib/postgresql/data
+    secrets:
+      - { source: tls_cert, target: /run/openrds/server.crt, uid: "70", gid: "70", mode: 0444 }
+      - { source: tls_key, target: /run/openrds/server.key, uid: "70", gid: "70", mode: 0400 }
+      - { source: tls_ca, target: /run/openrds/ca.crt, mode: 0444 }
+      - { source: pg_hba, target: /run/openrds/pg_hba.conf, uid: "70", gid: "70", mode: 0400 }
     networks:
       default:
         aliases: ["${OPENRDS_DB_ALIAS:?missing instance alias}"]
@@ -32,3 +37,14 @@ services:
 
 volumes:
   data:
+
+# Files OpenRDS generates, copied into the container by Compose.
+secrets:
+  tls_cert:
+    environment: OPENRDS_TLS_CERT
+  tls_key:
+    environment: OPENRDS_TLS_KEY
+  tls_ca:
+    environment: OPENRDS_TLS_CA
+  pg_hba:
+    environment: OPENRDS_PG_HBA

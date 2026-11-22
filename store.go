@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,11 @@ type instanceSpec struct {
 	DeletionProtection  bool              `json:"deletionProtection"`
 	Tags                map[string]string `json:"tags,omitempty"`
 	Parameters          map[string]string `json:"parameters,omitempty"`
+	RequireTLS          bool              `json:"requireTLS"`
+	PublicAccess        bool              `json:"publicAccess"`
+	PublicPort          int               `json:"publicPort,omitempty"`
+	PublicHost          string            `json:"publicHost,omitempty"`
+	Firewall            []firewallRule    `json:"firewall,omitempty"`
 }
 
 // The container settings that change only when Compose recreates the database.
@@ -55,15 +61,23 @@ type runtimeConfig struct {
 	CPUs       float64           `json:"cpus"`
 	MemoryMiB  int               `json:"memoryMiB"`
 	Parameters map[string]string `json:"parameters,omitempty"`
+	RequireTLS bool              `json:"requireTLS,omitempty"`
+	PublicHost string            `json:"publicHost,omitempty"` // named in the TLS certificate
 }
 
 func (s instanceSpec) runtime() runtimeConfig {
-	return runtimeConfig{s.CPUs, s.MemoryMiB, s.Parameters}
+	return runtimeConfig{s.CPUs, s.MemoryMiB, s.Parameters, s.RequireTLS, s.PublicHost}
 }
 
 func (c runtimeConfig) equal(o runtimeConfig) bool {
-	return c.CPUs == o.CPUs && c.MemoryMiB == o.MemoryMiB && maps.Equal(c.Parameters, o.Parameters)
+	return c.CPUs == o.CPUs && c.MemoryMiB == o.MemoryMiB && maps.Equal(c.Parameters, o.Parameters) &&
+		c.RequireTLS == o.RequireTLS && c.PublicHost == o.PublicHost
 }
+
+// Containers started by this version have TLS certificates, the managed
+// pg_hba.conf, Valkey users from a file and health checks that do not depend
+// on the rotating password. Older containers get them at their next restart.
+const currentLayout = 1
 
 // Never serialize record in API responses: it contains database credentials.
 type record struct {
@@ -76,6 +90,8 @@ type record struct {
 	// While a running database waits for a restart to apply changes, the
 	// settings its container actually uses.
 	Applied *runtimeConfig `json:"applied,omitempty"`
+	Users   []dbUser       `json:"users,omitempty"`
+	Layout  int            `json:"layout,omitempty"` // of the running container; see currentLayout
 }
 
 type manager struct {
@@ -90,10 +106,13 @@ type manager struct {
 	backupMu   sync.Mutex
 	quotaCache quotaCache
 	history    history
+	tlsMu      sync.Mutex
+	ca         *authority
+	gateway    string // image for public-access gateways, once found
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
-	for _, sub := range []string{"instances", "backups", "compose"} {
+	for _, sub := range []string{"instances", "backups", "compose", "tls"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return nil, err
 		}
@@ -213,7 +232,34 @@ func checkSpec(s instanceSpec) error {
 			return fail(400, "Tag keys have 1–128 characters and values up to 256: letters, digits, spaces and _ . : / = + - @.")
 		}
 	}
+	if err := checkNetwork(s); err != nil {
+		return err
+	}
 	return checkParameters(s.Engine, s.MemoryMiB, s.Parameters)
+}
+
+// The host ports an instance holds: its loopback port, and its public port
+// while public access is on.
+func (s instanceSpec) hostPorts() []int {
+	if s.PublicAccess {
+		return []int{s.Port, s.PublicPort}
+	}
+	return []int{s.Port}
+}
+
+// Refuse host ports held by another instance or by the console itself.
+func checkPorts(all []record, s instanceSpec) error {
+	for _, port := range s.hostPorts() {
+		if port == consolePort() {
+			return fail(409, fmt.Sprintf("Port %d is used by the OpenRDS console.", port))
+		}
+		for _, other := range all {
+			if other.Name != s.Name && slices.Contains(other.hostPorts(), port) {
+				return fail(409, fmt.Sprintf("Port %d is reserved by %s.", port, other.Name))
+			}
+		}
+	}
+	return nil
 }
 
 // Reserve a name for one operation; reserve a port and persist credentials
@@ -243,9 +289,10 @@ func (m *manager) begin(name string, create *instanceSpec, restoring bool) (reco
 			if other.Name == name {
 				return r, nil, fail(409, "That database name is already in use.")
 			}
-			if other.Port == create.Port {
-				return r, nil, fail(409, fmt.Sprintf("Port %d is reserved by %s.", other.Port, other.Name))
-			}
+		}
+		create.Name = name
+		if err := checkPorts(all, *create); err != nil {
+			return r, nil, err
 		}
 		r = record{instanceSpec: *create, Project: "openrds-db-" + randomHex(16),
 			Password: randomHex(24), Created: time.Now().UTC(), PendingRestore: restoring}
@@ -278,10 +325,8 @@ func (m *manager) save(r record) error {
 	if err != nil {
 		return err
 	}
-	for _, other := range all {
-		if other.Name != r.Name && other.Port == r.Port {
-			return fail(409, fmt.Sprintf("Port %d is reserved by %s.", other.Port, other.Name))
-		}
+	if err := checkPorts(all, r.instanceSpec); err != nil {
+		return err
 	}
 	return writeJSON(m.recordPath(r.Name), r)
 }

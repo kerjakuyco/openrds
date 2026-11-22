@@ -16,11 +16,15 @@ services:
       - "127.0.0.1:${OPENRDS_DB_PORT:?missing host port}:3306"
     volumes:
       - data:/var/lib/mysql
+    secrets:
+      - { source: tls_cert, target: /run/openrds/server.crt, uid: "999", gid: "999", mode: 0444 }
+      - { source: tls_key, target: /run/openrds/server.key, uid: "999", gid: "999", mode: 0400 }
+      - { source: tls_ca, target: /run/openrds/ca.crt, mode: 0444 }
     networks:
       default:
         aliases: ["${OPENRDS_DB_ALIAS:?missing instance alias}"]
     healthcheck:
-      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_PASSWORD}\" mysql --protocol=tcp -h 127.0.0.1 -u openrds -D app -Nse 'SELECT 1'"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysql --protocol=tcp -h 127.0.0.1 -u root -D app -Nse 'SELECT 1'"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -33,3 +37,12 @@ services:
 
 volumes:
   data:
+
+# Files OpenRDS generates, copied into the container by Compose.
+secrets:
+  tls_cert:
+    environment: OPENRDS_TLS_CERT
+  tls_key:
+    environment: OPENRDS_TLS_KEY
+  tls_ca:
+    environment: OPENRDS_TLS_CA

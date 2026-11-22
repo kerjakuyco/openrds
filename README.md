@@ -27,19 +27,30 @@ Then visit **http://127.0.0.1:8080** and create your administrator account; ther
 ## Create and connect
 
 1. Choose **Databases → Create database**. Pick PostgreSQL 17, MySQL 8.4 LTS, or Valkey 9.1, and a template: **Production** (daily backups kept 7 days, deletion protection, 2 vCPU · 4 GiB) or **Dev and test** (backups kept 1 day, 0.5 vCPU · 512 MiB). Then adjust the size, data volume limit, host port, backup window, engine parameters and tags. The summary shows how the CPU and memory limits add up against the host before you create anything.
-2. Open the database. Its **Connectivity & security** tab has a connection guide: choose where your application runs (on the VPS, in a container on the VPS, or on your computer) and its language or framework, such as Node.js, Python, Go, Prisma, Django, Laravel, Java or the command-line client. It shows the steps in order: the SSH tunnel or Docker network command when one is needed, the environment variables, and the code that reads them. Operators reveal the password into the snippets; viewers see a placeholder.
+2. Open the database. Its **Connectivity & security** tab has a connection guide: choose where your application runs (on the VPS, in a container on the VPS, on your computer, or over the internet when public access is on), which database user it signs in as, and its language or framework, such as Node.js, Python, Go, Prisma, Django, Laravel, Java or the command-line client. It shows the steps in order: the SSH tunnel or Docker network command when one is needed, the environment variables, and the code that reads them. Operators reveal the password into the snippets; viewers see a placeholder.
 3. PostgreSQL and MySQL create the database `app` and user `openrds`. Valkey uses Redis database `0` and the `default` user; any Redis client can connect.
 
 Each instance gets a separate Compose project, network, volume, and random password. Stop/Start and Reboot preserve the volume. Delete removes that instance’s volume; snapshots and automated backups have their own lifecycle.
 
-The initial PostgreSQL role administers its isolated cluster; the MySQL user has privileges on `app`. You can create narrower roles for application workloads using your usual SQL client. Valkey stores an RDB snapshot and writes it again on a clean shutdown. If you set a memory limit, Valkey’s `maxmemory` is 75% of that limit and, unless you choose another `maxmemory-policy`, it refuses writes instead of evicting keys.
+The initial PostgreSQL role administers its isolated cluster; the MySQL user has privileges on `app`. Give applications narrower users from the **Database users** tab (see below). Valkey stores an RDB snapshot and writes it again on a clean shutdown. If you set a memory limit, Valkey’s `maxmemory` is 75% of that limit and, unless you choose another `maxmemory-policy`, it refuses writes instead of evicting keys.
+
+## Access and security
+
+Every database starts private: its port is published on the VPS loopback interface only, so it is reachable from the VPS, from its Docker containers and through SSH tunnels, and nothing listens publicly.
+
+- **Database users.** The **Database users** tab lists the owner (`openrds`, or `default` for Valkey) and extra users. Create one per application with **Read and write** (change rows or keys, no schema or administrative commands) or **Read only** access. PostgreSQL users get the built-in `pg_read_all_data` and `pg_write_all_data` roles; MySQL users get `SELECT, SHOW VIEW` (plus `INSERT, UPDATE, DELETE`) on `app`; Valkey users get ACL rules that also block dangerous commands such as `FLUSHALL`, `KEYS` and `CONFIG`. Deleting a user ends its open sessions. Snapshots carry data, not users.
+- **Change passwords.** Change the owner's or a user's password at any time, generated (recommended) or your own (16–128 letters, digits and `. _ ~ -`). The old password stops working at once. Passwords travel to the engine on stdin, never on a command line; PostgreSQL receives only a SCRAM-SHA-256 verifier, and Valkey only SHA-256 digests. Every password reveal and change is recorded in **Events**.
+- **Encryption in transit.** Each installation has its own certificate authority, which signs a certificate for every database, valid for `localhost`, `127.0.0.1`, the container name and the public address. Download the CA certificate from the Connectivity tab and use `sslmode=verify-full` (PostgreSQL), `ssl-mode=VERIFY_IDENTITY` (MySQL) or `rediss://` (Valkey). TLS is always available for PostgreSQL and MySQL; **Require TLS** under Modify refuses plain-text connections. Valkey serves either TLS or plain text on a port, so requiring TLS switches it to TLS only.
+- **Public access and firewall.** Under **Network access**, turn on public access to open a second port on every interface, choose the sources allowed to connect (addresses or ranges such as `203.0.113.7` or `203.0.113.0/24`), and set the public address clients use. A small gateway container, built from the OpenRDS image, forwards only allowed sources; Docker publishes ports ahead of host firewalls such as `ufw`, so these rules are what protects the port. **Recent connection attempts** lists who tried, with one-click **Allow** for a blocked address. Rule changes apply at once. Turn on Require TLS before opening a database to the internet; the dashboard warns when a public database allows everyone or does not require TLS.
+
+Databases created by earlier versions get TLS, password changes and database users after one reboot.
 
 ## Modify, reboot and protect
 
-**Modify** changes the CPU and memory limits, host port, backup retention and window, engine parameters, deletion protection and tags. It ends with a summary of modifications showing each attribute’s current and new value:
+**Modify** changes the CPU and memory limits, host port, backup retention and window, engine parameters, deletion protection, Require TLS and tags. It ends with a summary of modifications showing each attribute’s current and new value:
 
 - Retention, window, deletion protection and tags apply at once, without a restart.
-- CPU, memory and engine parameters need a new container. For a running database, choose **Apply during the next restart** (Reboot, or Stop and Start) or **Apply immediately**, which restarts it now. A pending change shows on the database page until it applies; a stopped database applies changes when it starts.
+- CPU, memory, engine parameters and Require TLS need a new container. For a running database, choose **Apply during the next restart** (Reboot, or Stop and Start) or **Apply immediately**, which restarts it now. A pending change shows on the database page until it applies; a stopped database applies changes when it starts.
 - A port change always applies immediately and restarts a running database, as in RDS.
 
 If an immediate change cannot start, for example because the new port is used by another program on the VPS, OpenRDS restores the previous settings, restarts the database with them, and reports why.
@@ -76,7 +87,7 @@ Everyone signs in with their own username and password. Each account has a role:
 | Role | Can |
 | --- | --- |
 | **Admin** | Everything, including inviting people and changing roles. |
-| **Operator** | Create, modify, start, stop and delete databases; take, restore, download and delete backups; reveal database passwords. |
+| **Operator** | Create, modify, start, stop and delete databases; take, restore, download and delete backups; manage database users, passwords and network access; reveal database passwords. |
 | **Viewer** | Read-only: databases, monitoring, logs, backups and events. No passwords, no backup downloads, no changes. |
 
 The server enforces the role on every API request; the console hides what a role cannot do. An admin invites someone from **Users**. OpenRDS returns a one-time link that expires after 72 hours, and the person chooses their own password with it, so the admin never handles it. **Reset password** signs the account out everywhere and issues a new link. Disabling an account signs it out at once. You cannot change your own role, disable or delete yourself, or leave OpenRDS without an active administrator.
@@ -108,7 +119,7 @@ The sidebar groups the console into databases, backups, activity and administrat
 
 ### Where state lives
 
-- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, generated Compose overrides for engine parameters, activity history, metric history, and completed backups.
+- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, the TLS certificate authority and database certificates (`tls/`), generated Compose overrides, activity history, metric history, and completed backups.
 - Each database has its own named data volume. Its internal Compose project name is in `instances/<name>.json` in the control volume. Treat this metadata as secret.
 - The control plane uses the host Docker socket to operate these projects and read their statistics; anyone with shell access to the server, the API key or an administrator account is a trusted operator. This release manages one host.
 - To update: run the install command again, or pull your chosen revision and run `sh install.sh`. Rebuilding the dashboard preserves existing database containers, volumes, and credentials. Existing databases keep automated backups off until you set a retention period. `docker compose down` in the checkout stops the dashboard; **`down -v` also deletes the control volume**.
@@ -135,11 +146,15 @@ Only `name`, `engine` and `port` are required. Omitted limits mean unlimited, an
 | GET / POST | `/instances` |
 | GET | `/engines` — engines, suggested ports, memory minimums and adjustable parameters |
 | GET | `/host` — Docker host name, CPU count, memory capacity, engine version and `volumeQuota.state` (`supported`, `unsupported` or `unknown`) |
-| GET | `/instances/{name}/connection`, `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
+| GET | `/instances/{name}/connection` (add `?user=` for a database user; each call is recorded), `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
 | GET | `/instances/{name}/history?range=1h` — readings for `1h`, `3h`, `6h`, `12h` or `24h`, averaged to about 240 points |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
-| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `backupRetentionDays`, `backupWindow`, `deletionProtection`, `tags`, `parameters`, plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
+| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `backupRetentionDays`, `backupWindow`, `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
 | POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
+| POST | `/instances/{name}/password` — change the owner password: `{"password": ""}` generates one; returns `{"password"}` |
+| POST | `/instances/{name}/users` — `{"name","access","password"}` with `access` `read-only` or `read-write`; returns `{"name","password"}` |
+| POST / DELETE | `/instances/{name}/users/{user}/password` (change), `/instances/{name}/users/{user}` (delete and end its sessions) |
+| GET | `/instances/{name}/connections` — recent sources that tried the public port; `/tls/ca.pem` — the CA certificate |
 | DELETE | `/instances/{name}` — add `?finalSnapshot=true` to take a final snapshot first; refused while deletion protection is on |
 | GET | `/backups`, `/backups/{id}/download`, `/activity` |
 | POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine, data-volume limit and parameters are inherited. Set `diskGiB` or `parameters` to override them. |

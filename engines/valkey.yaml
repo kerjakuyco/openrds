@@ -7,26 +7,23 @@ services:
     labels:
       io.openrds.database: "true"
     environment:
-      VALKEY_PASSWORD: ${OPENRDS_DB_PASSWORD:?missing database password}
-    command:
-      - valkey-server
-      - --requirepass
-      - ${OPENRDS_DB_PASSWORD:?missing database password}
-      - --dir
-      - /data
-      - --maxmemory
-      - ${OPENRDS_VALKEY_MAXMEMORY:-0}
-      - --maxmemory-policy
-      - noeviction
+      OPENRDS_CLI_FLAGS: ${OPENRDS_VALKEY_CLI_FLAGS:-}
+    # OpenRDS replaces the command; users come from the injected users.conf.
+    command: ["valkey-server", "--include", "/run/openrds/users.conf", "--dir", "/data"]
     ports:
       - "127.0.0.1:${OPENRDS_DB_PORT:?missing host port}:6379"
     volumes:
       - data:/data
+    secrets:
+      - { source: tls_cert, target: /run/openrds/server.crt, uid: "999", gid: "1000", mode: 0444 }
+      - { source: tls_key, target: /run/openrds/server.key, uid: "999", gid: "1000", mode: 0400 }
+      - { source: tls_ca, target: /run/openrds/ca.crt, mode: 0444 }
+      - { source: valkey_users, target: /run/openrds/users.conf, uid: "999", gid: "1000", mode: 0400 }
     networks:
       default:
         aliases: ["${OPENRDS_DB_ALIAS:?missing instance alias}"]
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$VALKEY_PASSWORD\" valkey-cli ping | grep -q PONG"]
+      test: ["CMD-SHELL", "valkey-cli $${OPENRDS_CLI_FLAGS} ping 2>&1 | grep -qE 'PONG|NOAUTH'"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -39,3 +36,14 @@ services:
 
 volumes:
   data:
+
+# Files OpenRDS generates, copied into the container by Compose.
+secrets:
+  tls_cert:
+    environment: OPENRDS_TLS_CERT
+  tls_key:
+    environment: OPENRDS_TLS_KEY
+  tls_ca:
+    environment: OPENRDS_TLS_CA
+  valkey_users:
+    environment: OPENRDS_VALKEY_USERS

@@ -23,6 +23,7 @@ type fakeDocker struct {
 	args     [][]string // every compose invocation
 	failUp   func(env []string) bool
 	failExec bool
+	inputs   []string // stdin of each compose exec
 }
 
 func newFakeDocker() *fakeDocker { return &fakeDocker{running: make(map[string]bool)} }
@@ -66,12 +67,17 @@ func (f *fakeDocker) run(_ context.Context, env []string, in io.Reader, out io.W
 			if f.failExec || !f.running[project] {
 				return errors.New("service \"db\" is not running")
 			}
-			if in != nil {
-				_, err := io.Copy(io.Discard, in)
+			if in != nil { // a restore, or a dump that reads the password first
+				data, err := io.ReadAll(in)
+				if err != nil {
+					return err
+				}
+				f.inputs = append(f.inputs, string(data))
+			}
+			if out != nil {
+				_, err := out.Write([]byte("logical dump"))
 				return err
 			}
-			_, err := out.Write([]byte("logical dump"))
-			return err
 		}
 	}
 	return nil
@@ -139,12 +145,14 @@ func TestParametersAreCheckedBeforeTheyReachACommandLine(t *testing.T) {
 		spec instanceSpec
 		want []string
 	}{
-		{instanceSpec{Engine: "postgres", Parameters: pg}, []string{"postgres", "-c", "max_connections=200", "-c", "random_page_cost=1.1",
+		{instanceSpec{Engine: "postgres", Parameters: pg}, []string{"postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/openrds/server.crt",
+			"-c", "ssl_key_file=/run/openrds/server.key", "-c", "hba_file=/run/openrds/pg_hba.conf", "-c", "max_connections=200", "-c", "random_page_cost=1.1",
 			"-c", "shared_buffers=256MB", "-c", "shared_preload_libraries=pg_stat_statements,auto_explain"}},
-		{instanceSpec{Engine: "mysql", Parameters: map[string]string{"max_connections": "300", "sql_mode": ""}},
-			[]string{"mysqld", "--max_connections=300", "--sql_mode="}},
+		{instanceSpec{Engine: "mysql", RequireTLS: true, Parameters: map[string]string{"max_connections": "300", "sql_mode": ""}},
+			[]string{"mysqld", "--ssl-ca=/run/openrds/ca.crt", "--ssl-cert=/run/openrds/server.crt", "--ssl-key=/run/openrds/server.key",
+				"--require-secure-transport=ON", "--max_connections=300", "--sql_mode="}},
 		{instanceSpec{Engine: "valkey", Parameters: map[string]string{"maxmemory-policy": "allkeys-lru", "notify-keyspace-events": "Ex$", "save": ""}},
-			[]string{"valkey-server", "--requirepass", "${OPENRDS_DB_PASSWORD:?missing database password}", "--dir", "/data",
+			[]string{"valkey-server", "--include", "/run/openrds/users.conf", "--dir", "/data",
 				"--maxmemory", "${OPENRDS_VALKEY_MAXMEMORY:-0}", "--maxmemory-policy", "allkeys-lru", "--notify-keyspace-events", "Ex$$", "--save", ""}},
 	}
 	for _, c := range cases {
@@ -157,47 +165,57 @@ func TestParametersAreCheckedBeforeTheyReachACommandLine(t *testing.T) {
 	}
 }
 
-func TestOnlyInstancesWithParametersGetAComposeOverride(t *testing.T) {
+func TestComposeOverrideCarriesCommandAndSecretsDigest(t *testing.T) {
 	f := newFakeDocker()
 	m := testManager(t, f.run)
 	ctx := t.Context()
 	if err := m.provision(ctx, instanceSpec{Name: "orders", Engine: "postgres", Port: 15432}, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, arg := range f.args[len(f.args)-1] {
-		if strings.HasSuffix(arg, ".json") {
-			t.Fatal("an instance without parameters used an override")
-		}
-	}
-	if _, err := m.modify(ctx, "orders", modification{Parameters: map[string]string{"max_connections": "250"}, ApplyImmediately: true}); err != nil {
-		t.Fatal(err)
-	}
 	r, _ := m.record("orders")
-	last := f.args[len(f.args)-1]
-	if !slices.Contains(last, m.overridePath(r)) {
-		t.Fatalf("parameters were not passed to Compose: %v", last)
+	if r.Layout != currentLayout {
+		t.Fatalf("a started container must record its layout: %d", r.Layout)
 	}
 	var doc struct {
 		Services struct {
 			DB struct {
-				Command []string `json:"command"`
+				Command []string          `json:"command"`
+				Labels  map[string]string `json:"labels"`
 			} `json:"db"`
 		} `json:"services"`
 	}
-	if err := readJSON(m.overridePath(r), &doc); err != nil || !slices.Equal(doc.Services.DB.Command, []string{"postgres", "-c", "max_connections=250"}) {
-		t.Fatalf("override: %+v %v", doc, err)
+	read := func() {
+		t.Helper()
+		if !slices.Contains(f.args[len(f.args)-1], m.overridePath(r)) {
+			t.Fatalf("the override was not passed to Compose: %v", f.args[len(f.args)-1])
+		}
+		if err := readJSON(m.overridePath(r), &doc); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := m.modify(ctx, "orders", modification{Parameters: map[string]string{}, ApplyImmediately: true}); err != nil {
+	read()
+	before := doc.Services.DB.Labels["io.openrds.secrets"]
+	if before == "" || f.lastUp("OPENRDS_TLS_CERT") == "" || !strings.Contains(f.lastUp("OPENRDS_PG_HBA"), "host all all all scram-sha-256") {
+		t.Fatal("TLS files and pg_hba.conf must reach Compose")
+	}
+	if _, err := m.modify(ctx, "orders", modification{Parameters: map[string]string{"max_connections": "250"}, RequireTLS: ptr(true), ApplyImmediately: true}); err != nil {
 		t.Fatal(err)
 	}
-	if last := f.args[len(f.args)-1]; slices.Contains(last, m.overridePath(r)) {
-		t.Fatal("defaults restored, but the override is still used")
+	read()
+	if !slices.Contains(doc.Services.DB.Command, "max_connections=250") || doc.Services.DB.Labels["io.openrds.secrets"] == before {
+		t.Fatalf("override: %+v", doc)
+	}
+	if strings.Contains(f.lastUp("OPENRDS_PG_HBA"), "host all all all scram-sha-256") {
+		t.Fatal("requiring TLS must drop plain-text remote connections")
 	}
 	if err := m.remove(ctx, "orders", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(m.overridePath(r)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("deleting the instance left its override behind")
+	}
+	if _, err := os.Stat(m.tlsPath(r.Project + ".key")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("deleting the instance left its TLS key behind")
 	}
 }
 

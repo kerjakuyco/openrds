@@ -70,12 +70,17 @@ func describe(err error) string {
 }
 
 func (m *manager) track(ctx context.Context, name, action string) func(error) {
-	m.note(ctx, name, action, "started", "")
+	return m.trackDetail(ctx, name, action, "")
+}
+
+// Like track, with a detail such as the database user an action affects.
+func (m *manager) trackDetail(ctx context.Context, name, action, detail string) func(error) {
+	m.note(ctx, name, action, "started", detail)
 	return func(err error) {
 		if err != nil {
 			m.note(ctx, name, action, "failed", describe(err))
 			return
 		}
-		m.note(ctx, name, action, "completed", "")
+		m.note(ctx, name, action, "completed", detail)
 	}
 }

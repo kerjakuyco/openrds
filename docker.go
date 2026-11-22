@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ type engine struct {
 	database       string
 	suffix         string
 	restoreStopped bool
+	dumpAuth       bool // the dump reads the owner password from its first input line
 	dump           []string
 	restore        []string
 	parameters     []parameter
@@ -51,9 +53,10 @@ var engines = map[string]engine{
 	"valkey": {
 		title: "Valkey 9.1", scheme: "redis", port: 6379, hostPort: 16379, minMemory: 128, dataDir: "/data", user: "default", database: "0", suffix: ".rdb",
 		restoreStopped: true,
+		dumpAuth:       true,
 		parameters:     valkeyParameters,
 		// Progress from valkey-cli stays out of the backup stream.
-		dump: []string{"sh", "-ec", `REDISCLI_AUTH="$VALKEY_PASSWORD" valkey-cli --rdb /tmp/openrds.rdb >/dev/null && exec cat /tmp/openrds.rdb`},
+		dump: []string{"sh", "-ec", `IFS= read -r REDISCLI_AUTH; export REDISCLI_AUTH; valkey-cli --no-auth-warning $OPENRDS_CLI_FLAGS --rdb /tmp/openrds.rdb >/dev/null && exec cat /tmp/openrds.rdb`},
 		// A running Valkey loads AOF ahead of RDB. Install the snapshot only
 		// while the server is stopped, then start it so the snapshot is loaded.
 		restore: []string{"sh", "-ec", `set -eu
@@ -106,7 +109,7 @@ func (dockerCLI) run(ctx context.Context, env []string, in io.Reader, out io.Wri
 		text := strings.TrimSpace(string(diagnostics.data))
 		for _, v := range env {
 			key, value, _ := strings.Cut(v, "=")
-			if strings.HasSuffix(key, "PASSWORD") && value != "" {
+			if (strings.HasSuffix(key, "PASSWORD") || strings.HasSuffix(key, "_KEY")) && value != "" {
 				text = strings.ReplaceAll(text, value, "[redacted]")
 			}
 		}
@@ -143,12 +146,29 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		base = append(base, "--file", filepath.Join(m.templates, "volume-quota.yaml"))
 		env = append(env, "OPENRDS_DISK_LINK="+r.Project)
 	}
-	if len(r.Parameters) > 0 {
-		path, err := m.writeOverride(r)
+	files, err := m.injected(r)
+	if err != nil {
+		return err
+	}
+	for _, k := range slices.Sorted(maps.Keys(files)) {
+		env = append(env, k+"="+files[k])
+	}
+	if r.Engine == "valkey" && r.RequireTLS {
+		env = append(env, "OPENRDS_VALKEY_CLI_FLAGS=--tls --insecure")
+	}
+	path, err := m.writeOverride(r, digest(files))
+	if err != nil {
+		return fmt.Errorf("writing the Compose override: %w", err)
+	}
+	base = append(base, "--file", path)
+	if r.PublicAccess {
+		image, err := m.gatewayImage(ctx)
 		if err != nil {
-			return fmt.Errorf("writing engine parameters: %w", err)
+			return err
 		}
-		base = append(base, "--file", path)
+		base = append(base, "--file", filepath.Join(m.templates, "gateway.yaml"))
+		env = append(env, "OPENRDS_GATEWAY_IMAGE="+image, "OPENRDS_GATEWAY_PUBLISH="+strconv.Itoa(r.PublicPort),
+			"OPENRDS_GATEWAY_TARGET=db:"+strconv.Itoa(engines[r.Engine].port), "OPENRDS_GATEWAY_ALLOW="+allowList(r.Firewall))
 	}
 	return m.docker.run(ctx, env, in, out, append(base, args...)...)
 }

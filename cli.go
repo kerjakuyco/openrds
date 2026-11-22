@@ -53,6 +53,8 @@ func command(args []string, out, errOut io.Writer) int {
 		}
 		fmt.Fprintln(out, key)
 		return 0
+	case "gateway":
+		return runGateway(out, errOut)
 	case "help", "-h", "--help":
 		fmt.Fprint(out, helpText)
 		return 0

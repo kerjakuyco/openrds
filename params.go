@@ -273,20 +273,31 @@ func checkParameters(engine string, memoryMiB int, params map[string]string) err
 	return nil
 }
 
+// Where Compose places the injected files in the database container.
+const (
+	tlsCertFile = "/run/openrds/server.crt"
+	tlsKeyFile  = "/run/openrds/server.key"
+	tlsCAFile   = "/run/openrds/ca.crt"
+)
+
 // The database command line. Compose interpolates the override file, so
-// user values escape "$" while the password stays a variable reference.
+// user values escape "$".
 func (r record) command() []string {
 	escape := func(v string) string { return strings.ReplaceAll(v, "$", "$$") }
 	keys := slices.Sorted(maps.Keys(r.Parameters))
 	var cmd []string
 	switch r.Engine {
 	case "postgres":
-		cmd = []string{"postgres"}
+		cmd = []string{"postgres", "-c", "ssl=on", "-c", "ssl_cert_file=" + tlsCertFile, "-c", "ssl_key_file=" + tlsKeyFile,
+			"-c", "hba_file=/run/openrds/pg_hba.conf"}
 		for _, k := range keys {
 			cmd = append(cmd, "-c", k+"="+escape(r.Parameters[k]))
 		}
 	case "mysql":
-		cmd = []string{"mysqld"}
+		cmd = []string{"mysqld", "--ssl-ca=" + tlsCAFile, "--ssl-cert=" + tlsCertFile, "--ssl-key=" + tlsKeyFile}
+		if r.RequireTLS {
+			cmd = append(cmd, "--require-secure-transport=ON")
+		}
 		for _, k := range keys {
 			cmd = append(cmd, "--"+k+"="+escape(r.Parameters[k]))
 		}
@@ -295,8 +306,14 @@ func (r record) command() []string {
 		if v, ok := r.Parameters["maxmemory-policy"]; ok {
 			policy = v
 		}
-		cmd = []string{"valkey-server", "--requirepass", "${OPENRDS_DB_PASSWORD:?missing database password}", "--dir", "/data",
+		// Users, including the owner as "default", come from the injected file.
+		cmd = []string{"valkey-server", "--include", "/run/openrds/users.conf", "--dir", "/data",
 			"--maxmemory", "${OPENRDS_VALKEY_MAXMEMORY:-0}", "--maxmemory-policy", policy}
+		if r.RequireTLS {
+			// Valkey serves TLS or plain text on a port, so TLS replaces plain text.
+			cmd = append(cmd, "--port", "0", "--tls-port", "6379", "--tls-cert-file", tlsCertFile, "--tls-key-file", tlsKeyFile,
+				"--tls-ca-cert-file", tlsCAFile, "--tls-auth-clients", "no")
+		}
 		for _, k := range keys {
 			if k != "maxmemory-policy" {
 				cmd = append(cmd, "--"+k, escape(r.Parameters[k]))
@@ -310,11 +327,14 @@ func (m *manager) overridePath(r record) string {
 	return filepath.Join(m.dir, "compose", r.Project+".json")
 }
 
-// Instances without parameters use their engine template unchanged. Others get
-// a generated Compose file (JSON is YAML) that replaces only the command.
-func (m *manager) writeOverride(r record) (string, error) {
+// A generated Compose file (JSON is YAML) with the command and a label that
+// changes with the injected files, so Compose recreates the container then.
+func (m *manager) writeOverride(r record, secrets string) (string, error) {
 	path := m.overridePath(r)
-	doc := map[string]any{"services": map[string]any{"db": map[string]any{"command": r.command()}}}
+	doc := map[string]any{"services": map[string]any{"db": map[string]any{
+		"command": r.command(),
+		"labels":  map[string]string{"io.openrds.secrets": secrets},
+	}}}
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return "", err
