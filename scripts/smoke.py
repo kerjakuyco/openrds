@@ -17,7 +17,7 @@ def cli(*args, env=None):
 
 
 address = cli("docker", "compose", "port", "openrds", "8080")
-token = cli("docker", "compose", "exec", "-T", "openrds", "cat", "/var/lib/openrds/admin-token")
+token = cli("docker", "compose", "exec", "-T", "openrds", "openrds", "api-key")
 
 
 def api(path, method="GET", body=None):

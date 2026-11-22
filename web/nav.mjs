@@ -66,9 +66,9 @@ export function initNav({ onSignOut, theme, setTheme }) {
     if (sig === accountSig) return;
     accountSig = sig;
     const trigger = h("button", { type: "button", class: "account-btn", title: `${me.name} · ${ROLES[me.role]?.label}` },
-      avatar(me.name), h("span", { class: "label account-text" }, h("strong", null, me.name), h("small", null, me.token ? "Admin token" : ROLES[me.role]?.label)), icon("chevron", "icon chevron label"));
+      avatar(me.name), h("span", { class: "label account-text" }, h("strong", null, me.name), h("small", null, me.token ? "API key" : ROLES[me.role]?.label)), icon("chevron", "icon chevron label"));
     $("account").replaceChildren(menu("", [
-      { heading: me.token ? "Signed in with the admin token" : `Signed in as ${me.username}` },
+      { heading: me.token ? "Signed in with the API key" : `Signed in as ${me.username}` },
       { label: "Account settings", icon: "key", run: () => { location.hash = "#/account"; } },
       can("admin") && { label: "Users", icon: "users", run: () => { location.hash = "#/users"; } },
       "-",

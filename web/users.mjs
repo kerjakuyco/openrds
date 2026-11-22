@@ -102,7 +102,7 @@ export function usersView() {
   const el = h("div", { class: "stack-gap" },
     h("div", { class: "page-head" }, h("div", null, h("h1", null, "Users"), h("p", { class: "muted" }, "Who can sign in to OpenRDS, and what each person can do.")),
       h("div", { class: "page-actions" }, h("button", { type: "button", class: "btn primary", onclick: invite }, icon("plus"), "Invite user"))),
-    state.me?.token ? alertBox("You are signed in with the admin token. It can repair any account, so keep it for automation and emergencies, and sign in with an account day to day.", "info") : null,
+    state.me?.token ? alertBox("You are signed in with the API key, which is meant for scripts. Sign in with an account day to day.", "info") : null,
     h("section", { class: "panel" }, h("header", { class: "panel-head" }, h("div", null, h("h2", null, "Accounts", count))), list),
     panel("What each role can do", {}, h("div", { class: "table-wrap" }, h("table", { class: "matrix" },
       h("thead", null, h("tr", null, h("th", { scope: "col" }, "Task"), ...Object.values(ROLES).map(r => h("th", { scope: "col" }, r.label)))),

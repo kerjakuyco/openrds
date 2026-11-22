@@ -8,7 +8,7 @@ import (
 func accountOf(r *http.Request) (identity, error) {
 	id, _ := identityFrom(r.Context())
 	if id.Token {
-		return id, fail(409, "You are signed in with the admin token, which has no account. Sign in with an account to change its settings.")
+		return id, fail(409, "You are signed in with the API key, which has no account. Sign in with an account to change its settings.")
 	}
 	return id, nil
 }
@@ -34,12 +34,9 @@ func accountRoutes(mux *http.ServeMux, add func(string, int, endpoint), m *manag
 		sendJSON(w, 200, map[string]bool{"setup": !a.accounts.any()})
 		return nil
 	}))
-	// The first account needs the admin token: in the request, or as the
-	// browser's current admin-token session.
+	// Whoever opens the console first creates the administrator account. The
+	// console listens only on the VPS, so that is someone with access to it.
 	mux.Handle("POST /api/setup", endpoint(func(w http.ResponseWriter, r *http.Request) error {
-		if id, ok := a.identify(r); !ok || !id.Token {
-			return fail(401, "The admin token was not accepted.")
-		}
 		var body struct {
 			Username string `json:"username"`
 			Name     string `json:"name"`

@@ -113,24 +113,21 @@ func TestFirstRunSetupAndSignIn(t *testing.T) {
 	if _, body := anon.do("GET", "/api/status", ""); body != "{\"setup\":true}\n" {
 		t.Fatalf("status before setup: %s", body)
 	}
+	// No token: whoever opens the console first creates the administrator.
 	form := `{"username":"Ada","name":"Ada Lovelace","password":"%s"}`
-	if code, _ := anon.do("POST", "/api/setup", fmt.Sprintf(form, "analytical-engine")); code != 401 {
-		t.Fatal("setup must prove access with the admin token")
-	}
-	admin := &client{h: ws.h, bearer: "test-token"}
+	admin := &client{h: ws.h}
 	if code, _ := admin.do("POST", "/api/setup", fmt.Sprintf(form, "short")); code != 400 {
 		t.Fatal("weak password accepted")
 	}
 	if code, body := admin.do("POST", "/api/setup", fmt.Sprintf(form, "analytical-engine")); code != 201 || admin.cookie == nil {
 		t.Fatalf("setup: %d %s", code, body)
 	}
-	admin.bearer = ""
 	_, body := admin.do("GET", "/api/session", "")
 	var me identity
 	if json.Unmarshal([]byte(body), &me); me.Username != "ada" || me.Role != "admin" || me.Token {
 		t.Fatalf("identity after setup: %s", body)
 	}
-	if code, _ := (&client{h: ws.h, bearer: "test-token"}).do("POST", "/api/setup", fmt.Sprintf(form, "analytical-engine")); code != 409 {
+	if code, _ := (&client{h: ws.h}).do("POST", "/api/setup", fmt.Sprintf(form, "analytical-engine")); code != 409 {
 		t.Fatal("a second setup was accepted")
 	}
 	if _, body := anon.do("GET", "/api/status", ""); body != "{\"setup\":false}\n" {
@@ -347,5 +344,42 @@ func TestSessionsFromBeforeAccountsStillWork(t *testing.T) {
 	}
 	if code, body := legacy.do("GET", "/api/session", ""); code != 200 || strings.Contains(body, `"token":true`) {
 		t.Fatalf("setup did not switch the browser to the new account: %d %s", code, body)
+	}
+}
+
+func TestResetPasswordCommand(t *testing.T) {
+	ws := newWorkspace(t)
+	server := httptest.NewServer(ws.h)
+	defer server.Close()
+	if _, err := resetPassword(server.URL, "test-token", "ada", "http://127.0.0.1:9000"); err == nil || !strings.Contains(err.Error(), "no accounts yet") {
+		t.Fatalf("reset before setup: %v", err)
+	}
+	ws.person(t, "ada", "admin")
+	ws.person(t, "bob", "viewer")
+	if _, err := resetPassword(server.URL, "wrong-key", "ada", ""); err == nil {
+		t.Fatal("a wrong key was accepted")
+	}
+	if _, err := resetPassword(server.URL, "test-token", "eve", ""); err == nil || !strings.Contains(err.Error(), "ada, bob") {
+		t.Fatalf("unknown account: %v", err)
+	}
+	link, err := resetPassword(server.URL, "test-token", " ADA ", "http://127.0.0.1:9000/")
+	if err != nil || !strings.HasPrefix(link, "http://127.0.0.1:9000/#/invite/") {
+		t.Fatalf("reset link: %q %v", link, err)
+	}
+	// The only administrator can recover their account from the link.
+	browser := &client{h: ws.h}
+	if code, _ := browser.do("POST", "/api/invites/"+strings.TrimPrefix(link, "http://127.0.0.1:9000/#/invite/"), `{"password":"a-fresh-password"}`); code != 200 {
+		t.Fatal("reset link did not work")
+	}
+	items, _ := ws.m.readActivity()
+	if !slices.ContainsFunc(items, func(e event) bool { return e.Action == "Reset password" && e.Actor == "command line" }) {
+		t.Fatalf("the command line was not recorded as the actor: %+v", items)
+	}
+	var out, errOut strings.Builder
+	if code := command([]string{"help"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "reset-password") {
+		t.Fatal("help text")
+	}
+	if code := command([]string{"bogus"}, &out, &errOut); code != 2 {
+		t.Fatal("unknown command accepted")
 	}
 }

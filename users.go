@@ -93,16 +93,18 @@ func (u user) view() userView {
 	return v
 }
 
-// Who is making a request: an account, or the admin token.
+// Who is making a request: an account, or the API key in the control volume,
+// which scripts and the built-in commands use.
 type identity struct {
 	ID       string `json:"id,omitempty"`
 	Username string `json:"username"`
 	Name     string `json:"name"`
 	Role     string `json:"role"`
 	Token    bool   `json:"token"`
+	Client   string `json:"-"` // "command line" for the built-in commands
 }
 
-var tokenIdentity = identity{Username: "admin-token", Name: "Admin token", Role: "admin", Token: true}
+var tokenIdentity = identity{Username: "api-key", Name: "API key", Role: "admin", Token: true}
 
 func identityOf(u user) identity {
 	return identity{ID: u.ID, Username: u.Username, Name: u.Name, Role: u.Role}
@@ -121,14 +123,16 @@ func identityFrom(ctx context.Context) (identity, bool) {
 	return i, ok
 }
 
-// The name recorded in events: an account, the admin token, or the scheduler.
+// The name recorded in events: an account, the API key, the command line, or the scheduler.
 func actorFrom(ctx context.Context) string {
 	i, ok := identityFrom(ctx)
 	switch {
 	case !ok:
 		return "system"
+	case i.Client != "":
+		return i.Client
 	case i.Token:
-		return "admin token"
+		return "API key"
 	default:
 		return i.Username
 	}

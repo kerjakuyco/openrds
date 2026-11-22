@@ -29,6 +29,9 @@ func sampleInterval() time.Duration {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		os.Exit(command(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	dir := env("OPENRDS_DATA_DIR", ".openrds")
 	m, err := openManager(dir, "engines", dockerCLI{})
 	if err != nil {

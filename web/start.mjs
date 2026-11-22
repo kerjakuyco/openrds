@@ -14,7 +14,7 @@ export function steps() {
   const list = [];
   if (state.me?.token && state.users && !state.users.length) {
     list.push({ id: "account", title: "Create your administrator account", done: false, href: "#/account",
-      text: "Sign in with a username and password instead of the admin token, then invite your team.", action: "Create account" });
+      text: "Sign in with a username and password, then invite your team.", action: "Create account" });
   }
   list.push(
     { id: "create", title: "Create your first database", done: dbs.length > 0, href: "#/databases/new", action: "Create database",

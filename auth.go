@@ -47,7 +47,7 @@ func adminToken(dir string) (string, error) {
 	return token, closeErr
 }
 
-// The admin token signs sessions, so rotating it signs everyone out.
+// The API key in the control volume signs sessions, so rotating it signs everyone out.
 type auth struct {
 	token    string
 	accounts *accounts
@@ -69,7 +69,11 @@ func (a auth) sign(payload string) string {
 // an account. A bare "<expiry>" is an admin-token session from before accounts.
 func (a auth) identify(r *http.Request) (identity, bool) {
 	if a.bearer(r) {
-		return tokenIdentity, true
+		id := tokenIdentity
+		if r.Header.Get("X-OpenRDS-Client") == "command-line" {
+			id.Client = "command line"
+		}
+		return id, true
 	}
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {

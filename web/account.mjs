@@ -41,8 +41,8 @@ export function accountView({ onIdentity }) {
       const username = h("input", { type: "text", id: nextId("u"), autocomplete: "username", spellcheck: "false", maxlength: "32", required: true });
       const pw = passwordField("Password", { hint: "At least 10 characters." }), confirm = passwordField("Confirm password");
       el.replaceChildren(
-        h("div", { class: "page-head" }, h("div", null, h("h1", null, "Account"), h("p", { class: "muted" }, "You are signed in with the admin token."))),
-        alertBox("The admin token has every permission and no account of its own. Keep it for automation and emergencies, such as resetting a forgotten password.", "info"),
+        h("div", { class: "page-head" }, h("div", null, h("h1", null, "Account"), h("p", { class: "muted" }, "You are signed in with the API key."))),
+        alertBox("The API key is meant for scripts and has no account of its own. Create an account and sign in with it instead.", "info"),
         setup ? form("Create your administrator account", "Sign in with this account from now on, and invite your team from Users.", [
           h("div", { class: "form-grid" }, h("div", { class: "field" }, h("label", { class: "field-label", for: name.id }, "Name"), name),
             h("div", { class: "field" }, h("label", { class: "field-label", for: username.id }, "Username"), username)), pw, confirm,

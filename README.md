@@ -4,24 +4,25 @@ OpenRDS is an MIT-licensed database control plane for a single Linux VPS. Instal
 
 ## Install on a VPS
 
-You need Git, **Docker Engine 28+** (rootful, local `/var/run/docker.sock`) and the **Docker Compose plugin 2.20+**. [Docker’s Linux installation instructions](https://docs.docker.com/engine/install/) cover supported distributions. Size the VPS for your engines, data and local backups.
+On a Linux server, run one command:
 
 ```sh
-git clone https://github.com/kerjakuyco/openrds.git
-cd openrds
-sh install.sh
-docker compose exec openrds cat /var/lib/openrds/admin-token
+curl -fsSL https://raw.githubusercontent.com/kerjakuyco/openrds/main/install.sh | sh
 ```
 
-The installer builds the dashboard from this checkout and waits for it to start. The admin token is generated on first launch. To choose another dashboard port or monitoring interval, copy `.env.example` to `.env` and set `OPENRDS_PORT` or `OPENRDS_METRICS_INTERVAL` before installing.
+The installer downloads OpenRDS into `~/openrds`, offers to install Docker with Docker's official script if it is missing, builds and starts the dashboard, and then prints what to open. It continues with `sudo` when your user cannot use Docker. Already have a copy? Run `sh install.sh` inside it; running either command again updates OpenRDS and keeps your databases, backups and accounts. Set `OPENRDS_YES=1` to accept its questions, or `OPENRDS_DIR` to choose another folder.
 
-**From your computer**, open an SSH tunnel (replace `user@your-vps`):
+OpenRDS needs **Docker Engine 28+** (rootful, with the local `/var/run/docker.sock`) and the **Docker Compose plugin**. Size the server for your engines, data and local backups. To choose another dashboard port or monitoring interval, copy `.env.example` to `.env` and set `OPENRDS_PORT` or `OPENRDS_METRICS_INTERVAL` before installing.
+
+The dashboard and databases listen only on the server itself. **From your computer**, open the SSH tunnel the installer prints, for example:
 
 ```sh
-ssh -N -L 8080:127.0.0.1:8080 user@your-vps
+ssh -N -L 8080:127.0.0.1:8080 user@your-server
 ```
 
-Visit **http://127.0.0.1:8080**. The first visit asks for the admin token, to prove you control the VPS, and for the administrator account you will sign in with from then on. Both the dashboard and database ports are bound to the VPS loopback interface. If you changed the dashboard port, use that port in the tunnel and URL.
+Then visit **http://127.0.0.1:8080** and create your administrator account; there is no token to find or paste. Until that first account exists, whoever opens the dashboard can create it, which means someone with SSH access to the server. If you changed the dashboard port, use that port in the tunnel and URL.
+
+**On your own computer**, for a quick look, install Docker Desktop and run `sh install.sh` from a clone, for example in Git Bash on Windows. It opens at http://127.0.0.1:8080 without a tunnel. Data-volume limits need Linux loop devices, so the dashboard may report them as not enforceable there.
 
 ## Create and connect
 
@@ -80,9 +81,13 @@ Everyone signs in with their own username and password. Each account has a role:
 
 The server enforces the role on every API request; the console hides what a role cannot do. An admin invites someone from **Users**. OpenRDS returns a one-time link that expires after 72 hours, and the person chooses their own password with it, so the admin never handles it. **Reset password** signs the account out everywhere and issues a new link. Disabling an account signs it out at once. You cannot change your own role, disable or delete yourself, or leave OpenRDS without an active administrator.
 
-Passwords have at least 10 characters and are stored as PBKDF2-SHA256 hashes with 600,000 iterations. Five failed sign-ins in a row lock that username for 30 seconds, doubling up to 15 minutes. A session lasts 12 hours. Changing your password, or **Account → Sign out other sessions**, ends the account's other sessions. Events record who did what: an account name, `admin token`, or OpenRDS itself for scheduled work.
+Passwords have at least 10 characters and are stored as PBKDF2-SHA256 hashes with 600,000 iterations. Five failed sign-ins in a row lock that username for 30 seconds, doubling up to 15 minutes. A session lasts 12 hours. Changing your password, or **Account → Sign out other sessions**, ends the account's other sessions. Events record who did what: an account name, `command line` for the reset command below, `API key` for scripts, or OpenRDS itself for scheduled work.
 
-The **admin token** keeps full access for automation (`Authorization: Bearer`) and emergencies, such as resetting the last administrator's password. Sign in with it from **use the admin token** on the sign-in page. Keep it secret: anyone who has it controls OpenRDS.
+**Forgot your password?** Another administrator can send you a reset link from **Users**. If you are the only administrator, run this on the server, in the OpenRDS folder, and open the link it prints:
+
+```sh
+docker compose exec openrds openrds reset-password YOUR_USERNAME
+```
 
 Accounts decide who can do what once connected; the network decides who can connect. The console still listens only on the VPS, so each person reaches it through their own SSH tunnel, or through a TLS reverse proxy you put in front of it.
 
@@ -103,18 +108,18 @@ The sidebar groups the console into databases, backups, activity and administrat
 
 ### Where state lives
 
-- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the admin token, accounts (`users.json`, with password hashes), instance metadata and database passwords, generated Compose overrides for engine parameters, activity history, metric history, and completed backups.
+- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, generated Compose overrides for engine parameters, activity history, metric history, and completed backups.
 - Each database has its own named data volume. Its internal Compose project name is in `instances/<name>.json` in the control volume. Treat this metadata as secret.
-- The control plane uses the host Docker socket to operate these projects and read their statistics; anyone with the admin token or an administrator account is a trusted VPS operator. This release manages one host.
-- To update: pull your chosen revision and run `sh install.sh` again. Rebuilding the dashboard preserves existing database containers, volumes, and credentials. Existing databases keep automated backups off until you set a retention period. `docker compose down` in the checkout stops the dashboard; **`down -v` also deletes the control volume**.
-- Sessions are signed with the admin token. To rotate it and sign everyone out, run `docker compose stop openrds`, `docker compose run --rm --no-deps --entrypoint rm openrds /var/lib/openrds/admin-token`, then `docker compose up -d`. Read the newly generated token as above.
+- The control plane uses the host Docker socket to operate these projects and read their statistics; anyone with shell access to the server, the API key or an administrator account is a trusted operator. This release manages one host.
+- To update: run the install command again, or pull your chosen revision and run `sh install.sh`. Rebuilding the dashboard preserves existing database containers, volumes, and credentials. Existing databases keep automated backups off until you set a retention period. `docker compose down` in the checkout stops the dashboard; **`down -v` also deletes the control volume**.
+- Sessions are signed with the API key. To rotate it and sign everyone out, run `docker compose stop openrds`, `docker compose run --rm --no-deps --entrypoint rm openrds /var/lib/openrds/admin-token`, then `docker compose up -d`.
 
 ## HTTP API
 
-Use `Authorization: Bearer <admin-token>` for automation; it has the Admin role. Browsers sign in with an account and get a 12-hour HTTP-only session cookie. Each endpoint needs at least the role in the table: viewer for reading, operator for changes, credentials and backup downloads, and admin for accounts. Inventory endpoints omit credentials; the connection endpoint returns them on request.
+Scripts send the API key as `Authorization: Bearer <key>`; it has the Admin role. Print it on the server with `docker compose exec openrds openrds api-key`, and keep it secret. Browsers sign in with an account and get a 12-hour HTTP-only session cookie. Each endpoint needs at least the role in the table: viewer for reading, operator for changes, credentials and backup downloads, and admin for accounts. Inventory endpoints omit credentials; the connection endpoint returns them on request.
 
 ```sh
-TOKEN=$(docker compose exec -T openrds cat /var/lib/openrds/admin-token)
+TOKEN=$(docker compose exec -T openrds openrds api-key)
 curl -fsS -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"orders","engine":"postgres","port":15432,"cpus":1,"memoryMiB":1024,
@@ -141,8 +146,8 @@ Only `name`, `engine` and `port` are required. Omitted limits mean unlimited, an
 | POST | `/backups/{id}/keep` — turn an automated backup into a snapshot that never expires |
 | DELETE | `/backups/{id}` |
 | GET | `/status` — public: `{"setup": true}` until the first account exists |
-| POST | `/setup` — admin token required: `{"username","name","password"}` creates the first administrator and signs in |
-| POST / GET / DELETE | `/session` — sign in with `{"username","password"}` (or a bearer token), read who you are, sign out |
+| POST | `/setup` — public until the first account exists: `{"username","name","password"}` creates the administrator and signs in |
+| POST / GET / DELETE | `/session` — sign in with `{"username","password"}`, read who you are, sign out |
 | GET / POST | `/invites/{secret}` — public: read an invite or reset link, or set the password with `{"password"}` |
 | GET / POST | `/users` — admin: list accounts, or invite one with `{"username","name","role"}`; returns the link secret once |
 | PATCH / DELETE | `/users/{id}` — admin: change `name`, `role` or `disabled`, or delete |
@@ -163,6 +168,6 @@ go run .
 
 Native development also needs the Docker CLI, daemon and Compose plugin for database operations. Local state defaults to `.openrds/` and the listener to `127.0.0.1:8080`; override with `OPENRDS_DATA_DIR` and `OPENRDS_LISTEN`. Metric history needs a unix Docker socket (`/var/run/docker.sock`, or `DOCKER_HOST=unix://…`); elsewhere the Monitoring tab shows live readings instead.
 
-CI installs the packaged dashboard on Linux and exercises PostgreSQL, MySQL, and Valkey against real Docker with `python3 scripts/smoke.py`: parameters, a deferred change applied by reboot, metric history, backups, deletion protection, and a final snapshot restored into a new instance. It first checks accounts: invitations, sign-in, role limits and the audit trail. A desktop and mobile Chrome workflow, `scripts/ui-smoke.cjs`, then completes first-run setup, creates a database with parameters and tags, walks every tab, takes a snapshot, modifies and reboots it, checks the restore form, events and themes, invites a viewer who accepts the link in a second browser, and checks mobile layouts.
+CI installs the packaged dashboard on Linux with `install.sh` and exercises PostgreSQL, MySQL, and Valkey against real Docker with `python3 scripts/smoke.py`: parameters, a deferred change applied by reboot, metric history, backups, deletion protection, and a final snapshot restored into a new instance. It first checks accounts: invitations, sign-in, role limits and the audit trail. A desktop and mobile Chrome workflow, `scripts/ui-smoke.cjs`, then completes first-run setup, creates a database with parameters and tags, walks every tab, takes a snapshot, modifies and reboots it, checks the restore form, events and themes, invites a viewer who accepts the link in a second browser, and checks mobile layouts.
 
 [MIT license](LICENSE)
