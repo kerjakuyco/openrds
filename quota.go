@@ -54,7 +54,7 @@ func (m *manager) volumeQuota(ctx context.Context) quotaSupport {
 	default:
 		err = m.docker.run(probe, nil, nil, nil, "run", "--rm", "--privileged", "--pid=host", image, "check")
 		if err != nil {
-			c.support = quotaSupport{"unsupported", "This Docker daemon cannot attach loop devices, so a hard disk limit is unavailable. Use rootful Docker on Linux with the loop module loaded (sudo modprobe loop). Helper said: " + err.Error()}
+			c.support = quotaSupport{"unsupported", "This Docker daemon cannot attach loop devices, so a hard disk limit is unavailable. Use rootful Docker on Linux. Helper said: " + err.Error()}
 		} else {
 			c.support = quotaSupport{"supported", "A disk limit is a fixed-size ext4 Docker volume. Usable space is slightly less than the size you choose."}
 		}
