@@ -154,6 +154,7 @@ func (m *manager) maintain(ctx context.Context) {
 		for _, name := range m.dueBackups(ctx, now) {
 			go m.automatedBackup(ctx, name)
 		}
+		go m.syncOffsite() // copies new backups and retries failed ones
 		select {
 		case <-ctx.Done():
 			return

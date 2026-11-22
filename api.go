@@ -350,6 +350,71 @@ func handler(m *manager, a auth) http.Handler {
 		return nil
 	})
 
+	add("GET /api/storage", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
+		id, _ := identityFrom(r.Context())
+		v, err := m.offsiteStatus(id.Role == "admin")
+		if err == nil {
+			sendJSON(w, 200, v)
+		}
+		return err
+	})
+	add("PUT /api/storage", roleAdmin, func(w http.ResponseWriter, r *http.Request) error {
+		var cfg offsiteConfig
+		if err := decode(w, r, &cfg); err != nil {
+			return err
+		}
+		if err := m.saveOffsite(r.Context(), cfg); err != nil {
+			return err
+		}
+		v, err := m.offsiteStatus(true)
+		if err == nil {
+			sendJSON(w, 200, v)
+		}
+		return err
+	})
+	add("POST /api/storage/test", roleAdmin, func(w http.ResponseWriter, r *http.Request) error {
+		var in offsiteConfig
+		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		cfg, err := m.checkOffsite(in)
+		if err == nil {
+			err = testOffsite(r.Context(), cfg)
+		}
+		if err == nil {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return err
+	})
+	add("DELETE /api/storage", roleAdmin, func(w http.ResponseWriter, r *http.Request) error {
+		if err := m.disableOffsite(r.Context()); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
+	add("GET /api/storage/backups", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		list, err := m.remoteBackups(r.Context())
+		if err == nil {
+			sendJSON(w, 200, list)
+		}
+		return err
+	})
+	add("POST /api/storage/backups/{id}/import", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		b, err := m.importBackup(r.Context(), r.PathValue("id"))
+		if err == nil {
+			sendJSON(w, 201, b)
+		}
+		return err
+	})
+	add("DELETE /api/storage/backups/{id}", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
+		if err := m.deleteRemote(r.Context(), r.PathValue("id")); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
 	accountRoutes(mux, add, m, a)

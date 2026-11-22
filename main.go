@@ -58,6 +58,7 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	m.offsite.ctx = ctx
 	go m.maintain(ctx)
 	if m.engine != nil {
 		go m.sampleMetrics(ctx)

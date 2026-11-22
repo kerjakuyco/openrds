@@ -106,6 +106,7 @@ type manager struct {
 	backupMu   sync.Mutex
 	quotaCache quotaCache
 	history    history
+	offsite    offsiteState
 	tlsMu      sync.Mutex
 	ca         *authority
 	gateway    string // image for public-access gateways, once found

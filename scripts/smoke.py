@@ -355,6 +355,75 @@ def exercise_security(engine):
                 api(f"instances/{name}", "DELETE")
 
 
+def wait_for(what, ok, seconds=90):
+    deadline = time.time() + seconds
+    while True:
+        result = ok()
+        if result:
+            return result
+        assert time.time() < deadline, f"timed out waiting for {what}"
+        time.sleep(2)
+
+
+def exercise_storage():
+    """Off-server copies in an S3-compatible gateway that checks signatures."""
+    suffix = secrets.token_hex(4)
+    name, restored, gateway, bucket = f"s3-{suffix}", f"s3-{suffix}-restore", f"smoke-s3-{suffix}", "openrds-smoke"
+    control = cli("docker", "compose", "ps", "-q", "openrds")
+    network = cli("docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", control).split()[0]
+    secret = secrets.token_hex(16)
+    cli("docker", "run", "-d", "--name", gateway, "--network", network, "-e", "ROOT_ACCESS_KEY=smoke-access",
+        "-e", "ROOT_SECRET_KEY", "versity/versitygw:latest", "posix", "/tmp", env={**os.environ, "ROOT_SECRET_KEY": secret})
+    settings = {"provider": "other", "endpoint": f"http://{gateway}:7070", "region": "us-east-1", "bucket": bucket,
+                "prefix": "smoke/", "accessKeyId": "smoke-access", "secretAccessKey": secret, "pathStyle": True}
+    try:
+        wait_for("the gateway", lambda: subprocess.run(["docker", "exec", gateway, "mkdir", "-p", f"/tmp/{bucket}"]).returncode == 0, 30)
+        wrong = {**settings, "secretAccessKey": "not-the-secret-0000"}
+        try:
+            api("storage/test", "POST", wrong)
+        except RuntimeError as err:
+            assert "access denied" in str(err), err
+        else:
+            raise AssertionError("a wrong secret was accepted")
+        wait_for("the connection", lambda: api("storage", "PUT", settings)["enabled"], 30)
+        api("instances", "POST", {"name": name, "engine": "postgres", "port": free_port(), "memoryMiB": 256})
+        write_value("postgres", name)
+        backup = api(f"instances/{name}/backups", "POST")
+        wait_for("the copy", lambda: next(b for b in api("backups") if b["id"] == backup["id"]).get("offsite", {}).get("status") == "copied")
+        remote = {b["id"]: b for b in api("storage/backups")}
+        assert remote[backup["id"]]["local"], remote
+        status = api("storage")
+        assert status["copied"] >= 1 and "secretAccessKey" not in json.dumps(status)
+
+        # Lose the server's copy: disconnect, delete the backup, reconnect, import and restore.
+        api("storage", "DELETE")
+        api(f"backups/{backup['id']}", "DELETE")
+        api("storage", "PUT", settings)
+        remote = {b["id"]: b for b in api("storage/backups")}
+        assert not remote[backup["id"]]["local"], remote
+        imported = api(f"storage/backups/{backup['id']}/import", "POST")
+        assert imported["kind"] == "manual" and imported["bytes"] == backup["bytes"]
+        api(f"backups/{backup['id']}/restore", "POST", {"name": restored, "port": free_port()})
+        assert read_value("postgres", restored) == "42"
+
+        # Deleting from the library deletes the copy too.
+        api(f"backups/{backup['id']}", "DELETE")
+        wait_for("the copy to be deleted", lambda: backup["id"] not in {b["id"] for b in api("storage/backups")}, 60)
+        print("storage: signed copies, import after loss, restore and mirrored deletes passed", flush=True)
+    finally:
+        try:
+            api("storage", "DELETE")
+        except RuntimeError:
+            pass
+        for db in api("instances"):
+            if db["name"] in (name, restored):
+                api(f"instances/{db['name']}", "DELETE")
+        for b in api("backups"):
+            if b["name"] in (name, restored):
+                api(f"backups/{b['id']}", "DELETE")
+        subprocess.run(["docker", "rm", "-f", gateway], capture_output=True)
+
+
 def browser():
     """A cookie-keeping client, like one person's browser session."""
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -414,3 +483,4 @@ if __name__ == "__main__":
         exercise_security(database_engine)
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise(database_engine, quota == "supported")
+    exercise_storage()

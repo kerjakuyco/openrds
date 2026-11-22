@@ -80,7 +80,18 @@ Stop a capped database and choose **Configuration → Apply size** to increase o
 
 Backups cover one database: PostgreSQL uses a custom-format `pg_dump` of `app`; MySQL uses `mysqldump` of `app` with routines, events and triggers; Valkey writes an RDB snapshot. These are logical backups, not whole-server snapshots: additional databases, cluster roles, replication state, and point-in-time recovery are outside their scope. MySQL’s consistent snapshot applies to transactional tables; avoid schema changes during a dump. **Restore** always creates a **new** database with fresh credentials and leaves the source and backup intact; the form starts from the source’s size, data volume limit and parameters. Valkey is stopped while the snapshot replaces its data files, then started so it loads that snapshot. If an import fails, the target is marked **Restore incomplete**.
 
-Backups are stored **on the same VPS**. Download a copy to independent storage to recover from losing the host. Downloaded `.dump`, `.sql`, and `.rdb` files can also be restored with standard `pg_restore`, `mysql`, and Valkey or Redis tools.
+Backups are stored **on the same VPS**. Connect **backup storage** (below), or download a copy to independent storage, to recover from losing the host. Downloaded `.dump`, `.sql`, and `.rdb` files can also be restored with standard `pg_restore`, `mysql`, and Valkey or Redis tools.
+
+### Backup storage (S3-compatible)
+
+Under **Backups → Backup storage**, an admin connects any S3-compatible object storage: Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or another service. Choose the provider to fill in its usual endpoint, region and URL style, then enter the bucket, an optional folder and an access key that can read, write, list and delete in the bucket. **Test connection** writes, reads and deletes a small object; settings are only saved when that works. Create the bucket first and keep it private: copies are logical dumps of your data, not encrypted by OpenRDS, so rely on the provider's encryption at rest.
+
+- Every backup, automated or snapshot, is copied to `<folder>/<backup id>/data` and `meta.json` right after it is taken; existing backups are copied when you connect. Large backups upload in parts. Failed copies are retried every 10 minutes, and the dashboard warns about them.
+- Copies follow the library: deleting a backup, or its expiry, deletes its copy.
+- **Backups in storage** lists every copy in the folder, including copies from other servers. After losing a server, install OpenRDS on a new one, connect the same bucket and folder, and **Import** a copy: it becomes a snapshot you can restore.
+- **Disconnect** stops copying and forgets the keys; copies already in the bucket stay.
+
+Requests are signed with AWS Signature Version 4 and carry the SHA-256 of their payload. The secret key is kept in the control volume and never returned by the API.
 
 ## Accounts and roles
 
@@ -121,7 +132,7 @@ The sidebar groups the console into databases, backups, activity and administrat
 
 ### Where state lives
 
-- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, the TLS certificate authority and database certificates (`tls/`), generated Compose overrides, activity history, metric history, and completed backups.
+- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, backup storage settings (`offsite.json`), the TLS certificate authority and database certificates (`tls/`), generated Compose overrides, activity history, metric history, and completed backups.
 - Each database has its own named data volume. Its internal Compose project name is in `instances/<name>.json` in the control volume. Treat this metadata as secret.
 - The control plane uses the host Docker socket to operate these projects and read their statistics; anyone with shell access to the server, the API key or an administrator account is a trusted operator. This release manages one host.
 - To update: run the install command again, or pull your chosen revision and run `sh install.sh`. Rebuilding the dashboard preserves existing database containers, volumes, and credentials. Existing databases keep automated backups off until you set a retention period. `docker compose down` in the checkout stops the dashboard; **`down -v` also deletes the control volume**.
@@ -157,6 +168,10 @@ Only `name`, `engine` and `port` are required. Omitted limits mean unlimited, an
 | POST | `/instances/{name}/users` — `{"name","access","password"}` with `access` `read-only` or `read-write`; returns `{"name","password"}` |
 | POST / DELETE | `/instances/{name}/users/{user}/password` (change), `/instances/{name}/users/{user}` (delete and end its sessions) |
 | GET | `/instances/{name}/connections` — recent sources that tried the public port; `/tls/ca.pem` — the CA certificate |
+| GET / PUT / DELETE | `/storage` — backup storage status (anyone), connect with `{"provider","endpoint","region","bucket","prefix","accessKeyId","secretAccessKey","pathStyle"}` after a test (admin; an empty secret keeps the saved one), or disconnect (admin) |
+| POST | `/storage/test` — admin: test settings without saving |
+| GET | `/storage/backups` — operator: copies in storage, with `local` when the library also has them |
+| POST / DELETE | `/storage/backups/{id}/import` (bring a copy into the library as a snapshot), `/storage/backups/{id}` (delete a copy that is not in the library) |
 | DELETE | `/instances/{name}` — add `?finalSnapshot=true` to take a final snapshot first; refused while deletion protection is on |
 | GET | `/backups`, `/backups/{id}/download`, `/activity` |
 | POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine, data-volume limit and parameters are inherited. Set `diskGiB` or `parameters` to override them. |

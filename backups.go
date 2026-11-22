@@ -27,6 +27,8 @@ type backup struct {
 	CPUs       float64           `json:"cpus,omitempty"`
 	MemoryMiB  int               `json:"memoryMiB,omitempty"`
 	Parameters map[string]string `json:"parameters,omitempty"`
+	// The copy in backup storage, when storage is connected.
+	Offsite *offsiteCopy `json:"offsite,omitempty"`
 }
 
 func (m *manager) backupDir() string { return filepath.Join(m.dir, "backups") }
@@ -142,7 +144,11 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 	if err := writeJSON(filepath.Join(stage, "meta.json"), b); err != nil {
 		return b, err
 	}
-	return b, os.Rename(stage, filepath.Join(m.backupDir(), b.ID))
+	if err := os.Rename(stage, filepath.Join(m.backupDir(), b.ID)); err != nil {
+		return b, err
+	}
+	go m.syncOffsite() // copy it to backup storage, when connected
+	return b, nil
 }
 
 // Unpublish first so readers never discover a half-deleted backup.
@@ -155,6 +161,7 @@ func (m *manager) removeBackup(ctx context.Context, b backup, action string) err
 	err := os.RemoveAll(dest)
 	if err == nil {
 		m.note(ctx, b.Name, action, "completed", "")
+		go m.removeOffsite(b)
 	}
 	return err
 }
