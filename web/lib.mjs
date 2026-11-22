@@ -189,10 +189,10 @@ export function menu(label, items, { cls = "", align = "end", labelIcon = null, 
   const entries = () => [...list.querySelectorAll("[role^=menuitem]:not([aria-disabled=true])")];
   const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
   const away = () => close(false);
-  // Inside a scrolling table the menu would be clipped, so it floats over the
-  // page next to its button instead, above it when there is no room below.
+  // Inside a scrolling table or the sidebar the menu would be clipped, so it
+  // floats over the page next to its button, above it when there is no room below.
   function place() {
-    if (!wrap.closest(".table-wrap")) return false;
+    if (!wrap.closest(".table-wrap, .sidebar")) return false;
     list.classList.add("floating");
     const r = trigger.getBoundingClientRect(), w = list.offsetWidth, ht = list.offsetHeight;
     const left = align === "end" ? r.right - w : r.left;
@@ -227,6 +227,7 @@ export function menu(label, items, { cls = "", align = "end", labelIcon = null, 
   for (const item of items.filter(Boolean)) {
     if (item === "-") { list.append(h("div", { class: "menu-sep", role: "separator" })); continue; }
     if (item.heading) { list.append(h("p", { class: "menu-heading", role: "presentation" }, item.heading)); continue; }
+    if (item.element) { list.append(item.element); continue; } // custom content, such as a profile or a theme switch
     const radio = item.checked !== undefined;
     const entry = h("button", { type: "button", role: radio ? "menuitemradio" : "menuitem", tabindex: "-1", class: item.danger ? "danger-item" : "",
       "aria-checked": radio ? String(item.checked) : null,

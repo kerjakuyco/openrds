@@ -67,13 +67,23 @@ export function initNav({ onSignOut, theme, setTheme }) {
     accountSig = sig;
     const trigger = h("button", { type: "button", class: "account-btn", title: `${me.name} · ${ROLES[me.role]?.label}` },
       avatar(me.name), h("span", { class: "label account-text" }, h("strong", null, me.name), h("small", null, me.token ? "API key" : ROLES[me.role]?.label)), icon("chevron", "icon chevron label"));
+    const profile = h("div", { class: "menu-profile", role: "presentation" }, avatar(me.name),
+      h("span", { class: "stack" }, h("strong", null, me.name), h("small", null, me.token ? "Signed in with the API key" : me.username)),
+      me.token ? null : h("span", { class: `chip ${me.role === "admin" ? "info" : "neutral"}` }, ROLES[me.role]?.label));
+    // Light, auto or dark in one row; choosing one closes the menu like any item.
+    const themes = h("div", { class: "menu-theme", role: "group", "aria-label": "Theme" },
+      [["light", "Light", "sun", "Light"], ["system", "Match system", "monitor", "Auto"], ["dark", "Dark", "moon", "Dark"]].map(([value, label, symbol, short]) => {
+        const b = h("button", { type: "button", role: "menuitemradio", tabindex: "-1", "aria-checked": String(chosen === value), "aria-label": label, title: label }, icon(symbol), h("span", null, short));
+        b.addEventListener("click", () => { setTheme(value); accountSig = ""; render(); $("account").querySelector("button")?.focus(); });
+        return b;
+      }));
     $("account").replaceChildren(menu("", [
-      { heading: me.token ? "Signed in with the API key" : `Signed in as ${me.username}` },
+      { element: profile },
+      "-",
       { label: "Account settings", icon: "key", run: () => { location.hash = "#/account"; } },
       can("admin") && { label: "Users", icon: "users", run: () => { location.hash = "#/users"; } },
       "-",
-      { heading: "Theme" },
-      ...[["light", "Light", "sun"], ["system", "Match system", "monitor"], ["dark", "Dark", "moon"]].map(([value, label, symbol]) => ({ label, icon: symbol, checked: chosen === value, run: () => { setTheme(value); accountSig = ""; render(); } })),
+      { element: h("div", { class: "menu-theme-row", role: "presentation" }, h("span", { class: "menu-heading" }, "Theme"), themes) },
       "-",
       { label: "Sign out", icon: "exit", run: onSignOut },
     ], { trigger, up: true, align: "start", ariaLabel: `Account menu for ${me.name}` }));
