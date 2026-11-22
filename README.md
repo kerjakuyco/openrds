@@ -1,28 +1,73 @@
 # OpenRDS
 
-OpenRDS is an MIT-licensed database control plane for a single Linux VPS. Install it on your server, open the dashboard, and provision PostgreSQL, MySQL, or Valkey with a persistent data volume, a private endpoint, and generated credentials. Each database gets daily automated backups, engine parameters, resource limits you can change later, deletion protection, and monitoring charts, managed from a console modeled on managed-database services. Teammates sign in with their own accounts and roles, and a getting-started checklist and connection guide help newcomers from an empty VPS to a connected application.
+**Self-hosted managed databases for your own server.** Run PostgreSQL, MySQL and Valkey on one Linux VPS with daily backups, off-server copies, monitoring, TLS and a friendly console, without a cloud bill.
 
-## Install on a VPS
+[![Checks](https://github.com/kerjakuyco/openrds/actions/workflows/checks.yaml/badge.svg)](https://github.com/kerjakuyco/openrds/actions/workflows/checks.yaml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Sponsor](https://img.shields.io/github/sponsors/kerjakuyco?label=Sponsor&logo=githubsponsors)](https://github.com/sponsors/kerjakuyco)
 
-On a Linux server, run one command:
+![The OpenRDS dashboard: databases with live CPU and memory, recommendations and resources](docs/images/dashboard.png)
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/kerjakuyco/openrds/main/install.sh | sh
-```
+OpenRDS is an open-source control plane in the spirit of a managed database service. Install it with one command, open the console, and create a database in about a minute. Each database runs in its own container with its own volume, network and generated password, and you manage everything from a console modeled on the AWS RDS console, or from its HTTP API.
 
-The installer downloads OpenRDS into `~/openrds`, offers to install Docker with Docker's official script if it is missing, builds and starts the dashboard, and then prints what to open. It continues with `sudo` when your user cannot use Docker. Already have a copy? Run `sh install.sh` inside it; running either command again updates OpenRDS and keeps your databases, backups and accounts. Set `OPENRDS_YES=1` to accept its questions, or `OPENRDS_DIR` to choose another folder.
+## Features
 
-OpenRDS needs **Docker Engine 28+** (rootful, with the local `/var/run/docker.sock`) and the **Docker Compose plugin**. Size the server for your engines, data and local backups. To choose another dashboard port or monitoring interval, copy `.env.example` to `.env` and set `OPENRDS_PORT` or `OPENRDS_METRICS_INTERVAL` before installing.
+- **Databases in a minute:** PostgreSQL 17, MySQL 8.4 LTS and Valkey 9.1, with size presets, CPU and memory limits you can change later, optional disk caps, engine parameters and tags.
+- **Backups you can rely on:** daily automated backups with a retention period, manual snapshots, a final snapshot on delete, and restores into a new database. Copy every backup to S3-compatible storage (Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO) and import it on a new server after losing the old one.
+- **Secure by default:** databases listen only on the server itself. Add database users with read-only or read-write access, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
+- **Easy to operate:** monitoring charts, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix.
+- **Made for teams:** accounts with admin, operator and viewer roles, invitations, password resets and an audit trail.
+- **Simple to run:** one Go binary and Docker. No external services, no frontend build step, and an HTTP API for scripts.
 
-The dashboard and databases listen only on the server itself. **From your computer**, open the SSH tunnel the installer prints, for example:
+![A database page: summary, connectivity and security, and the connection string](docs/images/database.png)
 
-```sh
-ssh -N -L 8080:127.0.0.1:8080 user@your-server
-```
+## Contents
 
-Then visit **http://127.0.0.1:8080** and create your administrator account; there is no token to find or paste. Until that first account exists, whoever opens the dashboard can create it, which means someone with SSH access to the server. If you changed the dashboard port, use that port in the tunnel and URL.
+- [Quick start](#quick-start) · [Step-by-step install guide](docs/install.md)
+- [Create and connect](#create-and-connect)
+- [Access and security](#access-and-security)
+- [Modify, reboot and protect](#modify-reboot-and-protect)
+- [Backups and snapshots](#backups-and-snapshots)
+- [Accounts and roles](#accounts-and-roles)
+- [Monitor and operate](#monitor-and-operate)
+- [HTTP API](#http-api)
+- [Development](#development)
+- [Contributing](#contributing) · [Security](#security) · [Sponsor](#sponsor) · [License](#license)
 
-**On your own computer**, for a quick look, install Docker Desktop and run `sh install.sh` from a clone, for example in Git Bash on Windows. It opens at http://127.0.0.1:8080 without a tunnel. Data-volume limits need Linux loop devices, so the dashboard may report them as not enforceable there.
+## Quick start
+
+You need a Linux server with SSH access. The installer sets up Docker for you if it's missing.
+
+1. **Install.** On the server, run:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/kerjakuyco/openrds/main/install.sh | sh
+   ```
+
+2. **Open the console.** On your computer, open the SSH tunnel the installer prints and keep it running:
+
+   ```sh
+   ssh -N -L 8080:127.0.0.1:8080 you@your-server
+   ```
+
+3. **Create your account.** Visit **http://127.0.0.1:8080** and create the administrator account.
+4. **Create a database.** Pick PostgreSQL, MySQL or Valkey. It's ready in about a minute.
+5. **Connect.** Copy the connection string from **Connectivity & security** into your app.
+
+**New to servers?** Follow the **[step-by-step install guide with screenshots](docs/install.md)**. It also covers backups to S3, inviting your team, internet access and troubleshooting.
+
+<details>
+<summary>Installer details and requirements</summary>
+
+The installer downloads OpenRDS into `~/openrds`, offers to install Docker with Docker's official script if it is missing, builds and starts the console, and then prints what to open. It continues with `sudo` when your user cannot use Docker. Running it again, or `sh install.sh` in your copy, updates OpenRDS and keeps your databases, backups and accounts. Set `OPENRDS_YES=1` to accept its questions, or `OPENRDS_DIR` to choose another folder.
+
+OpenRDS needs **Docker Engine 28+** (rootful, with the local `/var/run/docker.sock`) and the **Docker Compose plugin**. Size the server for your engines, data and local backups. To choose another console port or monitoring interval, copy `.env.example` to `.env` and set `OPENRDS_PORT` or `OPENRDS_METRICS_INTERVAL` before installing.
+
+The console and databases listen only on the server itself, so you reach them through an SSH tunnel. Until the first account exists, whoever opens the console can create it, which means someone with SSH access to the server. If you changed the console port, use that port in the tunnel and URL.
+
+**To try it on your own computer**, install Docker Desktop and run `sh install.sh` from a clone, for example in Git Bash on Windows. It opens at http://127.0.0.1:8080 without a tunnel. Data-volume limits need Linux loop devices, so the console may report them as not enforceable there.
+
+</details>
 
 ## Create and connect
 
@@ -200,6 +245,25 @@ go run .
 
 Native development also needs the Docker CLI, daemon and Compose plugin for database operations. Local state defaults to `.openrds/` and the listener to `127.0.0.1:8080`; override with `OPENRDS_DATA_DIR` and `OPENRDS_LISTEN`. Metric history needs a unix Docker socket (`/var/run/docker.sock`, or `DOCKER_HOST=unix://…`); elsewhere the Monitoring tab shows live readings instead.
 
-CI installs the packaged dashboard on Linux with `install.sh` and exercises PostgreSQL, MySQL, and Valkey against real Docker with `python3 scripts/smoke.py`: parameters, a deferred change applied by reboot, metric history, backups, deletion protection, and a final snapshot restored into a new instance. It first checks accounts: invitations, sign-in, role limits and the audit trail. A desktop and mobile Chrome workflow, `scripts/ui-smoke.cjs`, then completes first-run setup, creates a database with parameters and tags, walks every tab, takes a snapshot, modifies and reboots it, checks the restore form, events and themes, invites a viewer who accepts the link in a second browser, and checks mobile layouts.
+CI installs the packaged dashboard on Linux with `install.sh` and exercises PostgreSQL, MySQL and Valkey against real Docker with `python3 scripts/smoke.py`: accounts and roles; database users, password changes, required TLS and the firewall gateway; parameters, a deferred change applied by reboot, metric history, backups, deletion protection and a final snapshot restored into a new database; and backup storage against a signature-checking S3 gateway, including an import and restore after losing the local copy. A desktop and mobile Chrome workflow, `scripts/ui-smoke.cjs`, then completes first-run setup, creates a database from the dashboard, walks every tab, changes settings in place, takes a snapshot, modifies and reboots it, checks backup storage, the restore form, events and themes, invites a viewer who accepts the link in a second browser, and checks mobile layouts.
 
-[MIT license](LICENSE)
+## Contributing
+
+Issues and pull requests are welcome. For a larger change, open an issue first so we can agree on the approach.
+
+- Keep the server on the Go standard library, and the console as plain HTML, CSS and JavaScript modules that work under the strict Content Security Policy (no inline scripts or styles, no `innerHTML`).
+- Never return secrets in inventory responses, and keep passwords off command lines.
+- Run `go vet ./...` and `go test ./...` before opening a pull request. For changes that touch Docker or the console, also run `scripts/smoke.py` and `scripts/ui-smoke.cjs` against an installed copy, as CI does.
+- Write user-facing text in short, plain sentences.
+
+## Security
+
+Please don't report security problems in public issues. Use **Report a vulnerability** on the repository's Security tab, or see [SECURITY.md](SECURITY.md) for other ways to reach us privately.
+
+## Sponsor
+
+OpenRDS is free and open source. If it saves you time or money, please consider [sponsoring the project on GitHub](https://github.com/sponsors/kerjakuyco). Sponsorships pay for the time that goes into new features, fixes and support.
+
+## License
+
+OpenRDS is released under the [MIT License](LICENSE). Copyright © 2026 Fatur Jr and OpenRDS contributors.
