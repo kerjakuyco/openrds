@@ -9,9 +9,9 @@ import { preferEngine } from "./forms.mjs";
 const DAY = 86400000;
 const CARDS = 6;
 const ENGINES = [
-  ["postgres", "PG", "PostgreSQL 17", "Powerful SQL with JSON."],
-  ["mysql", "My", "MySQL 8.4", "The popular SQL database."],
-  ["valkey", "Vk", "Valkey 9.1", "Fast cache and key-value store."],
+  ["postgres", "PG", "PostgreSQL", "Powerful SQL with JSON."],
+  ["mysql", "My", "MySQL", "The popular SQL database."],
+  ["valkey", "Vk", "Valkey", "Fast cache and key-value store."],
 ];
 
 function greeting(me) {

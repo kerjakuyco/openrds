@@ -16,6 +16,7 @@ type backup struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
 	Engine  string    `json:"engine"`
+	Version string    `json:"version,omitempty"` // of the source database
 	Created time.Time `json:"createdAt"`
 	Bytes   int64     `json:"bytes"`
 	DiskGiB int       `json:"diskGiB,omitempty"`
@@ -45,6 +46,7 @@ func (m *manager) backup(id string) (backup, error) {
 	if b.Kind == "" {
 		b.Kind = "manual" // written before automated backups existed
 	}
+	b.Version = b.version() // backups from before versions existed name the version they came from
 	return b, err
 }
 
@@ -135,7 +137,7 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 	if info.Size() == 0 {
 		return b, fail(502, "The database returned an empty backup.")
 	}
-	b = backup{ID: randomHex(16), Name: r.Name, Engine: r.Engine, Created: time.Now().UTC(), Bytes: info.Size(), DiskGiB: r.DiskGiB,
+	b = backup{ID: randomHex(16), Name: r.Name, Engine: r.Engine, Version: r.version(), Created: time.Now().UTC(), Bytes: info.Size(), DiskGiB: r.DiskGiB,
 		Kind: kind, Final: final, CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, Parameters: maps.Clone(r.Parameters)}
 	if kind == "automated" {
 		expires := b.Created.AddDate(0, 0, r.BackupRetentionDays)

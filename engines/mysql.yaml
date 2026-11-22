@@ -1,6 +1,6 @@
 services:
   db:
-    image: mysql:8.4
+    image: ${OPENRDS_DB_IMAGE:?missing image}
     command: ["mysqld"]
     restart: unless-stopped
     cpus: ${OPENRDS_DB_CPUS:-0}

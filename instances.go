@@ -61,12 +61,13 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 			state = "not provisioned"
 		}
 		eng := engines[r.Engine]
-		v := instanceView{instanceSpec: r.instanceSpec, EngineLabel: eng.title, Status: state, Busy: m.busy[r.Name],
+		v := instanceView{instanceSpec: r.instanceSpec, EngineLabel: r.engineLabel(), Status: state, Busy: m.busy[r.Name],
 			Created: r.Created, PendingRestore: r.PendingRestore, User: eng.user, Database: eng.database, Applied: r.Applied,
 			Users: r.userViews(), TLSReady: r.Layout >= currentLayout}
 		if v.BackupWindow == "" {
 			v.BackupWindow = defaultBackupWindow
 		}
+		v.Version = r.version()
 		if t, ok := latest[r.Name]; ok {
 			v.LatestBackup = &t
 		}
@@ -91,6 +92,13 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	var input *os.File
 	if from != nil {
 		spec.Engine = from.Engine
+		if spec.Version == "" {
+			spec.Version = from.version()
+		}
+		// Newer versions read older backups, but not the other way round.
+		if compareVersions(spec.Version, from.version()) < 0 {
+			return fail(400, fmt.Sprintf("Restore into %s %s or newer: the backup comes from that version.", engines[from.Engine].title, from.version()))
+		}
 		input, err = m.openDump(from.ID)
 		if err != nil {
 			return err

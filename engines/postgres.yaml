@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:17-alpine
+    image: ${OPENRDS_DB_IMAGE:?missing image}
     command: ["postgres"]
     restart: unless-stopped
     cpus: ${OPENRDS_DB_CPUS:-0}
@@ -14,7 +14,7 @@ services:
     ports:
       - "127.0.0.1:${OPENRDS_DB_PORT:?missing host port}:5432"
     volumes:
-      - data:/var/lib/postgresql/data
+      - data:${OPENRDS_DATA_MOUNT:-/var/lib/postgresql/data}
     secrets:
       - { source: tls_cert, target: /run/openrds/server.crt, uid: "70", gid: "70", mode: 0444 }
       - { source: tls_key, target: /run/openrds/server.key, uid: "70", gid: "70", mode: 0400 }

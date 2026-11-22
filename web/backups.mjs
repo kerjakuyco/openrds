@@ -49,7 +49,7 @@ export function backupTable(list, { showInstance = true, showType = true, sort =
   const columns = [
     { key: "created", label: "Backup", sort: b => Date.parse(b.createdAt), value: b => h("div", { class: "stack" }, h("strong", null, when(b.createdAt)), h("small", null, ago(b.createdAt))) },
     showInstance && { key: "name", label: "Database", sort: b => b.name, value: b => h("div", { class: "stack" },
-      instance(b.name) ? h("a", { href: `#/databases/${b.name}` }, b.name) : h("span", null, b.name, h("small", null, " (deleted)")), h("small", null, engine(b.engine)?.title || b.engine)) },
+      instance(b.name) ? h("a", { href: `#/databases/${b.name}` }, b.name) : h("span", null, b.name, h("small", null, " (deleted)")), h("small", null, `${engine(b.engine)?.title || b.engine} ${b.version || ""}`.trim())) },
     showType && { key: "kind", label: "Type", sort: kindLabel, value: b => h("span", { class: `chip ${b.final ? "info" : b.kind === "automated" ? "neutral" : "good"}` }, kindLabel(b)) },
     { key: "size", label: "Size", sort: b => b.bytes, cls: "num", value: b => bytes(b.bytes) },
     { key: "expires", label: "Expires", sort: b => b.expiresAt ? Date.parse(b.expiresAt) : Infinity, value: b => b.expiresAt ? h("span", { title: when(b.expiresAt) }, ago(b.expiresAt)) : h("span", { class: "muted" }, "Never") },

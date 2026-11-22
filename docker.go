@@ -37,13 +37,13 @@ var engineOrder = []string{"postgres", "mysql", "valkey"}
 // Compose exec -T keeps database dumps binary-safe in both directions.
 var engines = map[string]engine{
 	"postgres": {
-		title: "PostgreSQL 17", scheme: "postgresql", port: 5432, hostPort: 15432, minMemory: 128, dataDir: "/var/lib/postgresql/data", user: "openrds", database: "app", suffix: ".dump",
+		title: "PostgreSQL", scheme: "postgresql", port: 5432, hostPort: 15432, minMemory: 128, dataDir: "/var/lib/postgresql/data", user: "openrds", database: "app", suffix: ".dump",
 		dump:       []string{"pg_dump", "-U", "openrds", "-d", "app", "--format=custom"},
 		restore:    []string{"pg_restore", "-U", "openrds", "-d", "app", "--single-transaction", "--no-owner", "--no-privileges"},
 		parameters: postgresParameters,
 	},
 	"mysql": {
-		title: "MySQL 8.4", scheme: "mysql", port: 3306, hostPort: 13306, minMemory: 512, dataDir: "/var/lib/mysql", user: "openrds", database: "app", suffix: ".sql",
+		title: "MySQL", scheme: "mysql", port: 3306, hostPort: 13306, minMemory: 512, dataDir: "/var/lib/mysql", user: "openrds", database: "app", suffix: ".sql",
 		parameters: mysqlParameters,
 		// Keep the password out of argv. Root is used locally inside the
 		// container so routine, event and trigger definitions are included.
@@ -51,7 +51,7 @@ var engines = map[string]engine{
 		restore: []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --binary-mode -u root app`},
 	},
 	"valkey": {
-		title: "Valkey 9.1", scheme: "redis", port: 6379, hostPort: 16379, minMemory: 128, dataDir: "/data", user: "default", database: "0", suffix: ".rdb",
+		title: "Valkey", scheme: "redis", port: 6379, hostPort: 16379, minMemory: 128, dataDir: "/data", user: "default", database: "0", suffix: ".rdb",
 		restoreStopped: true,
 		dumpAuth:       true,
 		parameters:     valkeyParameters,
@@ -62,7 +62,7 @@ var engines = map[string]engine{
 		restore: []string{"sh", "-ec", `set -eu
 cat > /data/dump.rdb.new
 magic=$(head -c 5 /data/dump.rdb.new)
-[ "$magic" = REDIS ]
+[ "$magic" = REDIS ] || [ "$magic" = VALKE ] # newer Valkey files start with VALKEY
 mv /data/dump.rdb.new /data/dump.rdb
 rm -rf /data/appendonlydir /data/appendonly.aof`},
 	},
@@ -135,6 +135,8 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 	base := []string{"compose", "--project-name", r.Project, "--file", filepath.Join(m.templates, r.Engine+".yaml")}
 	env := []string{
 		"OPENRDS_DB_PORT=" + strconv.Itoa(r.Port),
+		"OPENRDS_DB_IMAGE=" + r.image(),
+		"OPENRDS_DATA_MOUNT=" + r.dataMount(),
 		"OPENRDS_DB_ALIAS=openrds-" + r.Name,
 		"OPENRDS_DB_CPUS=" + strconv.FormatFloat(r.CPUs, 'f', -1, 64),
 		"OPENRDS_DB_MEMORY=" + strconv.FormatInt(int64(r.MemoryMiB)*1024*1024, 10),

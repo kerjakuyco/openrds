@@ -57,7 +57,7 @@ async function run() {
 
     // Create through the sectioned form, starting from the dashboard's engine picker when it is there.
     if (await firstRun.isVisible()) {
-      await page.getByRole("button", { name: /^PostgreSQL 17/ }).click();
+      await page.getByRole("button", { name: /^PostgreSQL/ }).click();
     } else {
       await page.locator('nav#nav [data-nav="databases"]').click();
       await page.locator("#new-db").click();

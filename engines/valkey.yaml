@@ -1,6 +1,6 @@
 services:
   db:
-    image: valkey/valkey:9.1-alpine
+    image: ${OPENRDS_DB_IMAGE:?missing image}
     restart: unless-stopped
     cpus: ${OPENRDS_DB_CPUS:-0}
     mem_limit: ${OPENRDS_DB_MEMORY:-0}

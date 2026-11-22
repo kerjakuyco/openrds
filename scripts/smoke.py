@@ -218,6 +218,64 @@ case "$message" in *"Disk quota exceeded"*|*"No space left on device"*) ;; *) ec
                 api(f"backups/{b['id']}", "DELETE")
 
 
+def server_version(engine, name):
+    """The major version the running server reports, in the catalog's form."""
+    if engine == "postgres":
+        return str(int(sql(engine, name, "SHOW server_version_num")) // 10000)
+    if engine == "mysql":
+        return ".".join(sql(engine, name, "SELECT VERSION()").split(".")[:2])
+    info = dict(line.strip().split(":", 1) for line in sql(engine, name, ["INFO", "server"]).splitlines() if ":" in line)
+    return ".".join(info.get("valkey_version", info.get("redis_version", "")).split(".")[:2])
+
+
+def exercise_versions(quotas):
+    """The oldest listed version upgrades to the latest by restore, and never back."""
+    catalog = {e["key"]: e for e in api("engines")}
+    for engine in ("postgres", "mysql", "valkey"):
+        versions = [v["version"] for v in catalog[engine]["versions"]]
+        latest, oldest = versions[0], versions[-1]
+        assert catalog[engine]["defaultVersion"] in versions, catalog[engine]
+        name = "ver-" + secrets.token_hex(4)
+        target, older = name + "-up", name + "-down"
+        try:
+            port = free_port()
+            try:
+                api("instances", "POST", {"name": name, "engine": engine, "version": "1.0", "port": port})
+            except RuntimeError as err:
+                assert isinstance(err.__cause__, urllib.error.HTTPError) and err.__cause__.code == 400, err
+            else:
+                raise AssertionError("unlisted version accepted")
+            assert all(d["name"] != name for d in api("instances"))
+            api("instances", "POST", {"name": name, "engine": engine, "version": oldest, "port": port})
+            db = next(d for d in api("instances") if d["name"] == name)
+            assert db["version"] == oldest and db["engineLabel"].endswith(" " + oldest), db
+            assert server_version(engine, name) == oldest
+            write_value(engine, name)
+            snap = api(f"instances/{name}/backups", "POST")
+            assert snap["version"] == oldest, snap
+            # A capped volume, when supported, also covers PostgreSQL 18+'s data path.
+            api(f"backups/{snap['id']}/restore", "POST", {"name": target, "port": free_port(), "version": latest, "diskGiB": int(quotas)})
+            assert next(d for d in api("instances") if d["name"] == target)["version"] == latest
+            assert server_version(engine, target) == latest and read_value(engine, target) == "42"
+            newer = api(f"instances/{target}/backups", "POST")
+            assert newer["version"] == latest, newer
+            if latest != oldest:
+                try:
+                    api(f"backups/{newer['id']}/restore", "POST", {"name": older, "port": free_port(), "version": oldest})
+                except RuntimeError as err:
+                    assert isinstance(err.__cause__, urllib.error.HTTPError) and err.__cause__.code == 400, err
+                else:
+                    raise AssertionError("restore into an older version accepted")
+            print(f"{engine}: {oldest} snapshot restored into {latest}; unlisted and older versions refused", flush=True)
+        finally:
+            for db in api("instances"):
+                if db["name"] in (name, target, older):
+                    api(f"instances/{db['name']}", "DELETE")
+            for b in api("backups"):
+                if b["name"] in (name, target):
+                    api(f"backups/{b['id']}", "DELETE")
+
+
 _ca = None
 
 
@@ -483,4 +541,5 @@ if __name__ == "__main__":
         exercise_security(database_engine)
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise(database_engine, quota == "supported")
+    exercise_versions(quota == "supported")
     exercise_storage()

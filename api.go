@@ -49,21 +49,23 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) error {
 var chartRanges = map[string]time.Duration{"1h": time.Hour, "3h": 3 * time.Hour, "6h": 6 * time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour}
 
 type engineView struct {
-	Key          string      `json:"key"`
-	Title        string      `json:"title"`
-	DefaultPort  int         `json:"defaultPort"`
-	MinMemoryMiB int         `json:"minMemoryMiB"`
-	User         string      `json:"user"`
-	Database     string      `json:"database"`
-	SizeUnits    []string    `json:"sizeUnits,omitempty"`
-	Parameters   []parameter `json:"parameters"`
+	Key          string          `json:"key"`
+	Title        string          `json:"title"`
+	DefaultPort  int             `json:"defaultPort"`
+	MinMemoryMiB int             `json:"minMemoryMiB"`
+	User         string          `json:"user"`
+	Database     string          `json:"database"`
+	SizeUnits    []string        `json:"sizeUnits,omitempty"`
+	Parameters   []parameter     `json:"parameters"`
+	Versions     []engineVersion `json:"versions"`
+	Default      string          `json:"defaultVersion"`
 }
 
 func engineCatalog() []engineView {
 	list := make([]engineView, 0, len(engineOrder))
 	for _, key := range engineOrder {
 		e := engines[key]
-		list = append(list, engineView{key, e.title, e.hostPort, e.minMemory, e.user, e.database, sizeUnits[key], e.parameters})
+		list = append(list, engineView{key, e.title, e.hostPort, e.minMemory, e.user, e.database, sizeUnits[key], e.parameters, engineVersions[key].list, defaultVersion(key)})
 	}
 	return list
 }

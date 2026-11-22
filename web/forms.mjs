@@ -22,6 +22,13 @@ const TEMPLATES = {
 const RETENTION = [0, 1, 2, 3, 5, 7, 10, 14, 21, 30, 35];
 const LENGTHS = [30, 60, 120, 180];
 const namePattern = /^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$/;
+// "PostgreSQL 18 · Stable (recommended)", "MySQL 9.7 LTS · Latest".
+const versionLabel = (eng, x) => `${eng.title} ${x.version}${x.lts ? " LTS" : ""}${x.status === "latest" ? " · Latest" : x.status === "stable" ? " · Stable (recommended)" : ""}`;
+const newerOrSame = (a, b) => {
+  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  return true;
+};
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const hhmm = (minutes) => `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
@@ -191,16 +198,33 @@ function databaseForm({ mode, eng, initial, source }) {
   const changed = () => changes.forEach(fn => fn());
   let n = 0;
 
+  // The engine version: chosen when creating; same or newer when restoring.
+  const versionSelect = h("select", { id: nextId("version") });
+  versionSelect.addEventListener("change", () => { v.version = versionSelect.value; changed(); });
+  function fillVersions() {
+    const floor = mode === "restore" ? source.version : null;
+    const list = eng.versions.filter(x => !floor || newerOrSame(x.version, floor));
+    if (!list.some(x => x.version === v.version)) v.version = (list.find(x => x.version === floor) || list.find(x => x.status === "stable") || list[0])?.version;
+    versionSelect.replaceChildren(...list.map(x => h("option", { value: x.version, selected: x.version === v.version }, versionLabel(eng, x))));
+  }
+  fillVersions();
+  const versionField = () => field("Engine version", versionSelect, { hint: mode === "restore"
+    ? "The same version or newer. Backups can’t move to an older version."
+    : "Stable is the safe choice. To upgrade later, restore a snapshot into a newer version." });
+
   // 1. Engine and template (create only)
   let engineCards = null, templateCards = null;
   if (mode === "create") {
     engineCards = choiceCards("engine", state.engines.map(e => ({ value: e.key, title: e.title, detail: ENGINE_TEXT[e.key], badge: { postgres: "PG", mysql: "My", valkey: "Vk" }[e.key] })),
-      v.engine, (key) => { v.engine = key; eng = engine(key); fields.port.control.value = suggestPort(key, taken); v.port = Number(fields.port.control.value); rebuildParams(); updateSizes(); changed(); }, { label: "Engine", cls: "cols-3" });
+      v.engine, (key) => { v.engine = key; eng = engine(key); v.version = eng.defaultVersion; fillVersions(); fields.port.control.value = suggestPort(key, taken); v.port = Number(fields.port.control.value); rebuildParams(); updateSizes(); changed(); }, { label: "Engine", cls: "cols-3" });
     templateCards = choiceCards("template", Object.entries(TEMPLATES).map(([value, t]) => ({ value, title: t.title, detail: t.detail })), v.template, applyTemplate, { label: "Template", cls: "cols-2" });
-    sections.push(section(++n, "Engine options", "Each database gets its own container and volume.", engineCards),
+    sections.push(section(++n, "Engine options", "Each database gets its own container and volume.", engineCards, versionField()),
       section(++n, "Templates", "Good defaults. Change anything below.", templateCards));
+  } else if (mode === "restore") {
+    sections.push(section(++n, "Engine", null, keyValues([["Engine", eng.title], ["Source snapshot", `${source.name} · ${source.version ? `${eng.title} ${source.version} · ` : ""}${new Date(source.createdAt).toLocaleString()}`]]), versionField()));
   } else {
-    sections.push(section(++n, "Engine", null, keyValues([["Engine", eng.title], mode === "restore" ? ["Source snapshot", `${source.name} · ${new Date(source.createdAt).toLocaleString()}`] : ["DB identifier", initial.name]])));
+    sections.push(section(++n, "Engine", null, keyValues([["Engine", `${eng.title} ${initial.version}`], ["DB identifier", initial.name]]),
+      h("p", { class: "muted" }, "To upgrade, take a snapshot and restore it into a new database on a newer version.")));
   }
 
   // Settings
@@ -318,7 +342,7 @@ function databaseForm({ mode, eng, initial, source }) {
 
   function read() {
     return {
-      name: v.name, engine: eng.key, port: v.port, cpus: v.cpus || 0, memoryMiB: v.memoryMiB || 0, diskGiB: v.diskGiB || 0,
+      name: v.name, engine: eng.key, version: v.version, port: v.port, cpus: v.cpus || 0, memoryMiB: v.memoryMiB || 0, diskGiB: v.diskGiB || 0,
       backupRetentionDays: v.retention, backupWindow: v.window, deletionProtection: v.protection, requireTLS: Boolean(v.tls),
       tags: tags.value(), parameters: params.value(),
     };
@@ -350,7 +374,7 @@ function databaseForm({ mode, eng, initial, source }) {
   function renderSummary() {
     const spec = read();
     summary.replaceChildren(keyValues([
-      ["Engine", eng.title],
+      ["Engine", `${eng.title} ${spec.version || ""}`],
       mode !== "modify" && ["Identifier", spec.name || "—"],
       ["Size", spec.cpus || spec.memoryMiB ? `${spec.cpus ? `${spec.cpus} vCPU` : "Shared CPU"} · ${spec.memoryMiB ? mib(spec.memoryMiB) : "shared memory"}` : "Shared host"],
       ["Storage", spec.diskGiB ? `${spec.diskGiB} GiB limit` : "Uncapped"],
@@ -409,7 +433,7 @@ export async function createView() {
   preferred = null;
   const start = freeWindow();
   const t = TEMPLATES.production;
-  const f = databaseForm({ mode: "create", eng: first, initial: { engine: first.key, template: "production", size: t.size, cpus: 2, memoryMiB: 4096, port: suggestPort(first.key), retention: t.retention, window: formatWindow(start, 30), protection: t.protection, tags: {}, parameters: {} } });
+  const f = databaseForm({ mode: "create", eng: first, initial: { engine: first.key, version: first.defaultVersion, template: "production", size: t.size, cpus: 2, memoryMiB: 4096, port: suggestPort(first.key), retention: t.retention, window: formatWindow(start, 30), protection: t.protection, tags: {}, parameters: {} } });
   f.form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const spec = f.read();
@@ -427,7 +451,7 @@ export async function restoreView(id) {
   const eng = engine(b.engine);
   let name = `${b.name.slice(0, 32)}-restore`;
   for (let i = 2; state.instances?.some(d => d.name === name); i++) name = `${b.name.slice(0, 30)}-restore${i}`;
-  const f = databaseForm({ mode: "restore", eng, source: b, initial: { name, engine: b.engine, size: sizeName(b.cpus || 0, b.memoryMiB || 0), cpus: b.cpus || 0, memoryMiB: b.memoryMiB || 0, diskGiB: b.diskGiB || 0, port: suggestPort(b.engine), retention: 7, window: formatWindow(freeWindow(), 30), protection: false, tags: {}, parameters: b.parameters || {} } });
+  const f = databaseForm({ mode: "restore", eng, source: b, initial: { name, engine: b.engine, version: b.version, size: sizeName(b.cpus || 0, b.memoryMiB || 0), cpus: b.cpus || 0, memoryMiB: b.memoryMiB || 0, diskGiB: b.diskGiB || 0, port: suggestPort(b.engine), retention: 7, window: formatWindow(freeWindow(), 30), protection: false, tags: {}, parameters: b.parameters || {} } });
   f.form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const spec = f.read();
@@ -446,7 +470,7 @@ export async function modifyView(name) {
   const d = instance(name);
   if (!d) return { el: h("div", null, heading("Database not found", "It may have been deleted."), h("a", { class: "btn", href: "#/databases" }, "Back to databases")), title: "Modify", nav: "databases", crumbs: [["Databases", "#/databases"], ["Modify"]] };
   const eng = engine(d.engine);
-  const f = databaseForm({ mode: "modify", eng, initial: { name: d.name, engine: d.engine, size: sizeName(d.cpus, d.memoryMiB), cpus: d.cpus, memoryMiB: d.memoryMiB, diskGiB: d.diskGiB, port: d.port, retention: d.backupRetentionDays, window: d.backupWindow, protection: d.deletionProtection, tls: d.requireTLS, tags: d.tags || {}, parameters: d.parameters || {} } });
+  const f = databaseForm({ mode: "modify", eng, initial: { name: d.name, engine: d.engine, version: d.version, size: sizeName(d.cpus, d.memoryMiB), cpus: d.cpus, memoryMiB: d.memoryMiB, diskGiB: d.diskGiB, port: d.port, retention: d.backupRetentionDays, window: d.backupWindow, protection: d.deletionProtection, tls: d.requireTLS, tags: d.tags || {}, parameters: d.parameters || {} } });
   f.form.addEventListener("submit", (e) => {
     e.preventDefault();
     const spec = f.read();

@@ -126,7 +126,7 @@ function remotePanel(onChange) {
       const list = await api("storage/backups");
       body.replaceChildren(list.length ? dataTable({ caption: "Backups in storage", rows: list, columns: [
         { key: "created", label: "Backup", value: b => h("div", { class: "stack" }, h("strong", null, when(b.createdAt)), h("small", null, ago(b.createdAt))) },
-        { key: "name", label: "Database", value: b => h("div", { class: "stack" }, h("span", null, b.name), h("small", null, engine(b.engine)?.title || b.engine)) },
+        { key: "name", label: "Database", value: b => h("div", { class: "stack" }, h("span", null, b.name), h("small", null, `${engine(b.engine)?.title || b.engine} ${b.version || ""}`.trim())) },
         { key: "size", label: "Size", cls: "num", value: b => bytes(b.bytes) },
         { key: "where", label: "Location", value: b => b.local ? h("span", { class: "status good" }, icon("ok"), "Also on this server") : h("span", { class: "status info" }, icon("cloud"), "Storage only") },
         { key: "actions", label: h("span", { class: "sr-only" }, "Actions"), cls: "actions", value: b => b.local ? null : h("div", { class: "cell-actions" },

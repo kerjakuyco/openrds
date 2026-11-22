@@ -40,6 +40,7 @@ var errBusy = &problem{409, "An operation is already running for this instance."
 type instanceSpec struct {
 	Name                string            `json:"name"`
 	Engine              string            `json:"engine"`
+	Version             string            `json:"version,omitempty"` // empty: created before versions existed
 	Port                int               `json:"port"`
 	CPUs                float64           `json:"cpus"`
 	MemoryMiB           int               `json:"memoryMiB"`
@@ -294,6 +295,12 @@ func (m *manager) begin(name string, create *instanceSpec, restoring bool) (reco
 		create.Name = name
 		if err := checkPorts(all, *create); err != nil {
 			return r, nil, err
+		}
+		if create.Version == "" {
+			create.Version = defaultVersion(create.Engine)
+		}
+		if !offeredVersion(create.Engine, create.Version) {
+			return r, nil, fail(400, fmt.Sprintf("Choose a listed %s version.", engines[create.Engine].title))
 		}
 		r = record{instanceSpec: *create, Project: "openrds-db-" + randomHex(16),
 			Password: randomHex(24), Created: time.Now().UTC(), PendingRestore: restoring}

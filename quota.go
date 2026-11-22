@@ -223,7 +223,7 @@ func (m *manager) volumeUsage(ctx context.Context, name string) (int64, error) {
 	scan, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	if err := m.compose(scan, r, nil, &out, "exec", "-T", "db", "du", "-skx", engines[r.Engine].dataDir); err != nil {
+	if err := m.compose(scan, r, nil, &out, "exec", "-T", "db", "du", "-skx", r.dataMount()); err != nil {
 		return 0, fail(502, "Could not measure the running database’s data volume: "+err.Error())
 	}
 	fields := strings.Fields(out.String())
