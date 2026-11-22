@@ -291,7 +291,9 @@ func (h *history) view(project string, span time.Duration, now time.Time) histor
 		v.Message = h.unavailable
 		return v
 	}
-	v.Points = h.series(project, span, now)
+	if pts := h.series(project, span, now); pts != nil { // a database with no readings yet is [], not null
+		v.Points = pts
+	}
 	return v
 }
 

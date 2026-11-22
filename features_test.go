@@ -512,6 +512,9 @@ func TestMetricHistoryRatesAndBuckets(t *testing.T) {
 	if got := len(h.series("q", time.Hour, now)); got > 120 || got < 115 {
 		t.Fatalf("1h at 30s resolution: %d points", got)
 	}
+	if body, _ := json.Marshal(h.view("new", time.Hour, now)); !strings.Contains(string(body), `"points":[]`) {
+		t.Fatalf("a database without readings must send an empty list: %s", body)
+	}
 	day := h.series("q", 24*time.Hour, now)
 	if len(day) < 19 || len(day) > 21 || day[1].NetIn != 100 {
 		t.Fatalf("24h buckets: %d points, %+v", len(day), day[1])
