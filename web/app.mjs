@@ -31,7 +31,7 @@ setTheme(theme);
 // ---------- routes
 
 const operatorOnly = (make) => (m) => can("operator") ? make(m)
-  : { el: empty("key", "This needs the Operator role", "Viewers can look at databases but not change them. Ask an administrator for access.", h("a", { class: "btn", href: "#/databases" }, "Back to databases")), title: "Not allowed", nav: "databases", crumbs: [["Not allowed"]] };
+  : { el: empty("key", "This needs the Operator role", "Viewers can’t change this. Ask an admin.", h("a", { class: "btn", href: "#/databases" }, "Back to databases")), title: "Not allowed", nav: "databases", crumbs: [["Not allowed"]] };
 
 const ROUTES = [
   [/^\/?$|^\/dashboard$/, () => dashboardView()],
@@ -82,7 +82,7 @@ async function route() {
     return;
   }
   view?.destroy?.();
-  view = { el: empty("search", "Page not found", "Check the address, or start from the dashboard.", h("a", { class: "btn", href: "#/" }, "Go to the dashboard")), title: "Not found" };
+  view = { el: empty("search", "Page not found", "Check the address.", h("a", { class: "btn", href: "#/" }, "Go to the dashboard")), title: "Not found" };
   $("content").replaceChildren(view.el);
   crumbs([["Not found"]]);
 }
@@ -97,7 +97,7 @@ subscribe((changed) => {
     link.className = `link-state ${bad ? "warn" : "good"}`;
     $("host-name").textContent = bad ? "Degraded" : (state.host?.name || "Connected");
     link.title = `${bad ? "Some data could not be refreshed" : "Connected to the Docker host"} · last checked ${new Date(state.syncedAt).toLocaleTimeString()}`;
-    setAlert($("sync-error"), bad ? `Some data could not be refreshed, so older values are shown. ${state.problems.join(" · ")}` : "", "warn");
+    setAlert($("sync-error"), bad ? `Some data is out of date. ${state.problems.join(" · ")}` : "", "warn");
   }
   if (changed.has("operations")) {
     const ops = $("ops");

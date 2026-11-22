@@ -98,7 +98,7 @@ export async function api(path, { method = "GET", body, token } = {}) {
     res = await fetch(`/api/${path}`, { method, headers, credentials: "same-origin", cache: "no-store",
       body: body === undefined ? undefined : JSON.stringify(body) });
   } catch {
-    throw new ApiError("The control plane did not respond. Check that your SSH tunnel is still open.", 0);
+    throw new ApiError("No response. Is your SSH tunnel open?", 0);
   }
   if (!res.ok) {
     let message;
@@ -313,7 +313,7 @@ export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, row
 export function codeBlock(text, { label = "Copy", onCopy = null, caption = "" } = {}) {
   const copy = btn([icon("copy"), label], async () => {
     const ok = await copyText(text);
-    toast(ok ? "Copied to the clipboard." : "Copying failed. Select the text and copy it.", ok ? "success" : "warn");
+    toast(ok ? "Copied to the clipboard." : "Copy failed. Select and copy it.", ok ? "success" : "warn");
     if (ok) onCopy?.();
   }, "small ghost");
   return h("div", { class: "code-wrap" }, caption && h("p", { class: "code-caption" }, caption), h("div", { class: "code" }, h("pre", null, text), copy));
@@ -345,7 +345,7 @@ export function initials(name = "") {
 export const avatar = (name, cls = "") => h("span", { class: `avatar ${cls}`.trim(), "aria-hidden": "true" }, initials(name));
 
 export const ROLES = {
-  admin: { label: "Admin", text: "Everything, including accounts and roles." },
-  operator: { label: "Operator", text: "Create, change and delete databases and backups, and reveal credentials." },
-  viewer: { label: "Viewer", text: "Read-only: status, monitoring, logs and events. No credentials or backup downloads." },
+  admin: { label: "Admin", text: "Everything, including accounts." },
+  operator: { label: "Operator", text: "Manage databases, backups, users and access." },
+  viewer: { label: "Viewer", text: "Look only. No passwords or downloads." },
 };

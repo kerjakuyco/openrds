@@ -16,9 +16,15 @@
   <div id="boot" class="boot">Connecting to OpenRDS…</div>
 
   <main id="login" class="login-screen" hidden>
-    <div class="login-card">
-      <div class="brand"><svg class="mark" aria-hidden="true"><use href="/icons.svg#mark"/></svg>OpenRDS</div>
-      <div id="auth-panel"></div>
+    <div class="login-wrap">
+      <section class="login-intro" aria-label="About OpenRDS">
+        <div class="brand"><svg class="mark" aria-hidden="true"><use href="/icons.svg#mark"/></svg>OpenRDS</div>
+        <div id="auth-intro" class="intro-body"></div>
+        <p class="intro-foot">Self-hosted. Your data stays on this server.</p>
+      </section>
+      <div class="login-card">
+        <div id="auth-panel"></div>
+      </div>
     </div>
   </main>
 

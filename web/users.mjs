@@ -17,9 +17,9 @@ export function linkDialog(u, secret, reset) {
   modal({
     title: reset ? `New sign-in link for ${u.name}` : `${u.name} is invited`, kicker: reset ? "Password reset" : "Invitation", confirm: "Done", cancel: false, wide: true,
     body: [
-      h("p", { class: "muted" }, `Send this link to ${u.name} privately. It works once and expires in 72 hours; they choose their own password.`),
+      h("p", { class: "muted" }, `Send this to ${u.name} privately. It works once, for 72 hours.`),
       codeBlock(link, { label: "Copy link" }),
-      alertBox(h("span", null, "The console only listens on the VPS, so they open the link through their own SSH tunnel, for example ",
+      alertBox(h("span", null, "They open it through an SSH tunnel, for example ",
         h("code", null, `ssh -N -L ${location.port || 80}:127.0.0.1:${location.port || 80} user@your-vps`), "."), "info"),
     ],
     run: async () => {},
@@ -39,7 +39,7 @@ function invite() {
     body: [
       h("div", { class: "form-grid" },
         h("div", { class: "field" }, h("label", { class: "field-label", for: nameField.id }, "Name"), nameField),
-        h("div", { class: "field" }, h("label", { class: "field-label", for: userField.id }, "Username"), userField, h("p", { class: "hint" }, "2–32 lowercase letters, digits, dots, hyphens or underscores."))),
+        h("div", { class: "field" }, h("label", { class: "field-label", for: userField.id }, "Username"), userField, h("p", { class: "hint" }, "Lowercase letters, digits, dots, dashes or underscores."))),
       h("p", { class: "field-label" }, "Role"), roles,
     ],
     run: async (form) => {
@@ -72,7 +72,7 @@ function rowActions(u) {
     { label: "Change role", icon: "key", disabled: self, reason, run: () => changeRole(u) },
     { label: u.status === "invited" ? "Issue a new invite link" : "Reset password", icon: "refresh", disabled: self, reason, run: () => modal({
       title: `Reset ${u.name}’s password?`, kicker: "Users", confirm: "Reset and create link",
-      body: h("p", { class: "muted" }, `${u.name} is signed out everywhere and cannot sign in until they choose a new password from the link you send.`),
+      body: h("p", { class: "muted" }, `${u.name} is signed out until they set a new password.`),
       run: async () => {
         const res = await api(`users/${u.id}/reset`, { method: "POST" });
         await sync();
@@ -81,13 +81,13 @@ function rowActions(u) {
     }) },
     { label: u.status === "disabled" ? "Enable" : "Disable", icon: u.status === "disabled" ? "play" : "stop", disabled: self, reason, run: () => modal({
       title: u.status === "disabled" ? `Enable ${u.name}?` : `Disable ${u.name}?`, kicker: "Users", confirm: u.status === "disabled" ? "Enable" : "Disable",
-      body: h("p", { class: "muted" }, u.status === "disabled" ? "They can sign in again with their password." : "They are signed out at once and cannot sign in until you enable the account. Nothing else changes."),
+      body: h("p", { class: "muted" }, u.status === "disabled" ? "They can sign in again." : "They’re signed out until you enable the account."),
       run: async () => { await api(`users/${u.id}`, { method: "PATCH", body: { disabled: u.status !== "disabled" } }); await sync(); },
     }) },
     "-",
     { label: "Delete", icon: "trash", danger: true, disabled: self, reason, run: () => modal({
       title: `Delete ${u.name}?`, kicker: "Users", confirm: "Delete user", tone: "danger", typed: u.username,
-      body: h("p", { class: "muted" }, "The account is removed and its sessions end. Events keep the record of what it did."),
+      body: h("p", { class: "muted" }, "The account and its sessions are removed. Events are kept."),
       run: async () => { await api(`users/${u.id}`, { method: "DELETE" }); toast(`${u.name} was deleted.`, "success"); await sync(); },
     }) },
   ], { cls: "small ghost icon-only", labelIcon: "more", ariaLabel: `Actions for ${u.name}`, chevron: false });
@@ -95,20 +95,21 @@ function rowActions(u) {
 
 export function usersView() {
   if (!can("admin")) {
-    return { el: empty("key", "Administrators only", "Ask an administrator if you need an account changed."), title: "Users", nav: "users", crumbs: [["Users"]] };
+    return { el: empty("key", "Administrators only", "Ask an admin to change accounts."), title: "Users", nav: "users", crumbs: [["Users"]] };
   }
   const list = h("div", { class: "flush" });
   const count = h("span", { class: "counter" });
   const el = h("div", { class: "stack-gap" },
-    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Users"), h("p", { class: "muted" }, "Who can sign in to OpenRDS, and what each person can do.")),
+    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Users"), h("p", { class: "muted" }, "Who can sign in and what they can do.")),
       h("div", { class: "page-actions" }, h("button", { type: "button", class: "btn primary", onclick: invite }, icon("plus"), "Invite user"))),
-    state.me?.token ? alertBox("You are signed in with the API key, which is meant for scripts. Sign in with an account day to day.", "info") : null,
+    state.me?.token ? alertBox("You’re using the API key, which is for scripts. Sign in with an account instead.", "info") : null,
     h("section", { class: "panel" }, h("header", { class: "panel-head" }, h("div", null, h("h2", null, "Accounts", count))), list),
     panel("What each role can do", {}, h("div", { class: "table-wrap" }, h("table", { class: "matrix" },
       h("thead", null, h("tr", null, h("th", { scope: "col" }, "Task"), ...Object.values(ROLES).map(r => h("th", { scope: "col" }, r.label)))),
       h("tbody", null, [
         ["See databases, monitoring, logs and events", true, true, true],
         ["Reveal passwords and download backups", true, true, false],
+        ["Manage database users, passwords and network access", true, true, false],
         ["Create, modify, start, stop and delete databases", true, true, false],
         ["Take, restore and delete backups", true, true, false],
         ["Invite users and change roles", true, false, false],
@@ -118,7 +119,7 @@ export function usersView() {
     const users = state.users;
     count.textContent = users ? String(users.length) : "—";
     if (!users) { list.replaceChildren(empty("key", "Reading accounts…", "")); return; }
-    if (!users.length) { list.replaceChildren(empty("key", "No accounts yet", "Invite people so each has their own sign-in and role.", h("button", { type: "button", class: "btn primary", onclick: invite }, "Invite user"))); return; }
+    if (!users.length) { list.replaceChildren(empty("key", "No accounts yet", "Invite people to give each their own sign-in.", h("button", { type: "button", class: "btn primary", onclick: invite }, "Invite user"))); return; }
     list.replaceChildren(dataTable({ caption: "Accounts", rows: users, columns: [
       { key: "name", label: "User", value: u => h("div", { class: "db-cell" }, avatar(u.name), h("span", { class: "stack" }, h("strong", null, u.name, state.me?.id === u.id ? h("span", { class: "you" }, " (you)") : null), h("small", null, u.username))) },
       { key: "role", label: "Role", value: u => chip(ROLES[u.role]?.label || u.role, u.role === "admin" ? "info" : "neutral") },

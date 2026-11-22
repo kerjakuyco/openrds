@@ -17,7 +17,7 @@ export function eventsView() {
   const list = h("div", { id: "activity-list" });
   const more = h("div", { class: "more-row" });
   const el = h("div", null,
-    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Events"), h("p", { class: "muted" }, "The latest 1,000 operations: provisioning, lifecycle changes, modifications, backups and expiry."))),
+    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Events"), h("p", { class: "muted" }, "The last 1,000 actions."))),
     h("section", { class: "panel" },
       h("header", { class: "panel-head" }, h("div", null, h("h2", null, "Operation history", count))),
       h("div", { class: "toolbar" }, h("label", { class: "search" }, icon("search"), search, h("kbd", null, "/")), nameSel, resultSel),
@@ -40,7 +40,7 @@ export function eventsView() {
       { key: "result", label: "Outcome", value: e => resultChip(e.result) },
       { key: "actor", label: "By", value: e => e.actor && e.actor !== "system" ? e.actor : h("span", { class: "muted" }, e.actor ? "OpenRDS" : "—") },
       { key: "detail", label: "Detail", cls: "wrap", value: e => e.detail || h("span", { class: "muted" }, "—") },
-    ] }) : empty("bell", all.length ? "No matching events" : "No operations yet", all.length ? "Try another filter." : "Provisioning, lifecycle and backup operations are recorded here."));
+    ] }) : empty("bell", all.length ? "No matching events" : "No operations yet", all.length ? "Try another filter." : "Actions show up here."));
     more.replaceChildren(shown.length > ui.limit ? h("button", { type: "button", class: "btn", onclick: () => { ui.limit += 50; render(); } }, `Show more (${shown.length - ui.limit} left)`) : "");
   }
   render();

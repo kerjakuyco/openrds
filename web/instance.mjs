@@ -6,8 +6,9 @@ import { timeChart, chartGroup } from "./charts.mjs";
 import { databaseActions, takeSnapshot, confirmReboot } from "./actions.mjs";
 import { backupTable, backupSummary } from "./backups.mjs";
 import { tagEditor } from "./forms.mjs";
+import { networkPanel, encryptionPanel, usersTab } from "./security.mjs";
 
-const TABS = [["connectivity", "Connectivity & security"], ["monitoring", "Monitoring"], ["logs", "Logs & events"],
+const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["logs", "Logs & events"],
   ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
 let chartRange = "1h";
 
@@ -17,6 +18,8 @@ const pendingChanges = (d) => {
   if (d.applied.cpus !== d.cpus) out.push(`CPU ${d.applied.cpus ? `${d.applied.cpus} vCPU` : "unlimited"} → ${d.cpus ? `${d.cpus} vCPU` : "unlimited"}`);
   if (d.applied.memoryMiB !== d.memoryMiB) out.push(`memory ${d.applied.memoryMiB ? mib(d.applied.memoryMiB) : "unlimited"} → ${d.memoryMiB ? mib(d.memoryMiB) : "unlimited"}`);
   if (JSON.stringify(Object.entries(d.applied.parameters || {}).sort()) !== JSON.stringify(Object.entries(d.parameters || {}).sort())) out.push("engine parameters");
+  if (Boolean(d.applied.requireTLS) !== Boolean(d.requireTLS)) out.push(d.requireTLS ? "require TLS" : "TLS optional");
+  if ((d.applied.publicHost || "") !== (d.publicHost || "")) out.push("new public address");
   return out;
 };
 
@@ -24,14 +27,12 @@ function connectivityTab(d) {
   const eng = engine(d.engine);
   const el = h("div", { class: "stack-gap" },
     connectGuide(d, eng, { canReveal: can("operator") }).el,
-    h("div", { class: "tab-grid" },
-      panel("Endpoint & port", {}, keyValues([["Endpoint", h("code", null, "127.0.0.1")], ["Port", h("code", null, String(d.port))],
-        ["Master user", h("code", null, eng.user)], [d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)],
-        ["Container DNS name", h("code", null, `openrds-${d.name}`)], ["Protocol", d.engine === "valkey" ? "Redis (RESP)" : d.engineLabel]], "cols-2")),
-      panel("Security", {}, h("ul", { class: "facts" },
-        h("li", null, icon("shield"), "The port is published on the VPS loopback interface only; nothing listens publicly."),
-        h("li", null, icon("key"), "The password was generated for this database and is kept in the control volume."),
-        h("li", null, icon("terminal"), "Traffic between the tunnel and the database is not encrypted inside the VPS.")))));
+    h("div", { class: "tab-grid" }, networkPanel(d, state.instances || []), encryptionPanel(d)),
+    panel("Endpoint & port", {}, keyValues([["Endpoint", h("code", null, "127.0.0.1")], ["Port", h("code", null, String(d.port))],
+      ["Public endpoint", d.publicAccess ? h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`) : "Off"],
+      ["Owner user", h("code", null, eng.user)], [d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)],
+      ["Container DNS name", h("code", null, `openrds-${d.name}`)], ["Protocol", d.engine === "valkey" ? "Redis (RESP)" : d.engineLabel],
+      ["Database users", String(1 + (d.users || []).length)]], "cols-4")));
   return { el };
 }
 
@@ -43,12 +44,12 @@ function monitoringTab(d) {
   const charts = [
     timeChart({ title: "CPU utilization", subtitle: d.cpus ? `Percent of the ${d.cpus} vCPU limit` : `Percent of the host’s ${hostCPUs} vCPU`,
       series: [{ label: "CPU", cls: "s1", value: p => p.cpu / base }], format: percent, axisFormat: v => `${v}%`, domainMax: () => 100 }),
-    timeChart({ title: "Memory in use", subtitle: d.memoryMiB ? `Against the ${mib(d.memoryMiB)} limit, excluding reclaimable cache` : "Excluding reclaimable cache. No memory limit is set.",
+    timeChart({ title: "Memory in use", subtitle: d.memoryMiB ? `Of the ${mib(d.memoryMiB)} limit, without cache` : "Without cache. No limit set.",
       series: [{ label: "Memory", cls: "s1", value: p => p.memory }], format: bytes, binary: true, floor: 1048576,
       domainMax: limit ? () => limit : null, reference: limit ? { value: limit, label: `Limit ${mib(d.memoryMiB)}` } : null }),
-    timeChart({ title: "Network throughput", subtitle: "Bytes per second on the database’s network",
+    timeChart({ title: "Network throughput", subtitle: "Bytes per second",
       series: [{ label: "In", cls: "s1", value: p => p.netIn }, { label: "Out", cls: "s2", value: p => p.netOut }], format: rate, binary: true, floor: 1024 }),
-    timeChart({ title: "Disk throughput", subtitle: "Bytes per second read from and written to storage",
+    timeChart({ title: "Disk throughput", subtitle: "Bytes per second read and written",
       series: [{ label: "Read", cls: "s1", value: p => p.read }, { label: "Write", cls: "s2", value: p => p.write }], format: rate, binary: true, floor: 1024 }),
   ];
   charts.forEach(c => group.add(c));
@@ -72,7 +73,7 @@ function monitoringTab(d) {
       } else notice.replaceChildren();
       const step = Math.max(v.interval, v.range / 240);
       charts.forEach(c => c.update({ points: v.points || [], from: v.now - v.range, to: v.now, step }));
-      note.textContent = `A reading every ${v.interval} seconds, averaged to fit the range. Updated ${clock(Date.now())}.`;
+      note.textContent = `Every ${v.interval}s · updated ${clock(Date.now())}`;
     } catch (err) {
       charts.forEach(c => c.setLoading(false));
       note.textContent = err.message;
@@ -110,7 +111,7 @@ function logsTab(d) {
   renderEvents();
   load();
   const el = h("div", { class: "stack-gap" },
-    panel("Database log", { description: "The latest 120 lines, up to 64 KiB. Passwords are redacted.",
+    panel("Database log", { description: "Last 120 lines. Passwords hidden.",
       actions: [h("label", { class: "check inline", for: follow.id }, follow, "Follow"), btn([icon("refresh"), "Refresh"], load, "small")] }, output),
     panel("Recent events", { actions: [h("a", { class: "btn small", href: "#/events" }, "All events")] }, events));
   return { el, update: renderEvents, destroy: () => clearInterval(timer) };
@@ -145,9 +146,9 @@ function storagePanel(d) {
     }, "small");
     apply.disabled = !stopped;
     body.push(h("div", { class: "resize" }, h("div", { class: "row" }, input, h("span", { class: "muted" }, "GiB"), apply),
-      h("p", { class: "muted" }, stopped ? "Grow or shrink the ext4 volume. A smaller size is refused when the data does not fit." : "Stop the database to change this limit.")));
+      h("p", { class: "muted" }, stopped ? "Grow or shrink the volume. Shrinking needs room for the data." : "Stop the database to change this limit.")));
   } else if (!d.diskGiB) {
-    body.push(h("p", { class: "muted" }, "A limit cannot be added to an existing volume. Restore a snapshot into a new instance with a data volume limit."));
+    body.push(h("p", { class: "muted" }, "To add a limit, restore a snapshot into a new database with one."));
   }
   return panel("Storage", {}, ...body);
 }
@@ -160,7 +161,7 @@ function configurationTab(d) {
   const describe = (name) => eng.parameters.find(p => p.name === name);
   const paramRows = [...params.map(([k, v]) => ({ k, v, pending: Boolean(d.applied) && applied[k] !== v })), ...removed.map(k => ({ k, v: null, pending: true }))];
   const el = h("div", { class: "stack-gap" },
-    d.applied && alertBox(`Pending until the next restart: ${pendingChanges(d).join(", ")}.`, "info"),
+    d.applied && alertBox(`Applies at next restart: ${pendingChanges(d).join(", ")}.`, "info"),
     h("div", { class: "tab-grid" },
       panel("Instance configuration", { actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Modify")] : [] }, keyValues([
         ["Engine", d.engineLabel], ["Created", when(d.createdAt)],
@@ -168,14 +169,14 @@ function configurationTab(d) {
         ["Host port", String(d.port)], ["Deletion protection", d.deletionProtection ? "On" : "Off"],
       ], "cols-2")),
       storagePanel(d)),
-    panel("Engine parameters", { counter: params.length, description: "Values passed to the engine at start-up. Unlisted settings use the engine default.",
+    panel("Engine parameters", { counter: params.length, description: "Unlisted settings use the default.",
       actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("sliders"), "Edit parameters")] : [] },
     paramRows.length ? dataTable({ caption: "Engine parameters", rows: paramRows, columns: [
       { key: "k", label: "Parameter", cls: "wrap", value: r => h("div", { class: "stack" }, h("code", null, r.k), h("small", null, describe(r.k)?.description || "")) },
       { key: "v", label: "Value", value: r => r.v === null ? h("span", { class: "muted" }, "Default") : h("code", null, r.v === "" ? "(empty)" : r.v) },
       { key: "d", label: "Default", value: r => h("code", { class: "muted" }, describe(r.k)?.default || "(empty)") },
       { key: "s", label: "Status", value: r => r.pending ? h("span", { class: "status info" }, icon("pending"), "Pending restart") : h("span", { class: "status good" }, icon("ok"), "Applied") },
-    ] }) : empty("sliders", "Engine defaults", `This database uses the default ${eng.title} configuration.`)));
+    ] }) : empty("sliders", "Engine defaults", "No custom settings.")));
   return { el };
 }
 
@@ -183,11 +184,11 @@ function backupsTab(d) {
   const list = h("div", { class: "flush" });
   function render(cur) {
     const mine = (state.backups || []).filter(b => b.name === cur.name && Date.parse(b.createdAt) >= Date.parse(cur.createdAt));
-    list.replaceChildren(mine.length ? backupTable(mine, { showInstance: false }) : empty("camera", "No backups of this database yet", isRunning(cur) ? "Take a snapshot now, or turn on automated backups." : "Start the database to take a snapshot."));
+    list.replaceChildren(mine.length ? backupTable(mine, { showInstance: false }) : empty("camera", "No backups of this database yet", isRunning(cur) ? "Take a snapshot or turn on backups." : "Start the database to take a snapshot."));
   }
   const toggle = btn(d.deletionProtection ? "Turn off" : "Turn on", () => modal({
     title: d.deletionProtection ? "Turn off deletion protection?" : "Turn on deletion protection?", kicker: d.name, confirm: d.deletionProtection ? "Turn off" : "Turn on",
-    body: h("p", { class: "muted" }, d.deletionProtection ? "Any operator or administrator will be able to delete this database." : "Deleting the database is refused until protection is turned off again."),
+    body: h("p", { class: "muted" }, d.deletionProtection ? "Operators will be able to delete it." : "It can’t be deleted until you turn this off."),
     run: async () => {
       await api(`instances/${d.name}/modify`, { method: "POST", body: { deletionProtection: !d.deletionProtection } });
       toast(`Deletion protection is ${d.deletionProtection ? "off" : "on"} for ${d.name}.`, "success");
@@ -199,8 +200,8 @@ function backupsTab(d) {
   const el = h("div", { class: "stack-gap" },
     h("div", { class: "tab-grid" },
       panel("Automated backups", { actions: can("operator") ? [h("a", { class: "btn small", href: `#/databases/${d.name}/modify` }, icon("edit"), "Change")] : [] }, backupSummary(d)),
-      panel("Deletion protection", { actions: can("operator") ? [toggle] : [] }, h("p", { class: "protection" }, icon("shield"), d.deletionProtection ? "On. The database cannot be deleted until protection is turned off." : "Off. The database can be deleted, with an optional final snapshot."))),
-    panel("Snapshots and backups", { description: "Every recovery point of this database. Restoring always creates a new database.", actions: can("operator") ? [snap] : [] }, list));
+      panel("Deletion protection", { actions: can("operator") ? [toggle] : [] }, h("p", { class: "protection" }, icon("shield"), d.deletionProtection ? "On. It can’t be deleted." : "Off. It can be deleted."))),
+    panel("Snapshots and backups", { description: "Restoring creates a new database.", actions: can("operator") ? [snap] : [] }, list));
   render(d);
   return { el, update: render };
 }
@@ -209,24 +210,25 @@ function tagsTab(d) {
   const tags = Object.entries(d.tags || {}).sort();
   const manage = btn([icon("tag"), "Manage tags"], () => {
     const editor = tagEditor(d.tags);
-    modal({ title: "Manage tags", kicker: d.name, confirm: "Save tags", wide: true, body: [h("p", { class: "muted" }, "Up to 50 tags. Keys use letters, digits, spaces and _ . : / = + - @."), editor.el],
+    modal({ title: "Manage tags", kicker: d.name, confirm: "Save tags", wide: true, body: [h("p", { class: "muted" }, "Up to 50 tags."), editor.el],
       run: async () => {
         await api(`instances/${d.name}/modify`, { method: "POST", body: { tags: editor.value() } });
         toast(`Tags saved for ${d.name}.`, "success");
         await sync();
       } });
   }, "small");
-  const el = panel("Tags", { counter: tags.length, description: "Labels for organising databases. Search the database list by tag.", actions: can("operator") ? [manage] : [] },
+  const el = panel("Tags", { counter: tags.length, description: "Labels you can search by.", actions: can("operator") ? [manage] : [] },
     tags.length ? dataTable({ caption: "Tags", rows: tags, columns: [{ key: "k", label: "Key", value: ([k]) => h("code", null, k) }, { key: "v", label: "Value", value: ([, v]) => v || h("span", { class: "muted" }, "(empty)") }] })
-      : empty("tag", "No tags", "Add tags such as env = production or team = payments."));
+      : empty("tag", "No tags", "For example env = production."));
   return { el };
 }
 
-const BUILD = { connectivity: connectivityTab, monitoring: monitoringTab, logs: logsTab, configuration: configurationTab, backups: backupsTab, tags: tagsTab };
+const BUILD = { connectivity: connectivityTab, users: usersTab, monitoring: monitoringTab, logs: logsTab, configuration: configurationTab, backups: backupsTab, tags: tagsTab };
 // What each tab shows from the inventory. A tab is rebuilt only when this
 // changes, so a revealed URI, a log scroll position or a chart range survives a refresh.
 const SIGNATURE = {
-  connectivity: d => JSON.stringify([d.port, d.status]),
+  connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, state.me?.role]),
+  users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, state.me?.role]),
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
   logs: () => "",
   configuration: d => JSON.stringify([d.status, d.busy, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection]),
@@ -241,7 +243,7 @@ function summary(d) {
   const memShare = live && d.memoryMiB ? live.memory / (d.memoryMiB * 1048576) * 100 : null;
   return panel("Summary", {}, keyValues([
     ["Status", status(d)],
-    ["Engine", d.engineLabel],
+    ["Access", h("span", { class: "with-icon" }, icon(d.publicAccess ? "globe" : "lock"), d.publicAccess ? `Public · port ${d.publicPort}` : "Private", d.requireTLS ? " · TLS" : "")],
     ["Endpoint", h("code", null, `127.0.0.1:${d.port}`)],
     ["Size", sizeLabel(d)],
     ["CPU", live ? h("span", { class: "with-meter" }, percent(cpu), meter(cpu, 100, `CPU ${percent(cpu)} of ${d.cpus ? "the limit" : "the host"}`)) : "—"],
@@ -253,14 +255,14 @@ function summary(d) {
 
 function banners(d) {
   const out = [];
-  if (d.busy) out.push(alertBox("An operation is running on this database. Actions are available again when it finishes.", "info"));
-  if (d.pendingRestore && !d.busy) out.push(alertBox("The restore did not finish, so this data is incomplete. Check Logs & events, then restore the snapshot into a fresh database.", "error"));
-  if (d.status === "unhealthy" && !d.busy) out.push(alertBox("The health check is failing. Check Logs & events for the database’s own messages.", "error"));
-  if (d.status === "not provisioned" && !d.busy) out.push(alertBox("The container does not exist. Choose Actions → Start to retry provisioning, or delete the database to free its name and port.", "warn"));
+  if (d.busy) out.push(alertBox("An operation is running. Please wait.", "info"));
+  if (d.pendingRestore && !d.busy) out.push(alertBox("The restore didn’t finish, so data is incomplete. Check the logs, then restore again.", "error"));
+  if (d.status === "unhealthy" && !d.busy) out.push(alertBox("Health check failing. Check the logs.", "error"));
+  if (d.status === "not provisioned" && !d.busy) out.push(alertBox("The container is missing. Use Actions → Start to retry, or delete it.", "warn"));
   if (d.applied) {
     const reboot = can("operator") ? btn([icon("reboot"), "Reboot now"], () => confirmReboot(d), "small") : null;
     if (reboot) reboot.disabled = d.busy || !isLive(d);
-    out.push(alertBox(`Pending modifications apply at the next restart: ${pendingChanges(d).join(", ")}.`, "info", " ", reboot));
+    out.push(alertBox(`Changes apply at the next restart: ${pendingChanges(d).join(", ")}.`, "info", " ", reboot));
   }
   return out;
 }
@@ -310,7 +312,7 @@ export async function instanceView(name, tab = "connectivity") {
         gone = true;
         current?.destroy?.();
         head.replaceChildren(h("div", null, h("h1", null, name)));
-        body.replaceChildren(empty("db", "This database no longer exists", "It was deleted, or it has not been created yet.", h("a", { class: "btn", href: "#/databases" }, "Back to databases")));
+        body.replaceChildren(empty("db", "This database no longer exists", "It was deleted or isn’t created yet.", h("a", { class: "btn", href: "#/databases" }, "Back to databases")));
       }
       return;
     }
@@ -324,7 +326,7 @@ export async function instanceView(name, tab = "connectivity") {
         can("operator") ? h("div", { class: "page-actions" },
           h("a", { class: `btn${locked ? " disabled" : ""}`, href: locked ? null : `#/databases/${d.name}/modify`, "aria-disabled": locked ? "true" : null }, icon("edit"), "Modify"),
           menu("Actions", databaseActions(d), { cls: "primary" }))
-          : h("span", { class: "chip neutral", title: "Your Viewer role can look but not change anything." }, icon("eye"), "Read only"));
+          : h("span", { class: "chip neutral", title: "Viewers can look but not change." }, icon("eye"), "Read only"));
     }
     const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters]);
     if (bsig !== bannerSig) { bannerSig = bsig; alerts.replaceChildren(...banners(d)); }

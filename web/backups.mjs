@@ -8,7 +8,7 @@ const kindLabel = (b) => b.final ? "Final snapshot" : b.kind === "automated" ? "
 function confirmDeleteBackup(b) {
   modal({
     title: "Delete this backup?", kicker: kindLabel(b), confirm: "Delete backup", tone: "danger",
-    body: h("p", { class: "muted" }, `The ${when(b.createdAt)} ${kindLabel(b).toLowerCase()} backup of ${b.name} (${bytes(b.bytes)}) is removed from this VPS. This cannot be undone.`),
+    body: h("p", { class: "muted" }, `The ${when(b.createdAt)} backup of ${b.name} (${bytes(b.bytes)}) is removed for good.`),
     run: async () => {
       await api(`backups/${b.id}`, { method: "DELETE" });
       toast("Backup deleted.", "success");
@@ -20,7 +20,7 @@ function confirmDeleteBackup(b) {
 async function keep(b) {
   try {
     await api(`backups/${b.id}/keep`, { method: "POST" });
-    toast(`The ${when(b.createdAt)} backup of ${b.name} is now a manual snapshot and will not expire.`, "success");
+    toast(`Kept as a snapshot. It won’t expire.`, "success");
   } catch (err) { toast(err.message, "error", { title: "Could not keep the backup" }); }
   await sync();
 }
@@ -36,7 +36,7 @@ export function backupTable(list, { showInstance = true, sort = { key: "created"
     can("operator") && { key: "actions", label: "Actions", value: b => h("div", { class: "cell-actions" },
       h("a", { class: "text-btn", href: `#/snapshots/${b.id}/restore`, "aria-label": `Restore the ${when(b.createdAt)} backup of ${b.name}` }, icon("restore"), "Restore"),
       h("a", { class: "text-btn", href: `/api/backups/${b.id}/download`, download: "", onclick: markDownloaded, "aria-label": `Download the ${when(b.createdAt)} backup of ${b.name}` }, icon("download"), "Download"),
-      b.kind === "automated" && h("button", { type: "button", class: "text-btn", onclick: () => keep(b), title: "Convert to a manual snapshot that never expires" }, icon("shield"), "Keep"),
+      b.kind === "automated" && h("button", { type: "button", class: "text-btn", onclick: () => keep(b), title: "Keep as a snapshot" }, icon("shield"), "Keep"),
       h("button", { type: "button", class: "text-btn danger", onclick: () => confirmDeleteBackup(b), "aria-label": `Delete the ${when(b.createdAt)} backup of ${b.name}` }, icon("trash"), "Delete")) },
   ].filter(Boolean);
   return dataTable({ columns, rows: list, sortKey: sort.key, sortDir: sort.dir, onSort, caption: "Backups" });
@@ -58,8 +58,8 @@ export function backupsView(kind) {
   const el = h("div", null,
     h("div", { class: "page-head" }, h("div", null, h("h1", null, automated ? "Automated backups" : "Snapshots"),
       h("p", { class: "muted" }, automated
-        ? "Daily backups taken in each database’s backup window and deleted after its retention period."
-        : "Point-in-time copies you take, including final snapshots of deleted databases. They stay until you delete them.")),
+        ? "Daily backups, removed after their retention period."
+        : "Backups you take. They stay until you delete them.")),
       h("div", { class: "page-actions" }, h("a", { class: "btn", href: automated ? "#/snapshots" : "#/automated-backups" }, icon(automated ? "camera" : "history"), automated ? "View snapshots" : "View automated backups"))),
     h("div", { class: "stack-gap" }, automated ? settingsSlot : null, main));
 
@@ -77,17 +77,17 @@ export function backupsView(kind) {
     filter.replaceChildren(h("option", { value: "" }, "All databases"), ...names.map(n => h("option", { value: n, selected: n === ui.instance }, n)));
     const list = mine.filter(b => !ui.instance || b.name === ui.instance);
     count.textContent = String(list.length);
-    totals.textContent = `${bytes(list.reduce((n, b) => n + b.bytes, 0))} stored on this VPS. Download copies to independent storage to survive losing the host.`;
+    totals.textContent = `${bytes(list.reduce((n, b) => n + b.bytes, 0))} on this server. Download copies to keep them safe.`;
     listSlot.replaceChildren(list.length ? backupTable(list, { sort: ui.sort, onSort }) : empty(automated ? "history" : "camera",
       automated ? "No automated backups yet" : "No snapshots yet",
-      automated ? "Turn on automated backups for a database by setting a retention period under Modify." : "Open a running database and choose Actions → Take snapshot."));
+      automated ? "Turn them on under Modify." : "Use Actions → Take snapshot on a database."));
     if (automated) renderSettings();
   }
 
   function renderSettings() {
     const dbs = state.instances || [];
     const rows = dbs.map(d => ({ d, count: (state.backups || []).filter(b => b.kind === "automated" && b.name === d.name && Date.parse(b.createdAt) >= Date.parse(d.createdAt)).length }));
-    settingsSlot.replaceChildren(panel("Backup schedule by database", { counter: dbs.length, description: "Times are UTC. A stopped database is not backed up." },
+    settingsSlot.replaceChildren(panel("Backup schedule by database", { counter: dbs.length, description: "Times in UTC. Stopped databases are skipped." },
       dbs.length ? dataTable({
         caption: "Backup schedule", rows,
         columns: [

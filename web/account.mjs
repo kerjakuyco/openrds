@@ -42,45 +42,45 @@ export function accountView({ onIdentity }) {
       const pw = passwordField("Password", { hint: "At least 10 characters." }), confirm = passwordField("Confirm password");
       el.replaceChildren(
         h("div", { class: "page-head" }, h("div", null, h("h1", null, "Account"), h("p", { class: "muted" }, "You are signed in with the API key."))),
-        alertBox("The API key is meant for scripts and has no account of its own. Create an account and sign in with it instead.", "info"),
-        setup ? form("Create your administrator account", "Sign in with this account from now on, and invite your team from Users.", [
+        alertBox("The API key is for scripts. Create an account to sign in with.", "info"),
+        setup ? form("Create your administrator account", "Use it from now on.", [
           h("div", { class: "form-grid" }, h("div", { class: "field" }, h("label", { class: "field-label", for: name.id }, "Name"), name),
             h("div", { class: "field" }, h("label", { class: "field-label", for: username.id }, "Username"), username)), pw, confirm,
         ], "Create account", async () => {
           if (pw.input.value !== confirm.input.value) throw new Error("The passwords do not match.");
           const id = await api("setup", { method: "POST", body: { name: name.value, username: username.value, password: pw.input.value } });
-          toast(`Welcome, ${id.name}. You are signed in with your new account.`, "success");
+          toast(`Welcome, ${id.name}.`, "success");
           onIdentity(id);
           location.hash = "#/getting-started";
-        }) : panel("Accounts", {}, h("p", { class: "muted" }, "Accounts already exist. Manage them from Users, or sign out and sign in with one."), h("a", { class: "btn", href: "#/users" }, "Open Users")));
+        }) : panel("Accounts", {}, h("p", { class: "muted" }, "Accounts already exist. Sign out and sign in with one."), h("a", { class: "btn", href: "#/users" }, "Open Users")));
       return;
     }
     const name = h("input", { type: "text", id: nextId("n"), value: me.name, autocomplete: "name", maxlength: "64" });
     const current = passwordField("Current password", { autocomplete: "current-password" });
-    const next = passwordField("New password", { hint: "At least 10 characters, and not your username." });
+    const next = passwordField("New password", { hint: "At least 10 characters." });
     const again = passwordField("Confirm new password");
     const role = ROLES[me.role];
     el.replaceChildren(
       h("div", { class: "page-head" }, h("div", { class: "row" }, avatar(me.name, "large"), h("div", null, h("h1", null, me.name), h("p", { class: "muted" }, `${me.username} · ${role.label}`)))),
       h("div", { class: "tab-grid" },
-        form("Profile", "Your name appears in the sidebar and in events.", [h("div", { class: "field" }, h("label", { class: "field-label", for: name.id }, "Display name"), name)], "Save", async () => {
+        form("Profile", "Shown in the sidebar and events.", [h("div", { class: "field" }, h("label", { class: "field-label", for: name.id }, "Display name"), name)], "Save", async () => {
           const id = await api("account", { method: "PATCH", body: { name: name.value } });
           onIdentity(id);
           return "Saved.";
         }),
         panel("Your access", {}, keyValues([["Username", me.username], ["Role", role.label]], "cols-2"), h("p", { class: "muted" }, role.text),
-          h("p", { class: "muted" }, "Only an administrator can change your role."))),
+          h("p", { class: "muted" }, "Only an admin can change it."))),
       h("div", { class: "tab-grid" },
-        form("Password", "Changing it signs you out everywhere else.", [current, next, again], "Change password", async () => {
+        form("Password", "Signs you out everywhere else.", [current, next, again], "Change password", async () => {
           if (next.input.value !== again.input.value) throw new Error("The new passwords do not match.");
           await api("account/password", { method: "POST", body: { current: current.input.value, password: next.input.value } });
           [current, next, again].forEach(f => { f.input.value = ""; });
-          return "Password changed. Other sessions were signed out.";
+          return "Password changed.";
         }),
-        panel("Sessions", { description: "A session lasts 12 hours in each browser." }, h("p", { class: "muted" }, "Lost a laptop, or signed in on a shared computer? End every session except this one."),
+        panel("Sessions", { description: "Sessions last 12 hours." }, h("p", { class: "muted" }, "Sign out everywhere except here."),
           h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: () => modal({
             title: "Sign out everywhere else?", kicker: "Sessions", confirm: "Sign out other sessions",
-            body: h("p", { class: "muted" }, "Every other browser signed in to your account is signed out. This one stays signed in."),
+            body: h("p", { class: "muted" }, "Other sessions are signed out."),
             run: async () => { await api("account/signout", { method: "POST" }); toast("Other sessions were signed out.", "success"); },
           }) }, icon("exit"), "Sign out other sessions")))));
   }

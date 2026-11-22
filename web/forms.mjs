@@ -11,13 +11,13 @@ const SIZES = [
   { value: "xlarge", title: "XLarge", cpus: 8, memoryMiB: 16384 },
 ];
 const ENGINE_TEXT = {
-  postgres: "Relational database with JSON, extensions and full SQL.",
-  mysql: "The widely supported relational database, long-term support release.",
-  valkey: "In-memory key-value store. Any Redis client can connect.",
+  postgres: "Powerful SQL with JSON and extensions.",
+  mysql: "The popular SQL database. LTS release.",
+  valkey: "Fast key-value store. Redis compatible.",
 };
 const TEMPLATES = {
-  production: { title: "Production", detail: "Daily backups kept 7 days, deletion protection, 2 vCPU · 4 GiB.", size: "medium", retention: 7, protection: true },
-  dev: { title: "Dev and test", detail: "Daily backups kept 1 day, no deletion protection, 0.5 vCPU · 512 MiB.", size: "micro", retention: 1, protection: false },
+  production: { title: "Production", detail: "7-day backups, deletion protection, 2 vCPU · 4 GiB.", size: "medium", retention: 7, protection: true },
+  dev: { title: "Dev and test", detail: "1-day backups, 0.5 vCPU · 512 MiB.", size: "micro", retention: 1, protection: false },
 };
 const RETENTION = [0, 1, 2, 3, 5, 7, 10, 14, 21, 30, 35];
 const LENGTHS = [30, 60, 120, 180];
@@ -97,7 +97,7 @@ export function parameterEditor(eng, initial = {}) {
   const table = h("table", { class: "param-table" }, h("thead", null, h("tr", null, h("th", { scope: "col" }, "Parameter"), h("th", { scope: "col" }, "Value"), h("th", { scope: "col" }, "Default"), h("th", { scope: "col" }, h("span", { class: "sr-only" }, "Remove")))), body);
   const picker = h("select", { "aria-label": "Parameter to add" });
   const add = btn([icon("plus"), "Add parameter"], () => { if (picker.value) { addRow(picker.value); refreshPicker(); rows.get(picker.dataset.last)?.focus(); } }, "small");
-  const emptyNote = h("p", { class: "muted", hidden: true }, "No parameters set. The engine uses its defaults.");
+  const emptyNote = h("p", { class: "muted", hidden: true }, "Using engine defaults.");
   const el = h("div", { class: "param-editor" }, emptyNote, h("div", { class: "table-wrap" }, table), h("div", { class: "row" }, picker, add));
   const changed = new Set();
   const notify = () => changed.forEach(fn => fn());
@@ -197,8 +197,8 @@ function databaseForm({ mode, eng, initial, source }) {
     engineCards = choiceCards("engine", state.engines.map(e => ({ value: e.key, title: e.title, detail: ENGINE_TEXT[e.key], badge: { postgres: "PG", mysql: "My", valkey: "Vk" }[e.key] })),
       v.engine, (key) => { v.engine = key; eng = engine(key); fields.port.control.value = suggestPort(key, taken); v.port = Number(fields.port.control.value); rebuildParams(); updateSizes(); changed(); }, { label: "Engine", cls: "cols-3" });
     templateCards = choiceCards("template", Object.entries(TEMPLATES).map(([value, t]) => ({ value, title: t.title, detail: t.detail })), v.template, applyTemplate, { label: "Template", cls: "cols-2" });
-    sections.push(section(++n, "Engine options", "Each database runs in its own container with a private volume.", engineCards),
-      section(++n, "Templates", "Sensible defaults for the workload. You can change any setting below.", templateCards));
+    sections.push(section(++n, "Engine options", "Each database gets its own container and volume.", engineCards),
+      section(++n, "Templates", "Good defaults. Change anything below.", templateCards));
   } else {
     sections.push(section(++n, "Engine", null, keyValues([["Engine", eng.title], mode === "restore" ? ["Source snapshot", `${source.name} · ${new Date(source.createdAt).toLocaleString()}`] : ["DB identifier", initial.name]])));
   }
@@ -207,9 +207,9 @@ function databaseForm({ mode, eng, initial, source }) {
   if (mode !== "modify") {
     const name = h("input", { type: "text", value: v.name || "", maxlength: "40", autocomplete: "off", spellcheck: "false", placeholder: "orders-prod", required: true });
     name.addEventListener("input", () => { v.name = name.value.trim(); fields.name.setError(""); changed(); });
-    fields.name = field("DB instance identifier", name, { hint: "1–40 lowercase letters, digits or hyphens, starting with a letter. It names the container network and backups." });
+    fields.name = field("DB instance identifier", name, { hint: "Lowercase letters, digits and hyphens." });
     sections.push(section(++n, "Settings", null, fields.name,
-      alertBox(h("span", null, "Credentials are generated for you: user ", h("code", null, eng.user), ", database ", h("code", null, eng.database), ". Reveal them later on the database’s Connectivity tab."), "info")));
+      alertBox(h("span", null, "We create the credentials: user ", h("code", null, eng.user), ", database ", h("code", null, eng.database), "."), "info")));
   }
 
   // Instance configuration
@@ -239,7 +239,7 @@ function databaseForm({ mode, eng, initial, source }) {
   }
   applySize();
   updateSizes();
-  sections.push(section(++n, "Instance configuration", "Limits are enforced by Docker, so a busy database cannot slow the others down. Not sure? Start small; you can change the size later.", sizeCards, custom));
+  sections.push(section(++n, "Instance configuration", "Not sure? Start small. You can resize later.", sizeCards, custom));
 
   // Storage
   if (mode !== "modify") {
@@ -247,32 +247,32 @@ function databaseForm({ mode, eng, initial, source }) {
     disk.addEventListener("input", () => { v.diskGiB = Number(disk.value) || 0; fields.disk.setError(""); changed(); });
     const quota = host?.volumeQuota;
     const supported = quota?.state === "supported";
-    fields.disk = field("Data volume limit (GiB)", disk, { optional: true, explain: "Without a limit, one database can fill the VPS disk and stop the others. With a limit, only its own writes fail when its volume is full.", hint: supported
-      ? "A fixed-size ext4 volume. Writes past it fail, and usable space is slightly less than the number you enter."
-      : `${quota?.message || "Checking whether this host can enforce a data-volume limit."} Leave it blank for an uncapped volume.` });
+    fields.disk = field("Data volume limit (GiB)", disk, { optional: true, explain: "Stops one database from filling the disk.", hint: supported
+      ? "Writes fail once the volume is full."
+      : `${quota?.message || "Checking disk limit support…"} Leave blank for no limit.` });
     sections.push(section(++n, "Storage", null, h("p", { class: "row" }, h("span", { class: `chip ${supported ? "good" : quota?.state === "unsupported" ? "warn" : "neutral"}` }, supported ? "Limits enforceable" : quota?.state === "unsupported" ? "Limits not enforceable here" : "Checking host")), fields.disk));
   } else {
     sections.push(section(++n, "Storage", null, keyValues([["Data volume limit", v.diskGiB ? `${v.diskGiB} GiB` : "Uncapped"]]),
-      h("p", { class: "muted" }, v.diskGiB ? "Resize the volume from the Configuration tab while the database is stopped." : "A limit cannot be added to an existing volume. Restore a snapshot into a capped instance instead.")));
+      h("p", { class: "muted" }, v.diskGiB ? "Resize it on the Configuration tab while stopped." : "To add a limit, restore a snapshot into a new database.")));
   }
 
   // Connectivity
   const port = h("input", { type: "number", min: "1024", max: "65535", step: "1", value: v.port, required: true });
   port.addEventListener("input", () => { v.port = Number(port.value); fields.port.setError(""); changed(); });
-  fields.port = field("Host port", port, { explain: "The port on the VPS that leads to this database. Any free port from 1024 to 65535 works; each database needs its own.", hint: "Bound to 127.0.0.1 on the VPS. Reach it from elsewhere through an SSH tunnel." });
-  sections.push(section(++n, "Connectivity", "No database port is exposed publicly.", fields.port));
+  fields.port = field("Host port", port, { explain: "Any free port from 1024 to 65535.", hint: "Private to this server." });
+  sections.push(section(++n, "Connectivity", null, fields.port));
 
   // Backups
   const retention = select([...new Set([...RETENTION, v.retention])].sort((a, b) => a - b).map(d => [d, d === 0 ? "Off — no automated backups" : plural(d, "day")]), v.retention);
   const win = parseWindow(v.window);
   const start = select(Array.from({ length: 48 }, (_, i) => [i * 30, `${hhmm(i * 30)} UTC`]), win.start);
   const length = select([...new Set([...LENGTHS, win.length])].map(m => [m, m < 60 ? `${m} minutes` : plural(m / 60, "hour")]), win.length);
-  const windowFields = h("div", { class: "form-grid" }, field("Backup window start", start, { explain: "Times are in UTC. Choose an hour when the database is quiet, because a backup adds load while it runs." }), field("Window length", length));
-  fields.retention = field("Backup retention period", retention, { explain: "How many days each daily backup is kept. Off means no automated backups; you can still take snapshots by hand.", hint: "Automated backups run once a day in the window and are deleted after this period. Manual snapshots stay until you delete them." });
+  const windowFields = h("div", { class: "form-grid" }, field("Backup window start", start, { explain: "In UTC. Pick a quiet hour." }), field("Window length", length));
+  fields.retention = field("Backup retention period", retention, { explain: "How long daily backups are kept.", hint: "Snapshots you take are kept until you delete them." });
   const syncBackup = () => { v.retention = Number(retention.value); v.window = formatWindow(Number(start.value), Number(length.value)); windowFields.hidden = v.retention === 0; changed(); };
   [retention, start, length].forEach(c => c.addEventListener("change", syncBackup));
   syncBackup();
-  sections.push(section(++n, "Backup", "Logical backups stored on this VPS. Download copies to keep them off the host.", fields.retention, windowFields));
+  sections.push(section(++n, "Backup", null, fields.retention, windowFields));
 
   // Additional configuration
   let params = parameterEditor(eng, v.parameters);
@@ -285,16 +285,25 @@ function databaseForm({ mode, eng, initial, source }) {
   }
   const protection = h("input", { type: "checkbox", class: "switch", role: "switch", checked: v.protection, id: nextId("protect") });
   protection.addEventListener("change", () => { v.protection = protection.checked; changed(); });
+  const tls = h("input", { type: "checkbox", class: "switch", role: "switch", checked: Boolean(v.tls), id: nextId("tls") });
+  tls.addEventListener("change", () => { v.tls = tls.checked; changed(); });
+  const tlsText = () => eng.key === "valkey"
+    ? "Clients must use rediss://. Plain connections stop working."
+    : "Refuse connections without TLS.";
+  const tlsDetail = h("small", null, tlsText());
+  changes.add(() => { tlsDetail.textContent = tlsText(); });
   const tags = tagEditor(v.tags);
   tags.onChange(changed);
   sections.push(section(++n, "Additional configuration", null,
-    h("h3", { class: "sub" }, icon("sliders"), "Engine parameters", help("Settings the database engine reads when it starts. The defaults suit most applications; change them when you know you need to.", "About engine parameters")),
-    h("p", { class: "muted" }, mode === "modify" ? "Parameter changes need a restart. You choose when below." : "Applied when the database starts. Only checked settings are offered."),
+    h("h3", { class: "sub" }, icon("sliders"), "Engine parameters", help("Tuning settings. The defaults suit most apps.", "About engine parameters")),
+    h("p", { class: "muted" }, mode === "modify" ? "Changes need a restart. You choose when." : "Applied at start."),
     paramSlot,
-    h("h3", { class: "sub" }, icon("shield"), "Deletion protection", help("A safety switch. While it is on, deleting the database is refused, even by an administrator.", "About deletion protection")),
-    h("label", { class: "check", for: protection.id }, protection, h("span", null, h("strong", null, "Enable deletion protection"), h("small", null, "The database cannot be deleted until this is turned off."))),
+    h("h3", { class: "sub" }, icon("shield"), "Deletion protection", help("While on, nobody can delete the database.", "About deletion protection")),
+    h("label", { class: "check", for: protection.id }, protection, h("span", null, h("strong", null, "Enable deletion protection"), h("small", null, "Blocks deletion until turned off."))),
+    h("h3", { class: "sub" }, icon("lock"), "Encryption in transit", help("Encrypts traffic between your app and the database.", "About TLS")),
+    h("label", { class: "check", for: tls.id }, tls, h("span", null, h("strong", null, "Require TLS"), tlsDetail)),
     h("h3", { class: "sub" }, icon("tag"), "Tags"),
-    h("p", { class: "muted" }, "Key-value labels to organise and search databases."),
+    h("p", { class: "muted" }, "Labels you can search by."),
     tags.el));
 
   function applyTemplate(key) {
@@ -310,7 +319,7 @@ function databaseForm({ mode, eng, initial, source }) {
   function read() {
     return {
       name: v.name, engine: eng.key, port: v.port, cpus: v.cpus || 0, memoryMiB: v.memoryMiB || 0, diskGiB: v.diskGiB || 0,
-      backupRetentionDays: v.retention, backupWindow: v.window, deletionProtection: v.protection,
+      backupRetentionDays: v.retention, backupWindow: v.window, deletionProtection: v.protection, requireTLS: Boolean(v.tls),
       tags: tags.value(), parameters: params.value(),
     };
   }
@@ -319,14 +328,14 @@ function databaseForm({ mode, eng, initial, source }) {
     const errors = [];
     const flag = (f, msg) => { f?.setError(msg); errors.push([f, msg]); };
     if (mode !== "modify") {
-      if (!namePattern.test(spec.name || "")) flag(fields.name, "Use 1–40 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit.");
-      else if (others.some(d => d.name === spec.name)) flag(fields.name, "A database with this identifier already exists.");
+      if (!namePattern.test(spec.name || "")) flag(fields.name, "Use 1–40 lowercase letters, digits or hyphens. Start with a letter.");
+      else if (others.some(d => d.name === spec.name)) flag(fields.name, "This name is taken.");
     }
     if (!Number.isInteger(spec.port) || spec.port < 1024 || spec.port > 65535) flag(fields.port, "Choose a port from 1024 to 65535.");
     else if (taken.has(spec.port)) flag(fields.port, `Port ${spec.port} is used by ${others.find(d => d.port === spec.port).name}.`);
-    if (spec.cpus && (spec.cpus < 0.1 || spec.cpus > 1024)) flag(fields.cpus, "Use at least 0.1 vCPU, or leave it empty for no limit.");
+    if (spec.cpus && (spec.cpus < 0.1 || spec.cpus > 1024)) flag(fields.cpus, "Use at least 0.1, or leave empty.");
     if (spec.memoryMiB && spec.memoryMiB < eng.minMemoryMiB) flag(fields.memory, `${eng.title} needs at least ${eng.minMemoryMiB} MiB.`);
-    if (fields.disk && spec.diskGiB && (!Number.isInteger(spec.diskGiB) || spec.diskGiB < 1 || spec.diskGiB > 65536)) flag(fields.disk, "Enter a whole number of GiB from 1 to 65536, or leave it empty.");
+    if (fields.disk && spec.diskGiB && (!Number.isInteger(spec.diskGiB) || spec.diskGiB < 1 || spec.diskGiB > 65536)) flag(fields.disk, "Use a whole number from 1 to 65536, or leave empty.");
     const firstBad = errors.find(([f]) => f)?.[0];
     firstBad?.control.focus();
     return errors;
@@ -348,6 +357,7 @@ function databaseForm({ mode, eng, initial, source }) {
       ["Endpoint", `127.0.0.1:${spec.port || "—"}`],
       ["Automated backups", spec.backupRetentionDays ? `${plural(spec.backupRetentionDays, "day")} · ${windowLabel(spec.backupWindow)}` : "Off"],
       ["Deletion protection", spec.deletionProtection ? "On" : "Off"],
+      ["Encryption", spec.requireTLS ? "TLS required" : eng.key === "valkey" ? "Plain text" : "TLS available"],
       ["Parameters", Object.keys(spec.parameters).length ? plural(Object.keys(spec.parameters).length, "custom value") : "Engine defaults"],
       ["Tags", Object.keys(spec.tags).length || "None"],
     ], "stacked"));
@@ -358,7 +368,7 @@ function databaseForm({ mode, eng, initial, source }) {
     capacity.replaceChildren(h("h3", null, "Host allocation after this change"),
       h("div", { class: "cap-row" }, h("span", null, "CPU limits"), h("strong", null, `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`), bar(cpu, host.cpus)),
       h("div", { class: "cap-row" }, h("span", null, "Memory limits"), h("strong", null, `${bytes(memBytes)} of ${bytes(host.memoryBytes)}`), bar(memBytes, host.memoryBytes)),
-      h("p", { class: "muted" }, "Running databases without a limit can use any spare capacity, so limits may add up to more than the host."));
+      h("p", { class: "muted" }, "Unlimited databases share spare capacity."));
   }
   changes.add(renderSummary);
   renderSummary();
@@ -401,7 +411,7 @@ export async function createView() {
     if (f.validate(spec).length) return;
     launch({ request: api("instances", { method: "POST", body: spec }), label: `Create ${spec.name}`, success: `${spec.name} is ready to accept connections.`, then: `#/databases/${spec.name}`, note: f.note, submit: f.submit });
   });
-  return { el: h("div", null, heading("Create database", "Provision a private database with its own volume, credentials and backup schedule."), f.form), title: "Create database", nav: "databases", crumbs: [["Databases", "#/databases"], ["Create database"]], update: f.refresh };
+  return { el: h("div", null, heading("Create database", "A private database with backups."), f.form), title: "Create database", nav: "databases", crumbs: [["Databases", "#/databases"], ["Create database"]], update: f.refresh };
 }
 
 export async function restoreView(id) {
@@ -420,7 +430,7 @@ export async function restoreView(id) {
     delete spec.engine;
     launch({ request: api(`backups/${b.id}/restore`, { method: "POST", body: spec }), label: `Restore ${spec.name}`, success: `${spec.name} was restored from the snapshot.`, then: `#/databases/${spec.name}`, note: f.note, submit: f.submit });
   });
-  return { el: h("div", null, heading(`Restore snapshot`, `Create a new database from the ${new Date(b.createdAt).toLocaleString()} snapshot of ${b.name}. The source and the snapshot stay unchanged.`), f.form), title: "Restore snapshot", nav: b.kind === "automated" ? "automated" : "snapshots", crumbs: [[b.kind === "automated" ? "Automated backups" : "Snapshots", b.kind === "automated" ? "#/automated-backups" : "#/snapshots"], ["Restore"]], update: f.refresh };
+  return { el: h("div", null, heading(`Restore snapshot`, `From the ${new Date(b.createdAt).toLocaleString()} snapshot of ${b.name}.`), f.form), title: "Restore snapshot", nav: b.kind === "automated" ? "automated" : "snapshots", crumbs: [[b.kind === "automated" ? "Automated backups" : "Snapshots", b.kind === "automated" ? "#/automated-backups" : "#/snapshots"], ["Restore"]], update: f.refresh };
 }
 
 const describeRuntime = (c) => ({ cpu: c.cpus ? `${c.cpus} vCPU` : "Unlimited", memory: c.memoryMiB ? mib(c.memoryMiB) : "Unlimited" });
@@ -431,14 +441,14 @@ export async function modifyView(name) {
   const d = instance(name);
   if (!d) return { el: h("div", null, heading("Database not found", "It may have been deleted."), h("a", { class: "btn", href: "#/databases" }, "Back to databases")), title: "Modify", nav: "databases", crumbs: [["Databases", "#/databases"], ["Modify"]] };
   const eng = engine(d.engine);
-  const f = databaseForm({ mode: "modify", eng, initial: { name: d.name, engine: d.engine, size: sizeName(d.cpus, d.memoryMiB), cpus: d.cpus, memoryMiB: d.memoryMiB, diskGiB: d.diskGiB, port: d.port, retention: d.backupRetentionDays, window: d.backupWindow, protection: d.deletionProtection, tags: d.tags || {}, parameters: d.parameters || {} } });
+  const f = databaseForm({ mode: "modify", eng, initial: { name: d.name, engine: d.engine, size: sizeName(d.cpus, d.memoryMiB), cpus: d.cpus, memoryMiB: d.memoryMiB, diskGiB: d.diskGiB, port: d.port, retention: d.backupRetentionDays, window: d.backupWindow, protection: d.deletionProtection, tls: d.requireTLS, tags: d.tags || {}, parameters: d.parameters || {} } });
   f.form.addEventListener("submit", (e) => {
     e.preventDefault();
     const spec = f.read();
     if (f.validate(spec).length) return;
     review(d, spec);
   });
-  return { el: h("div", null, heading(`Modify ${d.name}`, "Change limits, connectivity, backups, parameters and tags. You review every change before it applies."), f.form), title: `Modify ${d.name}`, nav: "databases", crumbs: [["Databases", "#/databases"], [d.name, `#/databases/${d.name}`], ["Modify"]], update: f.refresh };
+  return { el: h("div", null, heading(`Modify ${d.name}`, "You review changes before they apply."), f.form), title: `Modify ${d.name}`, nav: "databases", crumbs: [["Databases", "#/databases"], [d.name, `#/databases/${d.name}`], ["Modify"]], update: f.refresh };
 }
 
 const same = (a, b) => JSON.stringify(Object.entries(a || {}).sort()) === JSON.stringify(Object.entries(b || {}).sort());
@@ -455,13 +465,14 @@ function review(d, spec) {
   diff("Backup retention", d.backupRetentionDays ? plural(d.backupRetentionDays, "day") : "Off", spec.backupRetentionDays ? plural(spec.backupRetentionDays, "day") : "Off", "backupRetentionDays", spec.backupRetentionDays);
   if (spec.backupRetentionDays) diff("Backup window", windowLabel(d.backupWindow), windowLabel(spec.backupWindow), "backupWindow", spec.backupWindow);
   diff("Deletion protection", d.deletionProtection ? "On" : "Off", spec.deletionProtection ? "On" : "Off", "deletionProtection", spec.deletionProtection);
+  diff("Require TLS", d.requireTLS ? "On" : "Off", spec.requireTLS ? "On" : "Off", "requireTLS", spec.requireTLS);
   if (!same(d.parameters, spec.parameters)) { rows.push(["Engine parameters", mapLabel(d.parameters), mapLabel(spec.parameters)]); body.parameters = spec.parameters; }
   if (!same(d.tags, spec.tags)) { rows.push(["Tags", mapLabel(d.tags), mapLabel(spec.tags)]); body.tags = spec.tags; }
   if (!rows.length) {
     toast("Nothing changed. Adjust a setting first.", "info");
     return;
   }
-  const restartNeeded = "cpus" in body || "memoryMiB" in body || "parameters" in body;
+  const restartNeeded = "cpus" in body || "memoryMiB" in body || "parameters" in body || "requireTLS" in body;
   const portChange = "port" in body;
   const running = isLive(d);
   const choices = h("fieldset", { class: "apply-choice" }, h("legend", null, "When to apply"));
@@ -470,12 +481,12 @@ function review(d, spec) {
     choices.append(h("label", { class: "check", for: input.id }, input, h("span", null, h("strong", null, title), h("small", null, detail))));
   };
   let explain;
-  if (portChange && running) explain = alertBox("Changing the port restarts the database now, whatever you choose here. Applications must reconnect on the new port.", "warn");
+  if (portChange && running) explain = alertBox("A port change restarts the database now.", "warn");
   else if (restartNeeded && running) {
-    radio("later", "Apply during the next restart", "Saved now; applied when you reboot or stop and start the database.", true);
-    radio("now", "Apply immediately", "The database restarts now, typically for under a minute.", false);
-  } else if (restartNeeded) explain = alertBox("The database is not running. These changes apply when it starts.", "info");
-  else explain = alertBox("These changes apply immediately, without a restart.", "info");
+    radio("later", "Apply during the next restart", "Applied when you next reboot.", true);
+    radio("now", "Apply immediately", "Restarts now, usually under a minute.", false);
+  } else if (restartNeeded) explain = alertBox("Applies when the database starts.", "info");
+  else explain = alertBox("Applies now, no restart.", "info");
   const table = h("table", { class: "diff" }, h("thead", null, h("tr", null, h("th", { scope: "col" }, "Attribute"), h("th", { scope: "col" }, "Current value"), h("th", { scope: "col" }, "New value"))),
     h("tbody", null, rows.map(([a, c, n]) => h("tr", null, h("th", { scope: "row" }, a), h("td", null, c), h("td", null, h("strong", null, n))))));
   modal({
@@ -486,7 +497,7 @@ function review(d, spec) {
       const request = api(`instances/${d.name}/modify`, { method: "POST", body });
       const first = await Promise.race([request.then(() => "done", () => "failed"), delay(1500).then(() => "slow")]);
       if (first === "failed") await request; // the modal shows the error
-      track(`Modify ${d.name}`, request, { success: (r) => r?.restarted ? `${d.name} restarted with the new settings.` : r?.pendingRestart ? `Saved. ${d.name} applies the changes at its next restart.` : `${d.name} was modified.` });
+      track(`Modify ${d.name}`, request, { success: (r) => r?.restarted ? `${d.name} restarted with the new settings.` : r?.pendingRestart ? `Saved. Applies at the next restart.` : `${d.name} was modified.` });
       go(`#/databases/${d.name}`);
       if (first === "slow") toast(`${d.name} is restarting with the new settings…`, "info");
     },

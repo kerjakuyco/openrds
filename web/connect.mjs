@@ -10,7 +10,18 @@ const WHERE = [
   ["vps", "On this VPS", "server"],
   ["container", "In a Docker container here", "box"],
   ["computer", "On my computer", "laptop"],
+  ["internet", "Over the internet", "globe"], // only while public access is on
 ];
+
+// Which user the guide shows, per database, so other pages can preselect one.
+const chosenUser = new Map();
+export const connectAs = (name, user) => chosenUser.set(name, user);
+
+const TLS_NOTE = {
+  mysql: "Turn on TLS in your client and trust openrds-ca.pem.",
+  valkey: "Use rediss:// and trust openrds-ca.pem.",
+  postgres: "Uses TLS and checks the server with openrds-ca.pem.",
+};
 
 // Each stack: env lines (.env) and code that reads them. p: host, port, user, password, db, uri.
 const STACKS = {
@@ -156,13 +167,27 @@ REDIS_PASSWORD=${p.password}` })],
   ],
 };
 
-function settings(d, eng, where, c) {
-  const container = where === "container";
-  const host = container ? `openrds-${d.name}` : "127.0.0.1";
-  const port = container ? INTERNAL_PORT[d.engine] : d.port;
+// Whether snippets use TLS: always when it is required, and over the
+// internet whenever the engine offers it next to plain text.
+const usesTLS = (d, where) => d.tlsReady && (d.requireTLS || (where === "internet" && d.engine !== "valkey"));
+
+function settings(d, eng, where, c, user) {
+  const container = where === "container", internet = where === "internet";
+  const host = container ? `openrds-${d.name}` : internet ? (d.publicHost || "YOUR_SERVER_ADDRESS") : "127.0.0.1";
+  const port = container ? INTERNAL_PORT[d.engine] : internet ? d.publicPort : d.port;
   const password = c?.password || PLACEHOLDER;
-  const scheme = { postgres: "postgresql", mysql: "mysql", valkey: "redis" }[d.engine];
-  return { host, port, user: eng.user, password, db: eng.database, uri: `${scheme}://${eng.user}:${password}@${host}:${port}/${eng.database}` };
+  const tls = usesTLS(d, where);
+  const scheme = { postgres: "postgresql", mysql: "mysql", valkey: tls ? "rediss" : "redis" }[d.engine];
+  const query = tls && d.engine === "postgres" ? "?sslmode=verify-full&sslrootcert=openrds-ca.pem" : "";
+  return { host, port, user, password, db: eng.database, tls, uri: `${scheme}://${user}:${password}@${host}:${port}/${eng.database}${query}` };
+}
+
+// Command-line clients need their own TLS flags.
+function tlsCommand(d, p, code) {
+  if (!p.tls || !code) return code;
+  if (d.engine === "mysql") return code.replace("mysql --host", "mysql --ssl-mode=VERIFY_IDENTITY --ssl-ca=openrds-ca.pem --host");
+  if (d.engine === "valkey") return code.replace("valkey-cli -u", "valkey-cli --tls --cacert openrds-ca.pem -u");
+  return code;
 }
 
 let remembered = { where: "vps", stack: {} };
@@ -171,17 +196,24 @@ const remember = () => { try { localStorage.setItem("openrds-connect", JSON.stri
 
 export function connectGuide(d, eng, { canReveal }) {
   const stacks = STACKS[d.engine];
-  let where = remembered.where, stack = remembered.stack[d.engine] || stacks[0][0], c = null;
-  const whereButtons = WHERE.map(([key, label]) => h("button", { type: "button", "aria-pressed": String(key === where), onclick: () => { where = key; remembered.where = key; remember(); render(); } }, label));
+  const places = WHERE.filter(([key]) => key !== "internet" || d.publicAccess);
+  let where = places.some(([key]) => key === remembered.where) ? remembered.where : "vps";
+  let stack = remembered.stack[d.engine] || stacks[0][0], c = null;
+  const users = [eng.user, ...(d.users || []).map(u => u.name)];
+  let user = users.includes(chosenUser.get(d.name)) ? chosenUser.get(d.name) : eng.user;
+  const whereButtons = places.map(([key, label]) => h("button", { type: "button", "aria-pressed": String(key === where), onclick: () => { where = key; remembered.where = key; remember(); render(); } }, label));
   const stackID = nextId("stack");
   const stackSelect = h("select", { id: stackID }, stacks.map(([key, label]) => h("option", { value: key, selected: key === stack }, label)));
   stackSelect.addEventListener("change", () => { stack = stackSelect.value; remembered.stack[d.engine] = stack; remember(); render(); });
+  const userID = nextId("as");
+  const userSelect = h("select", { id: userID }, users.map(name => h("option", { value: name, selected: name === user }, name === eng.user ? `${name} (owner)` : name)));
+  userSelect.addEventListener("change", () => { user = userSelect.value; chosenUser.set(d.name, user); c = null; render(); });
   const credentials = h("div", { class: "credentials" });
   const steps = h("ol", { class: "steps" });
 
   async function reveal(b) {
     b.disabled = true;
-    try { c = await api(`instances/${d.name}/connection`); render(); }
+    try { c = await api(`instances/${d.name}/connection${user === eng.user ? "" : `?user=${encodeURIComponent(user)}`}`); render(); }
     catch (err) { toast(err.message, "error"); b.disabled = false; }
   }
 
@@ -190,22 +222,31 @@ export function connectGuide(d, eng, { canReveal }) {
   }
 
   function render() {
-    whereButtons.forEach((b, i) => b.setAttribute("aria-pressed", String(WHERE[i][0] === where)));
-    const p = settings(d, eng, where, c);
+    whereButtons.forEach((b, i) => b.setAttribute("aria-pressed", String(places[i][0] === where)));
+    const p = settings(d, eng, where, c, user);
     credentials.replaceChildren(c
       ? h("p", { class: "muted" }, icon("key"), " The snippets include the password. Keep them out of version control.", " ", btn("Hide password", () => { c = null; render(); }, "small ghost"))
       : canReveal
-        ? h("div", { class: "row" }, h("span", { class: "muted" }, `Snippets show ${PLACEHOLDER} until you reveal the password.`), btn([icon("eye"), "Reveal password"], reveal, "small"))
-        : alertBox("Your Viewer role cannot see database passwords. Ask an operator or administrator for the connection details.", "info"));
+        ? h("div", { class: "row" }, h("span", { class: "muted" }, "Password hidden."), btn([icon("eye"), "Reveal password"], reveal, "small"))
+        : alertBox("Viewers can’t see passwords. Ask an operator.", "info"));
     steps.replaceChildren();
+    if (where === "internet") {
+      step("Allow your app’s address", h("p", { class: "muted" },
+        "Add it under Network access.", d.publicHost ? "" : " Replace YOUR_SERVER_ADDRESS with your server’s IP or hostname."),
+        p.tls ? null : alertBox("Not encrypted. Turn on Require TLS first.", "warn"));
+    }
+    if (p.tls) {
+      step("Download the CA certificate", h("p", { class: "muted" }, "Save it next to your app."),
+        h("a", { class: "btn small", href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, icon("download"), "Download openrds-ca.pem"));
+    }
     if (where === "computer") {
-      step("Open an SSH tunnel and keep it running", h("p", { class: "muted" }, "Replace user@your-vps with your SSH login. The database stays private to the VPS."),
+      step("Open an SSH tunnel", h("p", { class: "muted" }, "Use your SSH login. Keep it running."),
         codeBlock(`ssh -N -L ${d.port}:127.0.0.1:${d.port} user@your-vps`));
     }
     if (where === "container") {
-      step("Put your container on the database’s network",
+      step("Join the database’s network",
         c ? codeBlock(`docker network connect ${c.network} YOUR_APP_CONTAINER`)
-          : h("p", { class: "muted" }, canReveal ? "Reveal the password to see the network name." : "An operator can share the network name."),
+          : h("p", { class: "muted" }, canReveal ? "Reveal the password to see it." : "Ask an operator for it."),
         c && h("details", { class: "disclosure" }, h("summary", null, "Using Docker Compose?"), codeBlock(`services:
   app:
     networks: [default, ${d.name}-db]
@@ -216,20 +257,23 @@ networks:
     name: ${c.network}`, { caption: "compose.yaml" })));
     }
     const out = stacks.find(([key]) => key === stack)[2](p);
-    if (out.env) step("Add the connection settings to your environment", codeBlock(out.env, { caption: ".env", onCopy: markConnected }));
-    if (out.code) step(out.env ? "Read them in your code" : "Connect", codeBlock(out.code, { onCopy: markConnected }), out.note && h("p", { class: "muted" }, out.note));
-    if (!out.code) step("Restart your application", h("p", { class: "muted" }, "It now reads the settings above."));
+    const code = stack === "cli" ? tlsCommand(d, p, out.code) : out.code;
+    const tlsNote = p.tls && stack !== "cli" ? h("p", { class: "muted" }, icon("lock"), " ", TLS_NOTE[d.engine]) : null;
+    if (out.env) step("Add to your environment", codeBlock(out.env, { caption: ".env", onCopy: markConnected }), !code && tlsNote);
+    if (code) step(out.env ? "Read them in your code" : "Connect", codeBlock(code, { onCopy: markConnected }), out.note && h("p", { class: "muted" }, out.note), tlsNote);
+    if (!out.code) step("Restart your app");
   }
   render();
 
   const el = h("section", { class: "panel connect-guide" },
     h("header", { class: "panel-head" }, h("div", null, h("h2", null, icon("link"), "Connect your application"),
-      h("p", { class: "muted" }, "Choose where your app runs and what it is written in. Everything below updates to match."))),
+      h("p", { class: "muted" }, "Pick where your app runs and its language."))),
     h("div", { class: "panel-body" },
       h("div", { class: "guide-controls" },
         h("div", { class: "control" }, h("span", { class: "field-label", id: `${stackID}-where` }, "Where does your app run?"),
           h("div", { class: "segmented", role: "group", "aria-labelledby": `${stackID}-where` }, whereButtons)),
-        h("div", { class: "control" }, h("label", { class: "field-label", for: stackID }, "Language or tool"), stackSelect)),
+        h("div", { class: "control" }, h("label", { class: "field-label", for: stackID }, "Language or tool"), stackSelect),
+        users.length > 1 ? h("div", { class: "control" }, h("label", { class: "field-label", for: userID }, "Connect as"), userSelect) : null),
       credentials, steps));
   return { el };
 }

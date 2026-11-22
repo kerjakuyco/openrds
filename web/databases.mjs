@@ -37,7 +37,7 @@ export function databasesView() {
   const actions = h("div", { class: "panel-actions" });
   const list = h("div", { id: "fleet-list" });
   const el = h("div", null,
-    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Databases"), h("p", { class: "muted" }, "Every database on this VPS. Select one to act on it, or open it for details.")),
+    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Databases"), h("p", { class: "muted" }, "Every database on this server.")),
       can("operator") ? h("div", { class: "page-actions" }, h("a", { class: "btn primary", id: "new-db", href: "#/databases/new" }, icon("plus"), "Create database")) : null),
     h("section", { class: "panel" },
       h("header", { class: "panel-head" }, h("div", null, h("h2", null, "Databases", count)), actions),
@@ -50,7 +50,7 @@ export function databasesView() {
   }
 
   function renderActions() {
-    if (!can("operator")) { actions.replaceChildren(h("span", { class: "chip neutral", title: "Your Viewer role can look but not change anything." }, icon("eye"), "Read only")); return; }
+    if (!can("operator")) { actions.replaceChildren(h("span", { class: "chip neutral", title: "Viewers can look but not change." }, icon("eye"), "Read only")); return; }
     const d = instance(ui.selected);
     const items = d ? databaseActions(d) : [{ label: "Select a database first", disabled: true, run: () => {} }];
     actions.replaceChildren(
@@ -60,14 +60,14 @@ export function databasesView() {
 
   function render() {
     const all = state.instances;
-    if (!all) { count.textContent = "—"; list.replaceChildren(empty("host", "Reading the inventory…", "Database status comes from the local Docker engine.")); renderActions(); return; }
+    if (!all) { count.textContent = "—"; list.replaceChildren(empty("host", "Reading the inventory…", "Status comes from Docker.")); renderActions(); return; }
     if (!instance(ui.selected)) ui.selected = "";
     const shown = all.filter(d => (!ui.engine || d.engine === ui.engine) && (!ui.status || STATUS_FILTERS[ui.status](d)) && matches(d, ui.q));
     count.textContent = ui.q || ui.engine || ui.status ? `${shown.length} of ${all.length}` : String(all.length);
     renderActions();
     if (!all.length) {
-      list.replaceChildren(can("operator") ? empty("db", "Create your first database", "Pick an engine, a size and a backup schedule. OpenRDS creates the volume and credentials.", h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database"))
-        : empty("db", "No databases yet", "An operator or administrator can create one."));
+      list.replaceChildren(can("operator") ? empty("db", "Create your first database", "Ready in about a minute.", h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database"))
+        : empty("db", "No databases yet", "Ask an operator to create one."));
       return;
     }
     if (!shown.length) {

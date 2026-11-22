@@ -30,24 +30,33 @@ function recommendations(dbs, now) {
   const out = [];
   const add = (tone, title, detail, href, action) => out.push({ tone, title, detail, href, action });
   for (const d of dbs.filter(needsAttention)) {
-    add("critical", `${d.name} needs attention`, d.pendingRestore ? "Its restore did not finish." : `Its status is ${d.status}.`, `#/databases/${d.name}/logs`, "Open logs");
+    add("critical", `${d.name} needs attention`, d.pendingRestore ? "Restore didn’t finish." : `Status: ${d.status}.`, `#/databases/${d.name}/logs`, "Open logs");
   }
   for (const d of dbs.filter(d => d.backupRetentionDays && isRunning(d))) {
     const last = d.latestBackupAt ? Date.parse(d.latestBackupAt) : 0;
     if (now - Math.max(last, Date.parse(d.createdAt)) > DAY + 2 * 3600000) {
-      add("warn", `${d.name} has no recent backup`, last ? `The latest is from ${ago(d.latestBackupAt, now)}.` : "No backup has finished since it was created.", `#/databases/${d.name}/backups`, "Review backups");
+      add("warn", `${d.name} has no recent backup`, last ? `Last one ${ago(d.latestBackupAt, now)}.` : "No backup yet.", `#/databases/${d.name}/backups`, "Review");
     }
   }
   const unprotected = dbs.filter(d => !d.backupRetentionDays);
   if (unprotected.length) {
-    add("warn", `Backups are off for ${plural(unprotected.length, "database")}`, unprotected.slice(0, 4).map(d => d.name).join(", ") + (unprotected.length > 4 ? "…" : ""),
-      unprotected.length === 1 ? `#/databases/${unprotected[0].name}/modify` : "#/automated-backups", unprotected.length === 1 ? "Turn on" : "Review schedule");
+    add("warn", `Backups off for ${plural(unprotected.length, "database")}`, unprotected.slice(0, 4).map(d => d.name).join(", ") + (unprotected.length > 4 ? "…" : ""),
+      unprotected.length === 1 ? `#/databases/${unprotected[0].name}/modify` : "#/automated-backups", unprotected.length === 1 ? "Turn on" : "Review");
   }
-  for (const d of dbs.filter(d => d.applied)) add("info", `${d.name} is waiting for a restart`, "Its new settings apply at the next reboot.", `#/databases/${d.name}/configuration`, "Review");
+  for (const d of dbs.filter(d => d.applied)) add("info", `${d.name} needs a restart`, "To apply new settings.", `#/databases/${d.name}/configuration`, "Review");
   const prod = dbs.filter(d => !d.deletionProtection && Object.entries(d.tags || {}).some(([k, v]) => /^env(ironment)?$/i.test(k) && /^prod(uction)?$/i.test(v)));
-  for (const d of prod) add("info", `Protect ${d.name} from deletion`, "It is tagged as production.", `#/databases/${d.name}/backups`, "Turn on");
+  for (const d of prod) add("info", `Protect ${d.name} from deletion`, "Tagged production.", `#/databases/${d.name}/backups`, "Turn on");
+  for (const d of dbs.filter(d => d.publicAccess)) {
+    const rules = d.firewall || [];
+    if (!d.requireTLS) add("warn", `${d.name} is public without TLS`, "Traffic isn’t encrypted.", `#/databases/${d.name}/modify`, "Require TLS");
+    if (rules.some(r => r.cidr === "0.0.0.0/0" || r.cidr === "::/0")) add("warn", `${d.name} is open to everyone`, "The firewall allows any address.", `#/databases/${d.name}/connectivity`, "Review");
+    else if (!rules.length) add("info", `${d.name} allows no sources`, "Nothing can connect yet.", `#/databases/${d.name}/connectivity`, "Add one");
+  }
+  const older = dbs.filter(d => isRunning(d) && !d.tlsReady);
+  if (older.length) add("info", `${plural(older.length, "database")} ${older.length === 1 ? "needs" : "need"} a reboot`, `To turn on TLS and users: ${older.slice(0, 4).map(d => d.name).join(", ")}${older.length > 4 ? "…" : ""}.`,
+    `#/databases/${older[0].name}/connectivity`, "Review");
   const uncapped = dbs.filter(d => isLive(d) && !d.memoryMiB);
-  if (uncapped.length) add("info", `${plural(uncapped.length, "database")} without a memory limit`, "One busy database could slow the others.", uncapped.length === 1 ? `#/databases/${uncapped[0].name}/modify` : "#/databases", "Review");
+  if (uncapped.length) add("info", `${plural(uncapped.length, "database")} without a memory limit`, "One could slow the others.", uncapped.length === 1 ? `#/databases/${uncapped[0].name}/modify` : "#/databases", "Review");
   return out;
 }
 
@@ -64,7 +73,7 @@ function databaseCard(d, host) {
     running ? h("div", { class: "usage" },
       h("div", { class: "usage-row" }, h("span", null, "CPU"), bar(cpu / 100), h("strong", null, percent(cpu))),
       h("div", { class: "usage-row" }, h("span", null, "Memory"), bar(memLimit ? d.live.memory / memLimit : 0), h("strong", null, d.memoryMiB ? `${bytes(d.live.memory)} / ${mib(d.memoryMiB)}` : bytes(d.live.memory))))
-      : h("p", { class: "muted usage-empty" }, d.busy ? "An operation is running…" : st.tone === "neutral" ? "Stopped. Start it to see usage." : "Usage appears once it is running."),
+      : h("p", { class: "muted usage-empty" }, d.busy ? "Working…" : st.tone === "neutral" ? "Stopped." : "No usage yet."),
     h("div", { class: "db-card-foot" },
       h("span", null, `Port ${d.port} · ${d.backupRetentionDays ? `backups ${plural(d.backupRetentionDays, "day")}` : "no backups"}`),
       h("a", { class: "connect", href: `#/databases/${d.name}/connectivity` }, "Connect", icon("arrow"))));
@@ -82,7 +91,7 @@ export function dashboardView() {
     const dbs = state.instances, backups = state.backups, host = state.host, now = Date.now();
     const trouble = dbs?.filter(needsAttention).length || 0, up = dbs?.filter(isRunning).length || 0;
     const summary = !dbs ? [h("span", null, "Reading your databases…")]
-      : !dbs.length ? [h("span", null, "No databases yet. Create your first one to get started.")]
+      : !dbs.length ? [h("span", null, "No databases yet.")]
         : trouble ? [h("span", { class: "dot critical" }), h("span", null, `${plural(trouble, "database")} ${trouble === 1 ? "needs" : "need"} attention`)]
           : up === dbs.length ? [h("span", { class: "dot good" }), h("span", null, dbs.length === 1 ? "Your database is running" : `All ${dbs.length} databases are running`)]
             : [h("span", { class: "dot neutral" }), h("span", null, `${up} of ${plural(dbs.length, "database")} running`)];
@@ -98,7 +107,7 @@ export function dashboardView() {
     const auto = backups?.filter(b => b.kind === "automated") || [];
     tiles.replaceChildren(
       tile("Databases", dbs?.length ?? "—", dbs ? `${up} running` : "Reading…", "db", "#/databases", ""),
-      tile("Needs attention", dbs ? trouble : "—", trouble ? "Unhealthy or incomplete" : "Everything looks healthy", "alert", "#/databases", "attention"),
+      tile("Needs attention", dbs ? trouble : "—", trouble ? "Check these first" : "All healthy", "alert", "#/databases", "attention"),
       tile("Snapshots", backups ? manual.length : "—", backups ? `${bytes(manual.reduce((n, b) => n + b.bytes, 0))} stored` : "Reading…", "camera", "#/snapshots"),
       tile("Automated backups", backups ? auto.length : "—", dbs ? `${dbs.filter(d => d.backupRetentionDays).length} of ${dbs.length} scheduled` : "Reading…", "history", "#/automated-backups"));
 
@@ -108,7 +117,7 @@ export function dashboardView() {
       !dbs ? h("div", { class: "panel" }, empty("db", "Reading your databases…", ""))
         : h("div", { class: "db-cards" }, sorted.slice(0, CARDS).map(d => databaseCard(d, host)),
           can("operator") && dbs.length < CARDS ? h("a", { class: "db-card add", href: "#/databases/new" }, icon("plus"), dbs.length ? "Create another database" : "Create your first database") : null,
-          !dbs.length && !can("operator") ? h("div", { class: "panel" }, empty("db", "No databases yet", "An operator or administrator can create one.")) : null));
+          !dbs.length && !can("operator") ? h("div", { class: "panel" }, empty("db", "No databases yet", "Ask an operator to create one.")) : null));
 
     const list = dbs ? recommendations(dbs, now) : [];
     attention.replaceChildren(panel("Needs attention", { counter: dbs && list.length ? list.length : null },
@@ -116,7 +125,7 @@ export function dashboardView() {
         icon(r.tone === "critical" ? "error" : r.tone === "warn" ? "alert" : "info"),
         h("div", null, h("strong", null, r.title), h("p", { class: "muted" }, r.detail)),
         can("operator") || r.href.endsWith("/logs") ? h("a", { class: "btn small", href: r.href }, r.action) : null)))
-        : h("div", { class: "all-good" }, icon("ok"), h("div", null, h("strong", null, "All clear"), h("p", { class: "muted" }, "Every database is healthy and backed up.")))));
+        : h("div", { class: "all-good" }, icon("ok"), h("div", null, h("strong", null, "All clear"), h("p", { class: "muted" }, "Nothing needs you.")))));
 
     if (!host) capacity.replaceChildren(panel("Server capacity", {}, empty("host", "Reading the server…", "")));
     else {
@@ -129,17 +138,20 @@ export function dashboardView() {
           line("Memory in use", `${bytes(used)} of ${bytes(host.memoryBytes)}`, used / host.memoryBytes),
           line("Memory limits", `${bytes(mem)} of ${bytes(host.memoryBytes)}`, mem / host.memoryBytes),
           line("CPU limits", `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`, cpu / host.cpus)),
-        h("p", { class: "muted small" }, `Docker ${host.dockerVersion} · volume limits ${host.volumeQuota?.state === "supported" ? "enforceable" : "not enforceable here"}`)));
+        h("p", { class: "muted small" }, `Docker ${host.dockerVersion} · disk limits ${host.volumeQuota?.state === "supported" ? "on" : "unavailable"}`)));
     }
 
-    const events = state.activity?.slice(0, 6) || [];
+    // One line per action: its outcome, or "started" while it still runs.
+    const all = state.activity || [];
+    const key = (e) => `${e.name}|${e.action}|${e.actor}`; // newest first, so an outcome comes before its start
+    const events = all.filter((e, i) => e.result !== "started" || !all.slice(0, i).some(x => x.result !== "started" && key(x) === key(e))).slice(0, 6);
     activity.replaceChildren(panel("Recent activity", { actions: [h("a", { class: "btn small ghost", href: "#/events" }, "View all")] },
       !state.activity ? empty("bell", "Reading history…", "") : events.length ? h("ul", { class: "activity" }, events.map(e => h("li", { class: e.result },
         icon(e.result === "completed" ? "ok" : e.result === "failed" ? "error" : "pending"),
         h("div", null, h("strong", null, e.action),
           h("small", { class: "muted" }, e.kind === "user" ? e.name : h("a", { href: `#/databases/${e.name}` }, e.name),
             e.actor && e.actor !== "system" && e.actor !== e.name ? ` · ${e.actor}` : "", ` · ${ago(e.at, now)}`)))))
-        : empty("bell", "Nothing yet", "Operations appear here as they run.")));
+        : empty("bell", "Nothing yet", "Actions show up here.")));
   }
   render();
   const stop = subscribe(render);

@@ -85,6 +85,51 @@ async function run() {
     await page.locator("pre").filter({ hasText: `@openrds-${name}:5432/app` }).waitFor();
     await page.locator("pre").filter({ hasText: "docker network connect" }).waitFor();
 
+    // Database users: create a read-only user and see its password once,
+    // change the owner password, then delete the user.
+    await page.getByRole("tab", { name: "Database users" }).click();
+    await page.getByRole("button", { name: "Create user" }).click();
+    let dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Username").fill("reporting");
+    await dialog.getByText("Read only", { exact: true }).click();
+    await dialog.getByRole("button", { name: "Create user" }).click();
+    dialog = page.getByRole("dialog").filter({ hasText: "reporting is ready" });
+    await dialog.locator("pre").filter({ hasText: /^[a-f0-9]{48}$/ }).waitFor();
+    await dialog.getByRole("button", { name: "Done" }).click();
+    const reporting = page.locator("tbody tr").filter({ hasText: "reporting" });
+    await reporting.filter({ hasText: "Read only" }).waitFor();
+    await page.locator("tbody tr").filter({ hasText: "Owner" }).getByRole("button", { name: "Actions" }).click();
+    await page.getByRole("menuitem", { name: "Change password" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Change password" }).click();
+    await page.getByRole("dialog").filter({ hasText: "New password for openrds" }).getByRole("button", { name: "Done" }).click();
+    await reporting.getByRole("button", { name: "Actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete user" }).click();
+    dialog = page.getByRole("dialog");
+    await dialog.getByPlaceholder("reporting").fill("reporting");
+    await dialog.getByRole("button", { name: "Delete user" }).click();
+    await reporting.waitFor({ state: "detached" });
+
+    // Network access: open a public port for one address, then close it.
+    await page.getByRole("tab", { name: "Connectivity & security" }).click();
+    const network = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Network access" }) });
+    await network.getByText("Private.", { exact: false }).waitFor();
+    await network.getByRole("button", { name: "Edit" }).click();
+    dialog = page.getByRole("dialog");
+    await dialog.getByRole("switch", { name: /Public access/ }).check();
+    const publicPort = await freePort();
+    await dialog.getByLabel("Public port").fill(String(publicPort));
+    await dialog.getByRole("button", { name: "Add source" }).click();
+    await dialog.getByPlaceholder("203.0.113.7 or 203.0.113.0/24").fill("203.0.113.7");
+    await dialog.getByRole("button", { name: "Save network access" }).click();
+    await network.getByText(`Public on port ${publicPort}.`).waitFor({ timeout: 60000 });
+    await network.getByRole("cell", { name: "203.0.113.7/32" }).waitFor();
+    await page.getByText("TLS is not required", { exact: false }).waitFor();
+    await network.getByRole("button", { name: "Edit" }).click();
+    await page.getByRole("dialog").getByRole("switch", { name: /Public access/ }).uncheck();
+    await page.getByRole("dialog").getByRole("button", { name: "Save network access" }).click();
+    await network.getByText("Private.", { exact: false }).waitFor({ timeout: 60000 });
+    assert.ok(await page.getByRole("link", { name: "CA certificate" }).getAttribute("href") === "/api/tls/ca.pem");
+
     // Monitoring renders four charts and their table view.
     await page.getByRole("tab", { name: "Monitoring" }).click();
     await page.getByRole("heading", { name: "CPU utilization" }).waitFor();
@@ -117,12 +162,12 @@ async function run() {
     await review.getByRole("row").filter({ hasText: "CPU limit" }).waitFor();
     await review.getByRole("button", { name: "Modify database" }).click();
     await page.waitForURL(new RegExp(`#/databases/${name}$`));
-    await page.getByText("Pending modifications apply at the next restart", { exact: false }).waitFor({ timeout: 30000 });
+    await page.getByText("Changes apply at the next restart", { exact: false }).waitFor({ timeout: 30000 });
     await page.getByRole("button", { name: "Actions" }).click();
     await page.getByRole("menuitem", { name: "Reboot" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Reboot database" }).click();
     await page.getByText(`${name} rebooted.`, { exact: false }).waitFor({ timeout: 300000 });
-    await page.getByText("Pending modifications apply at the next restart", { exact: false }).waitFor({ state: "detached", timeout: 30000 });
+    await page.getByText("Changes apply at the next restart", { exact: false }).waitFor({ state: "detached", timeout: 30000 });
     await page.getByText("1 vCPU · 1 GiB").first().waitFor();
 
     // Inventory search
@@ -178,7 +223,7 @@ async function run() {
     assert.equal(await guest.locator('nav#nav [data-nav="users"]').isVisible(), false, "viewers cannot manage users");
     await guest.goto(`${base}/#/databases/${name}`);
     await guest.getByText("Read only").first().waitFor();
-    await guest.getByText("Your Viewer role cannot see database passwords", { exact: false }).waitFor();
+    await guest.getByText("Viewers can’t see passwords", { exact: false }).waitFor();
     await other.close();
     await page.getByRole("cell", { name: /CI Viewer/ }).first().waitFor();
 
@@ -198,7 +243,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");
