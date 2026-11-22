@@ -78,6 +78,7 @@ On a new server, the dashboard asks which engine you want: **PostgreSQL**, **MyS
 Pick one and fill in the form:
 
 - **Identifier:** a name such as `orders`.
+- **Engine version:** the stable version is selected. Pick the latest for the newest features.
 - **Template:** **Production** (daily backups kept 7 days, deletion protection) or **Dev and test** (smaller, 1-day backups).
 - **Size**, **backups** and other settings are already filled in. You can change any of them later.
 
@@ -180,3 +181,5 @@ cd ~/openrds && docker compose logs --tail 100 openrds
 ```
 
 If you're stuck, [open an issue](https://github.com/kerjakuyco/openrds/issues).
+
+For every feature in detail, read the [user guide](guide.md).

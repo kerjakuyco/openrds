@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in OpenRDS doesn't work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please **don't** report security problems here: see [SECURITY.md](https://github.com/kerjakuyco/openrds/blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+      placeholder: Restoring a snapshot into a new database fails with "…"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a PostgreSQL 18 database
+        2. Take a snapshot
+        3. Restore it into PostgreSQL 19
+        4. See the error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenRDS version
+      description: The commit you run. In your OpenRDS folder, run `git rev-parse --short HEAD`.
+      placeholder: c918a2a
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Server and Docker
+      description: Your OS, and the output of `docker version --format '{{.Server.Version}}'`.
+      placeholder: Ubuntu 24.04, Docker 29.0.1
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      description: Which database engines are affected?
+      multiple: true
+      options:
+        - PostgreSQL
+        - MySQL
+        - Valkey
+        - Not engine-specific
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output of `docker compose logs openrds`, or the failure details from **Events**. Remove passwords and other secrets first.
+      render: shell
