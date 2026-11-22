@@ -6,4 +6,5 @@
 !engines/
 !engines/**
 !LICENSE
+!NOTICE
 !disk-helper.sh

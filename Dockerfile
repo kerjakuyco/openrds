@@ -12,11 +12,11 @@ ENTRYPOINT ["/usr/local/bin/disk-helper"]
 
 FROM docker:29-cli AS runtime
 LABEL org.opencontainers.image.source="https://github.com/kerjakuyco/openrds" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /opt/openrds
 COPY --from=build /out/openrds /usr/local/bin/openrds
 COPY engines ./engines
-COPY LICENSE ./LICENSE
+COPY LICENSE NOTICE ./
 ENV OPENRDS_DATA_DIR=/var/lib/openrds OPENRDS_LISTEN=0.0.0.0:8080
 EXPOSE 8080
 ENTRYPOINT ["openrds"]
