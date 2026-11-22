@@ -205,3 +205,43 @@ func TestRestoreRequiresExplicitUncapOnUnsupportedHost(t *testing.T) {
 		t.Fatalf("explicit uncapped restore failed: %d", got)
 	}
 }
+
+func TestOnlyDatabasesDockerFailedToStartAreRecovered(t *testing.T) {
+	containers := map[string][2]string{ // project: container ID, "state|error"
+		"p-failed":   {"c1", "exited|error while mounting volume '/var/lib/docker/volumes/x/_data': no such file or directory"},
+		"p-stopped":  {"c2", "exited|"},
+		"p-running":  {"c3", "running|"},
+		"p-uncapped": {"c4", "exited|error while mounting volume"},
+	}
+	m := testManager(t, func(_ context.Context, _ []string, _ io.Reader, out io.Writer, args ...string) error {
+		switch args[0] {
+		case "ps":
+			for _, a := range args {
+				if project, ok := strings.CutPrefix(a, "label=com.docker.compose.project="); ok {
+					fmt.Fprintln(out, containers[project][0])
+				}
+			}
+		case "inspect":
+			for _, c := range containers {
+				if c[0] == args[len(args)-1] {
+					fmt.Fprintln(out, c[1])
+				}
+			}
+		}
+		return nil
+	})
+	for _, r := range []record{
+		{instanceSpec: instanceSpec{Name: "failed", DiskGiB: 1}, Project: "p-failed"},
+		{instanceSpec: instanceSpec{Name: "stopped", DiskGiB: 1}, Project: "p-stopped"},
+		{instanceSpec: instanceSpec{Name: "running", DiskGiB: 1}, Project: "p-running"},
+		{instanceSpec: instanceSpec{Name: "uncapped"}, Project: "p-uncapped"},
+	} {
+		if err := writeJSON(m.recordPath(r.Name), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := m.failedMounts(t.Context())
+	if len(got) != 1 || got[0].Name != "failed" {
+		t.Fatalf("recovered %+v, want only the database Docker failed to start", got)
+	}
+}

@@ -121,6 +121,58 @@ func (m *manager) prepareDisks(ctx context.Context) {
 	}
 }
 
+// Capped databases that Docker tried to start while their disk image was not
+// attached yet, for example right after Docker Desktop or the server
+// restarted. Docker records the failed mount and does not try again. A
+// database stopped on purpose has no such error, so it stays stopped.
+func (m *manager) failedMounts(ctx context.Context) []record {
+	records, err := m.records()
+	if err != nil {
+		log.Printf("checking disk limits after a restart: %v", err)
+		return nil
+	}
+	var failed []record
+	for _, r := range records {
+		if r.DiskGiB == 0 || r.PendingRestore {
+			continue
+		}
+		var out bytes.Buffer
+		err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project="+r.Project,
+			"--filter", "label=io.openrds.database=true")
+		ids := strings.Fields(out.String())
+		if err != nil || len(ids) != 1 { // exactly one database container
+			continue
+		}
+		id := ids[0]
+		out.Reset()
+		if err := m.docker.run(ctx, nil, nil, &out, "inspect", "--format", "{{.State.Status}}|{{.State.Error}}", id); err != nil {
+			continue
+		}
+		state, problem, _ := strings.Cut(strings.TrimSpace(out.String()), "|")
+		if state == "exited" && strings.Contains(problem, "mounting volume") {
+			failed = append(failed, r)
+		}
+	}
+	return failed
+}
+
+// Start the databases Docker could not, once their disk images are attached again.
+func (m *manager) recoverDisks(ctx context.Context) {
+	for _, r := range m.failedMounts(ctx) {
+		current, release, err := m.begin(r.Name, nil, false)
+		if err != nil {
+			continue
+		}
+		finish := m.track(ctx, r.Name, "Start database after Docker restart")
+		err = m.start(ctx, &current)
+		finish(err)
+		release()
+		if err != nil {
+			log.Printf("starting %s after a Docker restart: %v", r.Name, err)
+		}
+	}
+}
+
 func (m *manager) checkDiskRequest(ctx context.Context, gib int) error {
 	if gib == 0 {
 		return nil

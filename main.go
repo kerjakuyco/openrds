@@ -59,6 +59,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	m.offsite.ctx = ctx
+	go m.recoverDisks(ctx) // after prepareDisks attached the disk images
 	go m.maintain(ctx)
 	if m.engine != nil {
 		go m.sampleMetrics(ctx)
