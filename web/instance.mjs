@@ -1,5 +1,5 @@
 // One database: summary, actions and tabs, like a managed-database console.
-import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, infoPanel, windowLabel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
+import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, infoPanel, scheduleLabel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
 import { state, subscribe, instance, engine, loadEngines, sync, go, track, can } from "./store.mjs";
 import { connectGuide } from "./connect.mjs";
 import { timeChart, chartGroup } from "./charts.mjs";
@@ -179,7 +179,7 @@ function backupsTab(d) {
   const el = h("div", { class: "stack-gap" },
     infoPanel("Maintenance & backups", [
       ["Backup", [["Automated backups", on ? h("span", { class: "status good" }, icon("ok"), "On") : h("span", { class: "status warn" }, icon("alert"), "Off")],
-        ["Retention period", on ? plural(d.backupRetentionDays, "day") : "—"], ["Backup window", on ? windowLabel(d.backupWindow) : "—"]]],
+        ["Retention period", on ? plural(d.backupRetentionDays, "day") : "—"], ["Schedule", on ? scheduleLabel(d.backupWindow, d.backupIntervalHours) : "—"]]],
       ["Recovery points", [["Latest backup", d.latestBackupAt ? `${when(d.latestBackupAt)} (${ago(d.latestBackupAt)})` : "None yet"],
         ["Next automated backup", d.nextBackupAt ? `${when(d.nextBackupAt)} (${ago(d.nextBackupAt)})` : "—"]]],
       ["Protection", [["Deletion protection", h("span", { class: "row tight" }, d.deletionProtection ? "On" : "Off", can("operator") ? toggle : null)]]],
@@ -215,8 +215,8 @@ const SIGNATURE = {
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
   logs: () => "",
   configuration: d => JSON.stringify([d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
-    d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.users, state.me?.role]),
-  backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.latestBackupAt, d.nextBackupAt]),
+    d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, state.me?.role]),
+  backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt]),
   tags: d => JSON.stringify(d.tags || {}),
 };
 

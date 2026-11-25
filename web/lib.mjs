@@ -75,6 +75,13 @@ export function windowLabel(w) {
   return w ? `${w.replace("-", "–")} UTC` : "—";
 }
 
+// "Daily, 03:00–03:30 UTC" or "Every 6 hours from 03:00 UTC".
+export function scheduleLabel(w, hours = 24) {
+  if (!w) return "—";
+  if (!hours || hours === 24) return `Daily, ${windowLabel(w)}`;
+  return `${hours === 1 ? "Every hour" : `Every ${hours} hours`} from ${w.split("-")[0]} UTC`;
+}
+
 export function sizeLabel(d) {
   const cpu = d.cpus ? cores(d.cpus) : "Shared CPU";
   const mem = d.memoryMiB ? mib(d.memoryMiB) : "shared memory";

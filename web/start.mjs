@@ -22,7 +22,7 @@ export function steps() {
     { id: "connect", title: "Connect your app", done: flag("openrds-connected"), href: first ? `#/databases/${first.name}` : "#/databases/new", action: "Open the guide",
       text: "Copy a snippet for your language." },
     { id: "backups", title: "Turn on automated backups", done: dbs.length > 0 && !unprotected, href: unprotected ? `#/databases/${unprotected.name}/modify` : "#/automated-backups", action: "Set a schedule",
-      text: "Daily backups, kept as long as you choose." },
+      text: "Backups on a schedule, kept as long as you choose." },
     { id: "offsite", title: "Keep an offsite copy", done: flag("openrds-downloaded") || Boolean(state.storage?.enabled), href: "#/backup-storage", action: "Set up storage",
       text: "Copy backups to S3-compatible storage." },
   );
@@ -56,7 +56,7 @@ function checklist(list, { compact = false } = {}) {
 const CONCEPTS = [
   ["db", "Database", "A PostgreSQL, MySQL or Valkey server in its own container, with its own volume, port and password."],
   ["camera", "Snapshot", "A backup you take. It stays until you delete it."],
-  ["history", "Automated backup", "A daily backup, removed after the retention period."],
+  ["history", "Automated backup", "A scheduled backup, daily or more often, removed after the retention period."],
   ["shield", "Deletion protection", "Blocks deleting a database until you turn it off."],
   ["sliders", "Engine parameters", "Tuning settings such as max_connections. Applied on restart."],
   ["terminal", "SSH tunnel", "Reach a private database from your computer."],

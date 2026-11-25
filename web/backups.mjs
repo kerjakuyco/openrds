@@ -1,5 +1,5 @@
 // Snapshots and automated backups: the recovery library.
-import { h, icon, api, modal, dataTable, empty, panel, bytes, when, ago, plural, windowLabel, toast, btn, menu, isLive } from "./lib.mjs";
+import { h, icon, api, modal, dataTable, empty, panel, bytes, when, ago, plural, scheduleLabel, toast, btn, menu, isLive } from "./lib.mjs";
 import { state, subscribe, sync, instance, engine, can } from "./store.mjs";
 import { markDownloaded } from "./start.mjs";
 import { editBackups } from "./settings.mjs";
@@ -74,7 +74,7 @@ function scheduleRow(d, stored) {
       h("span", { class: `engine-badge ${d.engine}`, "aria-hidden": "true" }, BADGE[d.engine]),
       h("span", { class: "stack" }, h("a", { href: `#/databases/${d.name}/backups` }, h("strong", null, d.name)), h("small", null, d.engineLabel))),
     h("div", { class: "sched-plan" }, on
-      ? [h("strong", null, `Daily, ${windowLabel(d.backupWindow)}`), h("small", null, `Kept ${plural(d.backupRetentionDays, "day")} · ${plural(stored, "backup")} stored`)]
+      ? [h("strong", null, scheduleLabel(d.backupWindow, d.backupIntervalHours)), h("small", null, `Kept ${plural(d.backupRetentionDays, "day")} · ${plural(stored, "backup")} stored`)]
       : [h("span", { class: "status warn" }, icon("alert"), "Off"), h("small", null, "No automatic backups.")]),
     when2("Last backup", d.latestBackupAt ? h("span", { title: when(d.latestBackupAt) }, ago(d.latestBackupAt)) : "None yet"),
     when2("Next backup", !on ? "—" : paused ? h("span", { class: "muted" }, "Paused while stopped") : d.nextBackupAt ? h("span", { title: when(d.nextBackupAt) }, ago(d.nextBackupAt)) : "—"),
@@ -88,7 +88,7 @@ function schedules(dbs, backups) {
   const all = on === dbs.length;
   return panel("Schedules", { description: "Times in UTC." },
     h("div", { class: `coverage${all ? " full" : ""}` },
-      h("span", { class: "coverage-text" }, icon(all ? "ok" : "alert"), h("strong", null, `${on} of ${plural(dbs.length, "database")}`), on === 1 && dbs.length === 1 ? " backs up daily" : " back up daily"),
+      h("span", { class: "coverage-text" }, icon(all ? "ok" : "alert"), h("strong", null, `${on} of ${plural(dbs.length, "database")}`), on === 1 && dbs.length === 1 ? " backs up automatically" : " back up automatically"),
       h("span", { class: "coverage-bar", "aria-hidden": "true" }, fill)),
     h("div", { class: "sched-list" }, dbs.map(d => scheduleRow(d, backups.filter(b => b.kind === "automated" && b.name === d.name && Date.parse(b.createdAt) >= Date.parse(d.createdAt)).length))));
 }
@@ -108,7 +108,7 @@ export function backupsView(kind) {
     listSlot);
   const el = h("div", null,
     h("div", { class: "page-head" }, h("div", null, h("h1", null, automated ? "Automated backups" : "Snapshots"),
-      h("p", { class: "muted" }, automated ? "Daily backups, kept for the days you choose." : "Backups you take. They stay until you delete them.")),
+      h("p", { class: "muted" }, automated ? "Backups on a schedule, from daily to hourly, kept for the days you choose." : "Backups you take. They stay until you delete them.")),
       h("div", { class: "page-actions" }, h("a", { class: "btn", href: automated ? "#/snapshots" : "#/automated-backups" }, icon(automated ? "camera" : "history"), automated ? "View snapshots" : "View automated backups"))),
     h("div", { class: "stack-gap" }, automated ? settingsSlot : null, main));
 

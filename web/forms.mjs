@@ -1,6 +1,6 @@
 // Create, restore and modify pages: numbered sections like a console wizard,
 // with a summary that shows what the request will do to the host.
-import { h, icon, btn, api, alertBox, setAlert, mib, nextId, windowLabel, plural, bytes, keyValues, isLive, modal, toast, help } from "./lib.mjs";
+import { h, icon, btn, api, alertBox, setAlert, mib, nextId, windowLabel, scheduleLabel, plural, bytes, keyValues, isLive, modal, toast, help } from "./lib.mjs";
 import { state, loadEngines, engine, instance, track, sync, go } from "./store.mjs";
 
 const SIZES = [
@@ -21,6 +21,23 @@ const TEMPLATES = {
 };
 const RETENTION = [0, 1, 2, 3, 5, 7, 10, 14, 21, 30, 35];
 const LENGTHS = [30, 60, 120, 180];
+const INTERVALS = [24, 12, 6, 4, 3, 2, 1];
+const frequencyLabel = (n) => !n || n === 24 ? "Once a day" : n === 1 ? "Every hour" : `Every ${n} hours`;
+
+// How often automated backups run, and what that keeps on disk.
+function frequencyField(value, retention) {
+  const control = select(INTERVALS.map(n => [n, frequencyLabel(n)]), value || 24);
+  const wrap = field("Frequency", control, { hint: " ", explain: "More frequent backups lose less data, and each is a full copy, so they use more disk." });
+  const hint = wrap.querySelector(".hint");
+  wrap.update = () => {
+    const days = Number(retention.value), hours = Number(control.value);
+    hint.textContent = hours === 24 ? "Starts in the window." : `Repeats from the window start. Keeps about ${plural(Math.round(days * 24 / hours), "backup")}.`;
+  };
+  [control, retention].forEach(c => c.addEventListener("change", wrap.update));
+  wrap.update();
+  wrap.control = control;
+  return wrap;
+}
 const namePattern = /^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$/;
 // "PostgreSQL 18 · Stable (recommended)", "MySQL 9.7 LTS · Latest".
 const versionLabel = (eng, x) => `${eng.title} ${x.version}${x.lts ? " LTS" : ""}${x.status === "latest" ? " · Latest" : x.status === "stable" ? " · Stable (recommended)" : ""}`;
@@ -297,11 +314,15 @@ function databaseForm({ mode, eng, initial, source }) {
   const start = select(Array.from({ length: 48 }, (_, i) => [i * 30, `${hhmm(i * 30)} UTC`]), win.start);
   const length = select([...new Set([...LENGTHS, win.length])].map(m => [m, m < 60 ? `${m} minutes` : plural(m / 60, "hour")]), win.length);
   const windowFields = h("div", { class: "form-grid" }, field("Backup window start", start, { explain: "In UTC. Pick a quiet hour." }), field("Window length", length));
-  fields.retention = field("Backup retention period", retention, { explain: "How long daily backups are kept.", hint: "Snapshots you take are kept until you delete them." });
-  const syncBackup = () => { v.retention = Number(retention.value); v.window = formatWindow(Number(start.value), Number(length.value)); windowFields.hidden = v.retention === 0; changed(); };
-  [retention, start, length].forEach(c => c.addEventListener("change", syncBackup));
+  fields.retention = field("Backup retention period", retention, { explain: "How long automated backups are kept.", hint: "Snapshots you take are kept until you delete them." });
+  const frequency = frequencyField(v.interval, retention);
+  const syncBackup = () => {
+    v.retention = Number(retention.value); v.window = formatWindow(Number(start.value), Number(length.value)); v.interval = Number(frequency.control.value);
+    windowFields.hidden = frequency.hidden = v.retention === 0; changed();
+  };
+  [retention, start, length, frequency.control].forEach(c => c.addEventListener("change", syncBackup));
   syncBackup();
-  sections.push(section(++n, "Backup", null, fields.retention, windowFields));
+  sections.push(section(++n, "Backup", null, fields.retention, frequency, windowFields));
 
   // Additional configuration
   let params = parameterEditor(eng, v.parameters);
@@ -348,7 +369,7 @@ function databaseForm({ mode, eng, initial, source }) {
   function read() {
     return {
       name: v.name, engine: eng.key, version: v.version, port: v.port, cpus: v.cpus || 0, memoryMiB: v.memoryMiB || 0, diskGiB: v.diskGiB || 0,
-      backupRetentionDays: v.retention, backupWindow: v.window, deletionProtection: v.protection, requireTLS: Boolean(v.tls),
+      backupRetentionDays: v.retention, backupWindow: v.window, backupIntervalHours: v.interval || 24, deletionProtection: v.protection, requireTLS: Boolean(v.tls),
       tags: tags.value(), parameters: params.value(),
     };
   }
@@ -384,7 +405,7 @@ function databaseForm({ mode, eng, initial, source }) {
       ["Size", spec.cpus || spec.memoryMiB ? `${spec.cpus ? `${spec.cpus} vCPU` : "Shared CPU"} · ${spec.memoryMiB ? mib(spec.memoryMiB) : "shared memory"}` : "Shared host"],
       ["Storage", spec.diskGiB ? `${spec.diskGiB} GiB limit` : "Uncapped"],
       ["Endpoint", `127.0.0.1:${spec.port || "—"}`],
-      ["Automated backups", spec.backupRetentionDays ? `${plural(spec.backupRetentionDays, "day")} · ${windowLabel(spec.backupWindow)}` : "Off"],
+      ["Automated backups", spec.backupRetentionDays ? `${plural(spec.backupRetentionDays, "day")} · ${scheduleLabel(spec.backupWindow, spec.backupIntervalHours)}` : "Off"],
       ["Deletion protection", spec.deletionProtection ? "On" : "Off"],
       ["Encryption", spec.requireTLS ? "TLS required" : eng.key === "valkey" ? "Plain text" : "TLS available"],
       ["Parameters", Object.keys(spec.parameters).length ? plural(Object.keys(spec.parameters).length, "custom value") : "Engine defaults"],
@@ -475,7 +496,7 @@ export async function modifyView(name) {
   const d = instance(name);
   if (!d) return { el: h("div", null, heading("Database not found", "It may have been deleted."), h("a", { class: "btn", href: "#/databases" }, "Back to databases")), title: "Modify", nav: "databases", crumbs: [["Databases", "#/databases"], ["Modify"]] };
   const eng = engine(d.engine);
-  const f = databaseForm({ mode: "modify", eng, initial: { name: d.name, engine: d.engine, version: d.version, size: sizeName(d.cpus, d.memoryMiB), cpus: d.cpus, memoryMiB: d.memoryMiB, diskGiB: d.diskGiB, port: d.port, retention: d.backupRetentionDays, window: d.backupWindow, protection: d.deletionProtection, tls: d.requireTLS, tags: d.tags || {}, parameters: d.parameters || {} } });
+  const f = databaseForm({ mode: "modify", eng, initial: { name: d.name, engine: d.engine, version: d.version, size: sizeName(d.cpus, d.memoryMiB), cpus: d.cpus, memoryMiB: d.memoryMiB, diskGiB: d.diskGiB, port: d.port, retention: d.backupRetentionDays, window: d.backupWindow, interval: d.backupIntervalHours, protection: d.deletionProtection, tls: d.requireTLS, tags: d.tags || {}, parameters: d.parameters || {} } });
   f.form.addEventListener("submit", (e) => {
     e.preventDefault();
     const spec = f.read();
@@ -497,7 +518,10 @@ function review(d, spec) {
   diff("Memory limit", was.memory, now.memory, "memoryMiB", spec.memoryMiB);
   diff("Host port", String(d.port), String(spec.port), "port", spec.port);
   diff("Backup retention", d.backupRetentionDays ? plural(d.backupRetentionDays, "day") : "Off", spec.backupRetentionDays ? plural(spec.backupRetentionDays, "day") : "Off", "backupRetentionDays", spec.backupRetentionDays);
-  if (spec.backupRetentionDays) diff("Backup window", windowLabel(d.backupWindow), windowLabel(spec.backupWindow), "backupWindow", spec.backupWindow);
+  if (spec.backupRetentionDays) {
+    diff("Backup window", windowLabel(d.backupWindow), windowLabel(spec.backupWindow), "backupWindow", spec.backupWindow);
+    diff("Backup frequency", frequencyLabel(d.backupIntervalHours), frequencyLabel(spec.backupIntervalHours), "backupIntervalHours", spec.backupIntervalHours);
+  }
   diff("Deletion protection", d.deletionProtection ? "On" : "Off", spec.deletionProtection ? "On" : "Off", "deletionProtection", spec.deletionProtection);
   diff("Require TLS", d.requireTLS ? "On" : "Off", spec.requireTLS ? "On" : "Off", "requireTLS", spec.requireTLS);
   if (!same(d.parameters, spec.parameters)) { rows.push(["Engine parameters", mapLabel(d.parameters), mapLabel(spec.parameters)]); body.parameters = spec.parameters; }
@@ -539,4 +563,4 @@ function review(d, spec) {
 }
 
 // Shared with the settings editors on the database page.
-export { SIZES, RETENTION, LENGTHS, parseWindow, formatWindow, hhmm, field, choiceCards, select };
+export { SIZES, RETENTION, LENGTHS, parseWindow, formatWindow, hhmm, field, choiceCards, select, frequencyField };

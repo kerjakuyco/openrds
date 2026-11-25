@@ -159,9 +159,12 @@ async function run() {
     // Settings change in place, one at a time.
     const backupsRow = page.locator(".set-row").filter({ hasText: "Automated backups" });
     await backupsRow.getByRole("button", { name: "Change" }).click();
-    await page.getByRole("dialog").getByLabel("Keep daily backups for").selectOption("3");
+    await page.getByRole("dialog").getByLabel("Keep automated backups for").selectOption("3");
+    await page.getByRole("dialog").getByLabel("Frequency", { exact: true }).selectOption("6");
+    await page.getByRole("dialog").getByText("Keeps about 12 backups", { exact: false }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Save backups" }).click();
     await backupsRow.getByText("3 days", { exact: false }).waitFor({ timeout: 30000 });
+    await backupsRow.getByText("Every 6 hours from", { exact: false }).waitFor();
 
     // Snapshot from the maintenance tab
     await page.getByRole("tab", { name: "Maintenance & backups" }).click();
@@ -199,6 +202,7 @@ async function run() {
     await page.locator('nav#nav [data-nav="automated"]').click();
     const schedule = page.locator(".sched-row").filter({ hasText: name });
     await schedule.getByText("Kept 3 days", { exact: false }).waitFor();
+    await schedule.getByText("Every 6 hours from", { exact: false }).waitFor();
     await schedule.getByRole("button", { name: "Change" }).click();
     await page.getByRole("dialog").getByRole("heading", { name: "Automated backups" }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();

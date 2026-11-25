@@ -357,17 +357,17 @@ func TestBackupWindows(t *testing.T) {
 		}
 	}
 	day := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
-	opened, open := backupWindow("23:45-00:15", day.Add(5*time.Minute))
+	opened, open := backupWindow("23:45-00:15", 0, day.Add(5*time.Minute))
 	if !open || !opened.Equal(day.Add(-15*time.Minute)) {
 		t.Fatalf("a window past midnight: %v %v", opened, open)
 	}
-	if _, open := backupWindow("03:00-03:30", day.Add(3*time.Hour+30*time.Minute)); open {
+	if _, open := backupWindow("03:00-03:30", 0, day.Add(3*time.Hour+30*time.Minute)); open {
 		t.Fatal("the window end is exclusive")
 	}
-	if next := nextBackup("03:00-03:30", time.Time{}, day.Add(time.Hour)); !next.Equal(day.Add(3 * time.Hour)) {
+	if next := nextBackup("03:00-03:30", 0, time.Time{}, day.Add(time.Hour)); !next.Equal(day.Add(3 * time.Hour)) {
 		t.Fatalf("next backup before the window: %v", next)
 	}
-	if next := nextBackup("03:00-03:30", day.Add(3*time.Hour+time.Minute), day.Add(3*time.Hour+2*time.Minute)); !next.Equal(day.Add(27 * time.Hour)) {
+	if next := nextBackup("03:00-03:30", 0, day.Add(3*time.Hour+time.Minute), day.Add(3*time.Hour+2*time.Minute)); !next.Equal(day.Add(27 * time.Hour)) {
 		t.Fatalf("next backup after today's: %v", next)
 	}
 }

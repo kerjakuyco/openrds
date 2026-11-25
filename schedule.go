@@ -11,6 +11,18 @@ import (
 
 const defaultBackupWindow = "03:00-03:30"
 
+// How often automated backups may run, in hours. Each divides a day, so the
+// backup times are the same every day.
+var backupIntervals = []int{1, 2, 3, 4, 6, 12, 24}
+
+// An instance's interval. 0, as in records from before intervals existed, is daily.
+func backupInterval(hours int) time.Duration {
+	if hours <= 0 {
+		hours = 24
+	}
+	return time.Duration(hours) * time.Hour
+}
+
 var windowPattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])-([01][0-9]|2[0-3]):([0-5][0-9])$`)
 
 // A daily UTC window as minutes after midnight. It may wrap past midnight.
@@ -29,27 +41,32 @@ func parseWindow(w string) (start, length int, ok bool) {
 	return start, length, length >= 30
 }
 
-// The latest opening of the window at or before now, and whether it is still open.
-func backupWindow(w string, now time.Time) (opened time.Time, open bool) {
+// The latest opening of the backup window at or before now, and whether it
+// is still open. The window opens daily at its start time and, with a shorter
+// interval, again every interval after that. Each opening lasts the window's
+// length, at most the interval.
+func backupWindow(w string, intervalHours int, now time.Time) (opened time.Time, open bool) {
 	start, length, ok := parseWindow(w)
 	if !ok {
 		start, length, _ = parseWindow(defaultBackupWindow)
 	}
+	every := backupInterval(intervalHours)
 	now = now.UTC()
-	opened = now.Truncate(24 * time.Hour).Add(time.Duration(start) * time.Minute)
-	if opened.After(now) {
-		opened = opened.AddDate(0, 0, -1)
+	first := now.Truncate(24 * time.Hour).Add(time.Duration(start) * time.Minute)
+	if first.After(now) {
+		first = first.AddDate(0, 0, -1)
 	}
-	return opened, now.Before(opened.Add(time.Duration(length) * time.Minute))
+	opened = first.Add(now.Sub(first) / every * every)
+	return opened, now.Before(opened.Add(min(time.Duration(length)*time.Minute, every)))
 }
 
 // When the next automated backup should start, given the latest one.
-func nextBackup(window string, latest, now time.Time) time.Time {
-	opened, open := backupWindow(window, now)
+func nextBackup(window string, intervalHours int, latest, now time.Time) time.Time {
+	opened, open := backupWindow(window, intervalHours, now)
 	if open && latest.Before(opened) {
 		return now
 	}
-	return opened.AddDate(0, 0, 1)
+	return opened.Add(backupInterval(intervalHours))
 }
 
 // Latest automated backup of each instance, ignoring older instances that used the same name.
@@ -87,7 +104,7 @@ func (m *manager) dueBackups(ctx context.Context, now time.Time) []string {
 		if r.BackupRetentionDays == 0 || r.PendingRestore {
 			continue
 		}
-		opened, open := backupWindow(r.BackupWindow, now)
+		opened, open := backupWindow(r.BackupWindow, r.BackupIntervalHours, now)
 		if !open || !latest[r.Name].Before(opened) {
 			continue
 		}

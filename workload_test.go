@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -232,5 +233,76 @@ func TestNewTunablesAreChecked(t *testing.T) {
 		if err := checkParameters(c.engine, 0, c.params); status(err) != 400 {
 			t.Errorf("%s accepted %v", c.engine, c.params)
 		}
+	}
+}
+
+func TestBackupsRepeatEveryInterval(t *testing.T) {
+	day := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	at := func(h, m int) time.Time { return day.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute) }
+	for _, c := range []struct {
+		window   string
+		interval int
+		now      time.Time
+		opened   time.Time
+		open     bool
+	}{
+		{"03:00-03:30", 6, at(9, 10), at(9, 0), true},
+		{"03:00-03:30", 6, at(9, 40), at(9, 0), false},
+		{"03:00-03:30", 6, at(2, 0), at(-3, 0), false},    // yesterday's 21:00 opening
+		{"23:45-00:15", 12, at(11, 50), at(11, 45), true}, // repeats from a window past midnight
+		{"23:45-00:15", 12, at(0, 5), at(0, -15), true},   // yesterday's 23:45 opening
+		{"03:00-06:00", 1, at(4, 59), at(4, 0), true},     // a long window lasts at most the interval
+		{"03:00-03:30", 24, at(9, 10), at(3, 0), false},
+		{"03:00-03:30", 0, at(3, 10), at(3, 0), true}, // 0 is daily
+	} {
+		opened, open := backupWindow(c.window, c.interval, c.now)
+		if !opened.Equal(c.opened) || open != c.open {
+			t.Errorf("%s every %dh at %s: opened %s open %v", c.window, c.interval, c.now.Format("15:04"), opened.Format("Jan 2 15:04"), open)
+		}
+	}
+	if next := nextBackup("03:00-03:30", 4, at(3, 1), at(3, 2)); !next.Equal(at(7, 0)) {
+		t.Fatalf("the next of every 4 hours: %v", next)
+	}
+	if next := nextBackup("03:00-03:30", 4, at(3, 1), at(23, 50)); !next.Equal(at(27, 0)) {
+		t.Fatalf("the last opening of the day leads to tomorrow's first: %v", next)
+	}
+
+	f := newFakeDocker()
+	m := testManager(t, f.run)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	window := now.Add(-5*time.Minute).Format("15:04") + "-" + now.Add(25*time.Minute).Format("15:04")
+	if err := m.provision(ctx, instanceSpec{Name: "orders", Engine: "postgres", Port: 15432, BackupRetentionDays: 1, BackupWindow: window, BackupIntervalHours: 6}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if due := m.dueBackups(ctx, now); !slices.Equal(due, []string{"orders"}) {
+		t.Fatalf("due in the first opening: %v", due)
+	}
+	m.automatedBackup(ctx, "orders")
+	if due := m.dueBackups(ctx, now.Add(time.Minute)); len(due) != 0 {
+		t.Fatal("one opening started two backups")
+	}
+	if due := m.dueBackups(ctx, now.Add(3*time.Hour)); len(due) != 0 {
+		t.Fatal("a backup between openings")
+	}
+	if due := m.dueBackups(ctx, now.Add(6*time.Hour)); !slices.Equal(due, []string{"orders"}) {
+		t.Fatalf("due 6 hours later: %v", due)
+	}
+	items, _ := m.instances(ctx)
+	if items[0].BackupIntervalHours != 6 || items[0].NextBackup == nil {
+		t.Fatalf("the view: %+v", items[0])
+	}
+
+	if _, err := m.modify(ctx, "orders", modification{BackupIntervalHours: ptr(5)}); status(err) != 400 {
+		t.Fatal("5 hours does not divide a day and must be refused")
+	}
+	if _, err := m.modify(ctx, "orders", modification{BackupIntervalHours: ptr(24)}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := m.record("orders"); r.BackupIntervalHours != 0 {
+		t.Fatalf("daily is stored as before intervals existed: %d", r.BackupIntervalHours)
+	}
+	if items, _ := m.instances(ctx); items[0].BackupIntervalHours != 24 {
+		t.Fatalf("the view reports daily as 24 hours: %d", items[0].BackupIntervalHours)
 	}
 }

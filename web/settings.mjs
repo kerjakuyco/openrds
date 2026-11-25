@@ -1,8 +1,8 @@
 // Change one setting at a time, right where it is shown. Changes that need a
 // restart ask whether to apply now or at the next restart.
-import { h, icon, btn, api, toast, modal, panel, alertBox, mib, plural, bytes, windowLabel, isLive, nextId, sizeLabel } from "./lib.mjs";
+import { h, icon, btn, api, toast, modal, panel, alertBox, mib, plural, bytes, scheduleLabel, isLive, nextId, sizeLabel } from "./lib.mjs";
 import { state, engine, sync, can, track } from "./store.mjs";
-import { SIZES, RETENTION, LENGTHS, parseWindow, formatWindow, hhmm, field, choiceCards, select, sizeName, parameterEditor } from "./forms.mjs";
+import { SIZES, RETENTION, LENGTHS, parseWindow, formatWindow, hhmm, field, choiceCards, select, sizeName, parameterEditor, frequencyField } from "./forms.mjs";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -99,17 +99,21 @@ export function editBackups(d, { suggest = 0 } = {}) {
   const start = select(Array.from({ length: 48 }, (_, i) => [i * 30, `${hhmm(i * 30)} UTC`]), win.start);
   const length = select([...new Set([...LENGTHS, win.length])].map(m => [m, m < 60 ? `${m} minutes` : plural(m / 60, "hour")]), win.length);
   const windowFields = h("div", { class: "form-grid" }, field("Window start", start, { hint: "Pick a quiet hour." }), field("Window length", length));
-  const toggle = () => { windowFields.hidden = Number(retention.value) === 0; };
+  const frequency = frequencyField(d.backupIntervalHours, retention);
+  const toggle = () => { windowFields.hidden = frequency.hidden = Number(retention.value) === 0; };
   retention.addEventListener("change", toggle);
   toggle();
   modal({
     title: off && suggest ? "Turn on automated backups" : "Automated backups", kicker: d.name, confirm: off && suggest ? "Turn on" : "Save backups",
-    body: [field("Keep daily backups for", retention, { hint: "Snapshots you take are kept until you delete them." }), windowFields],
+    body: [field("Keep automated backups for", retention, { hint: "Snapshots you take are kept until you delete them." }), frequency, windowFields],
     run: async () => {
       const days = Number(retention.value);
       const body = { backupRetentionDays: days };
-      if (days) body.backupWindow = formatWindow(Number(start.value), Number(length.value));
-      if (days === d.backupRetentionDays && (!days || body.backupWindow === d.backupWindow)) unchanged();
+      if (days) {
+        body.backupWindow = formatWindow(Number(start.value), Number(length.value));
+        body.backupIntervalHours = Number(frequency.control.value);
+      }
+      if (days === d.backupRetentionDays && (!days || body.backupWindow === d.backupWindow && body.backupIntervalHours === d.backupIntervalHours)) unchanged();
       await submit(d, body, "backup settings");
     },
   });
@@ -214,7 +218,7 @@ export function settingsPanel(d) {
       row("Host port", "Private to this server.", h("code", null, String(d.port)), change("Change", editPort)),
       row("Storage", d.diskGiB ? "Resize while stopped." : "No size limit.", h("span", { class: "row tight" }, d.diskGiB ? `${d.diskGiB} GiB limit` : "Uncapped", ...storageUsage(d)),
         d.diskGiB ? change("Resize", resizeStorage, !stopped) : null),
-      row("Automated backups", "Daily, in a quiet window.", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} · ${windowLabel(d.backupWindow)}` : h("span", { class: "status warn" }, icon("alert"), "Off"),
+      row("Automated backups", "On a schedule, in a quiet window.", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} · ${scheduleLabel(d.backupWindow, d.backupIntervalHours)}` : h("span", { class: "status warn" }, icon("alert"), "Off"),
         change("Change", editBackups)),
       row("Require TLS", d.tlsReady ? "Refuse unencrypted connections." : "Reboot once to turn this on.", d.requireTLS ? "On" : "Off", tlsSwitch(d, why || (!d.tlsReady ? "Reboot first." : ""))),
       row("Deletion protection", "Blocks deleting the database.", d.deletionProtection ? "On" : "Off", protectionSwitch(d, why))));

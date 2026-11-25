@@ -6,7 +6,6 @@ import { steps, dismissed, hideStart } from "./start.mjs";
 import { cpuShare } from "./databases.mjs";
 import { preferEngine } from "./forms.mjs";
 
-const DAY = 86400000;
 const CARDS = 6;
 const ENGINES = [
   ["postgres", "PG", "PostgreSQL", "Powerful SQL with JSON."],
@@ -41,7 +40,7 @@ function recommendations(dbs, now, host) {
   }
   for (const d of dbs.filter(d => d.backupRetentionDays && isRunning(d))) {
     const last = d.latestBackupAt ? Date.parse(d.latestBackupAt) : 0;
-    if (now - Math.max(last, Date.parse(d.createdAt)) > DAY + 2 * 3600000) {
+    if (now - Math.max(last, Date.parse(d.createdAt)) > (d.backupIntervalHours || 24) * 3600000 + 2 * 3600000) {
       add("warn", `${d.name} has no recent backup`, last ? `Last one ${ago(d.latestBackupAt, now)}.` : "No backup yet.", `#/databases/${d.name}/backups`, "Review");
     }
   }

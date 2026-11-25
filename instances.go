@@ -69,12 +69,13 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		if v.BackupWindow == "" {
 			v.BackupWindow = defaultBackupWindow
 		}
+		v.BackupIntervalHours = int(backupInterval(r.BackupIntervalHours) / time.Hour)
 		v.Version = r.version()
 		if t, ok := latest[r.Name]; ok {
 			v.LatestBackup = &t
 		}
 		if r.BackupRetentionDays > 0 {
-			next := nextBackup(v.BackupWindow, automated[r.Name], now)
+			next := nextBackup(v.BackupWindow, r.BackupIntervalHours, automated[r.Name], now)
 			v.NextBackup = &next
 		}
 		if state == "running" {
@@ -342,6 +343,7 @@ type modification struct {
 	Port                *int              `json:"port"`
 	BackupRetentionDays *int              `json:"backupRetentionDays"`
 	BackupWindow        *string           `json:"backupWindow"`
+	BackupIntervalHours *int              `json:"backupIntervalHours"`
 	DeletionProtection  *bool             `json:"deletionProtection"`
 	Tags                map[string]string `json:"tags"`
 	Parameters          map[string]string `json:"parameters"`
@@ -389,6 +391,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	if mod.BackupWindow != nil {
 		next.BackupWindow = *mod.BackupWindow
 	}
+	if mod.BackupIntervalHours != nil {
+		next.BackupIntervalHours = *mod.BackupIntervalHours
+	}
 	if mod.DeletionProtection != nil {
 		next.DeletionProtection = *mod.DeletionProtection
 	}
@@ -425,6 +430,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	}
 	if next.BackupWindow == "" {
 		next.BackupWindow = defaultBackupWindow
+	}
+	if next.BackupIntervalHours == 24 {
+		next.BackupIntervalHours = 0
 	}
 	all, err := m.records()
 	if err != nil {

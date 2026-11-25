@@ -14,7 +14,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" \
   http://127.0.0.1:8080/api/instances
 ```
 
-Only `name`, `engine` and `port` are required. An omitted `version` means the engine's stable version, omitted limits mean unlimited, and an omitted `backupRetentionDays` means automated backups are off.
+Only `name`, `engine` and `port` are required. An omitted `version` means the engine's stable version, omitted limits mean unlimited, an omitted `backupRetentionDays` means automated backups are off, and an omitted `backupIntervalHours` means daily.
 
 | Method | Path (under `/api`) |
 | --- | --- |
@@ -24,7 +24,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | GET | `/instances/{name}/connection` (add `?user=` for a database user; each call is recorded), `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
 | GET | `/instances/{name}/history?range=1h` — readings for `1h`, `3h`, `6h`, `12h` or `24h`, averaged to about 240 points |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
-| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `backupRetentionDays`, `backupWindow`, `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
+| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `backupRetentionDays`, `backupWindow`, `backupIntervalHours` (1, 2, 3, 4, 6, 12 or 24), `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
 | POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
 | POST | `/instances/{name}/password` — change the owner password: `{"password": ""}` generates one; returns `{"password"}` |
 | POST | `/instances/{name}/users` — `{"name","access","password"}` with `access` `read-only` or `read-write`; returns `{"name","password"}` |

@@ -47,6 +47,7 @@ type instanceSpec struct {
 	DiskGiB             int               `json:"diskGiB"`
 	BackupRetentionDays int               `json:"backupRetentionDays"`
 	BackupWindow        string            `json:"backupWindow"`
+	BackupIntervalHours int               `json:"backupIntervalHours,omitempty"` // 0 or 24: daily
 	DeletionProtection  bool              `json:"deletionProtection"`
 	Tags                map[string]string `json:"tags,omitempty"`
 	Parameters          map[string]string `json:"parameters,omitempty"`
@@ -225,6 +226,9 @@ func checkSpec(s instanceSpec) error {
 	if s.BackupRetentionDays < 0 || s.BackupRetentionDays > 35 {
 		return fail(400, "Keep automated backups for 1–35 days, or choose zero to turn them off.")
 	}
+	if s.BackupIntervalHours != 0 && !slices.Contains(backupIntervals, s.BackupIntervalHours) {
+		return fail(400, "Back up every 1, 2, 3, 4, 6, 12 or 24 hours.")
+	}
 	if _, _, ok := parseWindow(s.BackupWindow); s.BackupWindow != "" && !ok {
 		return fail(400, "Use a UTC backup window such as 03:00-03:30 that lasts at least 30 minutes.")
 	}
@@ -284,6 +288,9 @@ func (m *manager) begin(name string, create *instanceSpec, restoring bool) (reco
 		}
 		if create.BackupWindow == "" {
 			create.BackupWindow = defaultBackupWindow
+		}
+		if create.BackupIntervalHours == 24 {
+			create.BackupIntervalHours = 0 // daily, stored as records from before intervals
 		}
 		all, err := m.records()
 		if err != nil {
