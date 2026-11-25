@@ -343,7 +343,7 @@ func TestGatewayFollowsPublicAccess(t *testing.T) {
 	if f.lastUp("OPENRDS_GATEWAY_ALLOW") != "198.51.100.7/32" {
 		t.Fatal("a rule change must reach the gateway at once")
 	}
-	if err := m.change(ctx, "orders", "stop"); err != nil || calls("stop", "--timeout", "45", "db", "gateway") != 1 {
+	if err := m.change(ctx, "orders", "stop"); err != nil || calls("stop", "--timeout", stopWait, "db", "gateway") != 1 {
 		t.Fatalf("stopping must stop the gateway too: %v", err)
 	}
 	if err := m.change(ctx, "orders", "start"); err != nil {

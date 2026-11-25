@@ -3,6 +3,9 @@ services:
     image: ${OPENRDS_DB_IMAGE:?missing image}
     command: ["mysqld"]
     restart: unless-stopped
+    # Time to finish writes and flush caches before Docker kills the server,
+    # also when the host shuts down. OpenRDS's own stops wait as long.
+    stop_grace_period: 2m
     cpus: ${OPENRDS_DB_CPUS:-0}
     mem_limit: ${OPENRDS_DB_MEMORY:-0}
     labels:
@@ -28,7 +31,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 30s
+      # Crash recovery after a power loss can take minutes; checks run every
+      # 2s meanwhile, so a normal start still turns healthy at once.
+      start_period: 10m
+      start_interval: 2s
     logging:
       driver: json-file
       options:

@@ -31,10 +31,10 @@ Each database runs in its own container with its own volume, network and generat
 
 ## Features
 
-- **Databases in a minute.** PostgreSQL, MySQL and Valkey, from stable to latest versions, with size presets, CPU and memory limits you can change later, optional disk caps, engine parameters and tags.
+- **Databases in a minute.** PostgreSQL, MySQL and Valkey, from stable to latest versions, with size presets, CPU and memory limits you can change later, optional disk caps, engine parameters and tags. Memory settings such as `shared_buffers` and `innodb_buffer_pool_size` follow each database's memory limit.
 - **Backups you can rely on.** Daily automated backups with a retention period, manual snapshots, a final snapshot on delete, and restores into a new database. Copies go to any S3-compatible storage (Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO) and can be imported on a new server after losing the old one.
 - **Secure by default.** Databases listen only on the server itself. Add read-only or read-write database users, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
-- **Easy to operate.** Monitoring charts, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix.
+- **Easy to operate.** Monitoring charts, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix. Snapshots and restores of large databases finish even if your browser disconnects, and backups never fill the disk your databases need.
 - **Made for teams.** Accounts with admin, operator and viewer roles, invitations, password resets and an audit trail.
 - **Simple to run.** One Go binary and Docker. No external services, no frontend build step.
 

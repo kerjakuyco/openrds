@@ -26,6 +26,7 @@ type engine struct {
 	suffix         string
 	restoreStopped bool
 	dumpAuth       bool // the dump reads the owner password from its first input line
+	compress       bool // the dump is plain text, so backups store it gzip-compressed
 	dump           []string
 	restore        []string
 	parameters     []parameter
@@ -45,6 +46,7 @@ var engines = map[string]engine{
 	"mysql": {
 		title: "MySQL", scheme: "mysql", port: 3306, hostPort: 13306, minMemory: 512, dataDir: "/var/lib/mysql", user: "openrds", database: "app", suffix: ".sql",
 		parameters: mysqlParameters,
+		compress:   true,
 		// Keep the password out of argv. Root is used locally inside the
 		// container so routine, event and trigger definitions are included.
 		dump:    []string{"sh", "-ec", `export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump -u root --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --routines --events --triggers --hex-blob app`},
@@ -121,6 +123,15 @@ func (dockerCLI) run(ctx context.Context, env []string, in io.Reader, out io.Wri
 	return nil
 }
 
+// The /dev/shm size: as large as the memory limit, since its pages count
+// against that limit anyway, or 1 GiB when memory is unlimited.
+func shmBytes(memoryMiB int) string {
+	if memoryMiB <= 0 {
+		return strconv.FormatInt(1<<30, 10)
+	}
+	return strconv.FormatInt(int64(memoryMiB)<<20, 10)
+}
+
 func valkeyMaxMemory(memoryMiB int) string {
 	if memoryMiB <= 0 {
 		return "0"
@@ -140,6 +151,7 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		"OPENRDS_DB_ALIAS=openrds-" + r.Name,
 		"OPENRDS_DB_CPUS=" + strconv.FormatFloat(r.CPUs, 'f', -1, 64),
 		"OPENRDS_DB_MEMORY=" + strconv.FormatInt(int64(r.MemoryMiB)*1024*1024, 10),
+		"OPENRDS_DB_SHM=" + shmBytes(r.MemoryMiB),
 		"OPENRDS_DB_PASSWORD=" + r.Password,
 		"OPENRDS_ROOT_PASSWORD=" + r.RootPassword,
 		"OPENRDS_VALKEY_MAXMEMORY=" + valkeyMaxMemory(r.MemoryMiB),

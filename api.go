@@ -70,6 +70,22 @@ func engineCatalog() []engineView {
 	return list
 }
 
+// Reads end when the client goes away. Changes keep going: a snapshot or a
+// restore of a large database can take hours, and a closed browser tab or a
+// dropped SSH tunnel must not leave it half done. The Events page shows how
+// a change ended.
+const (
+	readLimit   = 30 * time.Minute
+	changeLimit = 24 * time.Hour
+)
+
+func requestContext(ctx context.Context, method string) (context.Context, context.CancelFunc) {
+	if method == http.MethodGet || method == http.MethodHead {
+		return context.WithTimeout(ctx, readLimit)
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), changeLimit)
+}
+
 type endpoint func(http.ResponseWriter, *http.Request) error
 
 func (f endpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +333,7 @@ func handler(m *manager, a auth) http.Handler {
 			return err
 		}
 		defer f.Close()
-		name := b.Name + "-" + b.Created.Format("20060102-150405") + engines[b.Engine].suffix
+		name := b.fileName()
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
 		http.ServeContent(w, r, name, b.Created, f)
@@ -426,7 +442,7 @@ func handler(m *manager, a auth) http.Handler {
 			sendError(w, fail(401, "Sign in to continue."))
 			return
 		}
-		ctx, cancel := context.WithTimeout(withIdentity(r.Context(), id), 30*time.Minute)
+		ctx, cancel := requestContext(withIdentity(r.Context(), id), r.Method)
 		defer cancel()
 		api.ServeHTTP(w, r.WithContext(ctx))
 	})

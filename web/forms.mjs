@@ -97,8 +97,13 @@ function section(n, title, description, ...content) {
 const select = (options, value, attrs = {}) => h("select", attrs, options.map(([v, label]) => h("option", { value: String(v), selected: String(v) === String(value) }, label)));
 
 // Editor for an engine's allowlisted parameters. Values are strings in the
-// engine's own syntax; the server validates them again before use.
-export function parameterEditor(eng, initial = {}) {
+// engine's own syntax; the server validates them again before use. `tuned`
+// holds the memory settings the server sized to a database's memory limit.
+export function parameterEditor(eng, initial = {}, tuned = {}) {
+  const fallback = (p) => tuned?.[p.name] ?? p.default;
+  const defaultCell = (p) => tuned?.[p.name]
+    ? [h("code", { class: "muted" }, tuned[p.name]), h("small", null, "Sized to the memory limit")]
+    : [h("code", { class: "muted" }, p.default === "" ? "(empty)" : p.default), p.auto ? h("small", null, `With a memory limit: ${p.auto}`) : null];
   const rows = new Map();
   const body = h("tbody");
   const table = h("table", { class: "param-table" }, h("thead", null, h("tr", null, h("th", { scope: "col" }, "Parameter"), h("th", { scope: "col" }, "Value"), h("th", { scope: "col" }, "Default"), h("th", { scope: "col" }, h("span", { class: "sr-only" }, "Remove")))), body);
@@ -111,24 +116,24 @@ export function parameterEditor(eng, initial = {}) {
 
   function control(p, value) {
     const label = `${p.name} value`;
-    if (p.type === "enum") return { node: select(p.values.map(v => [v, v]), value ?? p.default, { "aria-label": label }), read: (n) => n.value };
+    if (p.type === "enum") return { node: select(p.values.map(v => [v, v]), value ?? fallback(p), { "aria-label": label }), read: (n) => n.value };
     if (p.type === "list") {
-      const set = new Set((value ?? p.default).split(",").filter(Boolean));
+      const set = new Set((value ?? fallback(p)).split(",").filter(Boolean));
       const boxes = p.values.map(v => h("label", { class: "check" }, h("input", { type: "checkbox", value: v, checked: set.has(v) }), v));
       return { node: h("fieldset", { class: "checks" }, h("legend", { class: "sr-only" }, label), boxes), read: (n) => [...n.querySelectorAll("input:checked")].map(i => i.value).join(",") };
     }
     if (p.type === "size") {
       const units = eng.sizeUnits;
-      const m = /^(\d+)(\D+)$/.exec(value ?? p.default) || [null, "", units[1]];
+      const m = /^(\d+)(\D+)$/.exec(value ?? fallback(p)) || [null, "", units[1]];
       const num = h("input", { type: "number", min: "1", step: "1", value: m[1], "aria-label": label, class: "num" });
       const unit = select(units.map(u => [u, u]), m[2], { "aria-label": `${p.name} unit` });
       return { node: h("span", { class: "combo" }, num, unit), read: () => `${num.value}${unit.value}` };
     }
     if (p.type === "integer" || p.type === "real") {
-      const input = h("input", { type: "number", min: String(p.min), max: String(p.max), step: p.type === "real" ? "any" : "1", value: value ?? p.default, "aria-label": label, class: "num" });
+      const input = h("input", { type: "number", min: String(p.min), max: String(p.max), step: p.type === "real" ? "any" : "1", value: value ?? fallback(p), "aria-label": label, class: "num" });
       return { node: h("span", { class: "combo" }, input, p.unit && h("span", { class: "unit" }, p.unit)), read: () => input.value.trim() };
     }
-    const input = h("input", { type: "text", value: value ?? p.default, "aria-label": label, spellcheck: "false", autocomplete: "off", placeholder: p.type === "schedule" ? "3600 1 300 100" : "Ex" });
+    const input = h("input", { type: "text", value: value ?? fallback(p), "aria-label": label, spellcheck: "false", autocomplete: "off", placeholder: p.type === "schedule" ? "3600 1 300 100" : "Ex" });
     return { node: input, read: () => input.value };
   }
 
@@ -137,7 +142,7 @@ export function parameterEditor(eng, initial = {}) {
     if (!p || rows.has(name)) return;
     const c = control(p, value);
     const remove = h("button", { type: "button", class: "icon-btn ghost", "aria-label": `Remove ${name}`, onclick: () => { rows.delete(name); tr.remove(); refreshPicker(); notify(); } }, icon("trash"));
-    const tr = h("tr", null, h("td", null, h("code", null, p.name), h("small", null, p.description)), h("td", null, c.node), h("td", null, h("code", { class: "muted" }, p.default === "" ? "(empty)" : p.default), p.unit && p.type !== "size" ? h("span", { class: "muted" }, ` ${p.unit}`) : null), h("td", null, remove));
+    const tr = h("tr", null, h("td", null, h("code", null, p.name), h("small", null, p.description)), h("td", null, c.node), h("td", null, ...defaultCell(p), p.unit && p.type !== "size" ? h("span", { class: "muted" }, ` ${p.unit}`) : null), h("td", null, remove));
     c.node.addEventListener("input", notify);
     c.node.addEventListener("change", notify);
     rows.set(name, { read: () => c.read(c.node), focus: () => c.node.querySelector?.("input,select")?.focus() || c.node.focus?.() });

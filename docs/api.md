@@ -18,9 +18,9 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 
 | Method | Path (under `/api`) |
 | --- | --- |
-| GET / POST | `/instances` |
-| GET | `/engines` — engines, versions (`latest`, `stable`), the default version, suggested ports, memory minimums and adjustable parameters |
-| GET | `/host` — Docker host name, CPU count, memory capacity, engine version and `volumeQuota.state` (`supported`, `unsupported` or `unknown`) |
+| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit |
+| GET | `/engines` — engines, versions (`latest`, `stable`), the default version, suggested ports, memory minimums and adjustable parameters; `auto` on a parameter says how OpenRDS sizes it to the memory limit |
+| GET | `/host` — Docker host name, CPU count, memory capacity, engine version, `volumeQuota.state` (`supported`, `unsupported` or `unknown`) and `backupDisk` (`freeBytes`, `totalBytes`, and `reserveBytes`, the free space backups leave) |
 | GET | `/instances/{name}/connection` (add `?user=` for a database user; each call is recorded), `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
 | GET | `/instances/{name}/history?range=1h` — readings for `1h`, `3h`, `6h`, `12h` or `24h`, averaged to about 240 points |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
@@ -48,4 +48,8 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | POST | `/users/{id}/reset` — admin: sign the account out and issue a new link |
 | PATCH | `/account` — your `name`; POST `/account/password` with `{"current","password"}`; POST `/account/signout` ends your other sessions |
 
-Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, and `final` for final snapshots. Operations are synchronous; the first provision may take several minutes to pull the image. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
+Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, `final` for final snapshots, and `compression` (`gzip`) when OpenRDS compressed the dump, as it does for MySQL. `bytes` is the size stored and downloaded.
+
+Operations are synchronous; the first provision may take several minutes to pull the image. A change keeps running for up to 24 hours even when the client disconnects, so a snapshot or restore of a large database finishes; `GET /activity` shows how it ended. Reads stop with their client after 30 minutes at most. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
+
+A snapshot or import that would leave less than the reserve free on the backup disk (5% of it, from 2 GiB to 10 GiB) fails with `507`, as does one stopped because free space ran low while it was written.

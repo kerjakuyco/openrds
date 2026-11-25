@@ -390,7 +390,7 @@ h3.sub .icon { color: var(--muted); width: 17px; height: 17px }
 .param-editor { display: grid; gap: 10px }
 .param-table td { white-space: normal; vertical-align: top }
 .param-table td:first-child { min-width: 240px }
-.param-table td:first-child small { display: block; margin-top: 2px; line-height: 1.4 }
+.param-table td small { display: block; margin-top: 2px; line-height: 1.4 }
 .param-table select, .param-table input { min-width: 0 }
 .combo { display: inline-flex; align-items: center; gap: 6px }
 .combo .num, input.num { width: 9rem }

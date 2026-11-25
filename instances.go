@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"strings"
@@ -14,19 +15,20 @@ import (
 
 type instanceView struct {
 	instanceSpec
-	EngineLabel    string         `json:"engineLabel"`
-	Status         string         `json:"status"`
-	Busy           bool           `json:"busy"`
-	Created        time.Time      `json:"createdAt"`
-	PendingRestore bool           `json:"pendingRestore"`
-	User           string         `json:"user"`
-	Database       string         `json:"database"`
-	Applied        *runtimeConfig `json:"applied,omitempty"` // in use until a restart applies pending changes
-	Users          []dbUserView   `json:"users"`
-	TLSReady       bool           `json:"tlsReady"` // the container has certificates and managed credentials
-	LatestBackup   *time.Time     `json:"latestBackupAt,omitempty"`
-	NextBackup     *time.Time     `json:"nextBackupAt,omitempty"`
-	Live           *point         `json:"live,omitempty"`
+	EngineLabel    string            `json:"engineLabel"`
+	Status         string            `json:"status"`
+	Busy           bool              `json:"busy"`
+	Created        time.Time         `json:"createdAt"`
+	PendingRestore bool              `json:"pendingRestore"`
+	User           string            `json:"user"`
+	Database       string            `json:"database"`
+	Applied        *runtimeConfig    `json:"applied,omitempty"` // in use until a restart applies pending changes
+	Tuned          map[string]string `json:"tuned,omitempty"`   // memory settings sized to the memory limit
+	Users          []dbUserView      `json:"users"`
+	TLSReady       bool              `json:"tlsReady"` // the container has certificates and managed credentials
+	LatestBackup   *time.Time        `json:"latestBackupAt,omitempty"`
+	NextBackup     *time.Time        `json:"nextBackupAt,omitempty"`
+	Live           *point            `json:"live,omitempty"`
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -63,7 +65,7 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		eng := engines[r.Engine]
 		v := instanceView{instanceSpec: r.instanceSpec, EngineLabel: r.engineLabel(), Status: state, Busy: m.busy[r.Name],
 			Created: r.Created, PendingRestore: r.PendingRestore, User: eng.user, Database: eng.database, Applied: r.Applied,
-			Users: r.userViews(), TLSReady: r.Layout >= currentLayout}
+			Users: r.userViews(), TLSReady: r.Layout >= currentLayout, Tuned: tunedParameters(r.Engine, r.MemoryMiB)}
 		if v.BackupWindow == "" {
 			v.BackupWindow = defaultBackupWindow
 		}
@@ -89,7 +91,7 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	if err := m.checkDiskRequest(ctx, spec.DiskGiB); err != nil {
 		return err // reject before reserving a name/port or touching an instance
 	}
-	var input *os.File
+	var input io.Reader
 	if from != nil {
 		spec.Engine = from.Engine
 		if spec.Version == "" {
@@ -99,11 +101,12 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 		if compareVersions(spec.Version, from.version()) < 0 {
 			return fail(400, fmt.Sprintf("Restore into %s %s or newer: the backup comes from that version.", engines[from.Engine].title, from.version()))
 		}
-		input, err = m.openDump(from.ID)
+		var data io.Closer
+		input, data, err = m.openBackupData(*from)
 		if err != nil {
 			return err
 		}
-		defer input.Close()
+		defer data.Close()
 	}
 	r, release, err := m.begin(spec.Name, &spec, from != nil)
 	if err != nil {
@@ -129,20 +132,20 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	return nil
 }
 
-func (m *manager) restoreInto(ctx context.Context, r record, input *os.File) error {
+func (m *manager) restoreInto(ctx context.Context, r record, input io.Reader) error {
 	eng := engines[r.Engine]
 	if !eng.restoreStopped {
 		args := append([]string{"exec", "-T", "db"}, eng.restore...)
 		return m.compose(ctx, r, input, nil, args...)
 	}
-	if err := m.compose(ctx, r, nil, nil, "stop", "--timeout", "30", "db"); err != nil {
+	if err := m.compose(ctx, r, nil, nil, "stop", "--timeout", stopWait, "db"); err != nil {
 		return err
 	}
 	script := eng.restore[len(eng.restore)-1]
 	if err := m.compose(ctx, r, input, nil, "run", "--rm", "--no-deps", "-T", "--entrypoint", "sh", "db", "-ec", script); err != nil {
 		return err
 	}
-	return m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db")
+	return m.up(ctx, r)
 }
 
 func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err error) {
@@ -182,6 +185,23 @@ func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err err
 	return writeJSON(m.recordPath(name), r)
 }
 
+// How long a database may take to become healthy, for example while it
+// replays its write-ahead log after the host lost power. The start_period of
+// the health checks in engines/ fits inside it. The long start period does
+// not delay a crash: Docker marks a container unhealthy when it exits, so
+// Compose reports a database that refuses a setting within seconds.
+const startWait = "900"
+
+// Seconds a database gets to finish writes and flush its caches when it
+// stops. The templates' stop_grace_period matches, so Docker waits as long
+// when the host shuts down.
+const stopWait = "120"
+
+// Create or start the database container and wait until it is healthy.
+func (m *manager) up(ctx context.Context, r record) error {
+	return m.compose(ctx, r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", startWait, "db")
+}
+
 // Create or start the container from the stored configuration. Compose
 // recreates it when settings changed, which applies pending modifications.
 // The record is updated to what now runs.
@@ -197,7 +217,7 @@ func (m *manager) start(ctx context.Context, r *record) error {
 			return err
 		}
 	}
-	if err := m.compose(ctx, *r, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "180", "db"); err != nil {
+	if err := m.up(ctx, *r); err != nil {
 		return err
 	}
 	if r.Applied != nil || r.Layout != currentLayout {
@@ -220,7 +240,7 @@ func (m *manager) stop(ctx context.Context, r record) error {
 	if r.PublicAccess {
 		services = append(services, "gateway")
 	}
-	return m.compose(ctx, r, nil, nil, append([]string{"stop", "--timeout", "45"}, services...)...)
+	return m.compose(ctx, r, nil, nil, append([]string{"stop", "--timeout", stopWait}, services...)...)
 }
 
 func live(state string) bool {
@@ -533,6 +553,14 @@ type hostInfo struct {
 	MemoryBytes int64        `json:"memoryBytes"`
 	Version     string       `json:"dockerVersion"`
 	VolumeQuota quotaSupport `json:"volumeQuota"`
+	BackupDisk  *diskInfo    `json:"backupDisk,omitempty"`
+}
+
+// Space on the disk that holds backups. Backups stop below the reserve.
+type diskInfo struct {
+	FreeBytes    uint64 `json:"freeBytes"`
+	TotalBytes   uint64 `json:"totalBytes"`
+	ReserveBytes uint64 `json:"reserveBytes"`
 }
 
 func (m *manager) host(ctx context.Context) (hostInfo, error) {
@@ -545,6 +573,9 @@ func (m *manager) host(ctx context.Context) (hostInfo, error) {
 	err := json.Unmarshal(out.Bytes(), &host)
 	if err == nil {
 		host.VolumeQuota = m.volumeQuota(ctx)
+	}
+	if free, total, ok := m.space(m.backupDir()); ok {
+		host.BackupDisk = &diskInfo{free, total, backupReserve(total)}
 	}
 	return host, err
 }

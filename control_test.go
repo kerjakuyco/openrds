@@ -26,8 +26,12 @@ func testManager(t *testing.T, run runFunc) *manager {
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.space = plentyOfSpace
 	return m
 }
+
+// Tests do not depend on the free space of the machine that runs them.
+func plentyOfSpace(string) (free, total uint64, ok bool) { return 900 << 30, 1000 << 30, true }
 
 func TestSessionAndSecretBoundaries(t *testing.T) {
 	var project string
@@ -137,7 +141,10 @@ func TestBackupSurvivesSourceDeletionAndRestoresToFreshProject(t *testing.T) {
 			}
 			source, _ := m.record("orders")
 			b, err := m.makeBackup(ctx, "orders", "manual")
-			if err != nil || b.Bytes != int64(len(dump)) {
+			// MySQL's plain-text dumps are stored compressed; the restore below
+			// must still receive the original bytes.
+			compressed := key == "mysql"
+			if err != nil || compressed != (b.Compression == "gzip") || !compressed && b.Bytes != int64(len(dump)) {
 				t.Fatalf("backup: %+v %v", b, err)
 			}
 			if err := m.remove(ctx, "orders", false); err != nil || deleted != source.Project {

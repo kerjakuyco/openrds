@@ -117,7 +117,7 @@ export function editBackups(d, { suggest = 0 } = {}) {
 
 export function editParameters(d) {
   const eng = engine(d.engine);
-  const editor = parameterEditor(eng, d.parameters || {});
+  const editor = parameterEditor(eng, d.parameters || {}, d.tuned);
   const apply = applyChoice(d);
   modal({
     title: "Engine parameters", kicker: d.name, confirm: "Save parameters", wide: true,

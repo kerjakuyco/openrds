@@ -135,6 +135,9 @@ func testOffsite(ctx context.Context, cfg offsiteConfig) error {
 	if err != nil {
 		return err
 	}
+	// The request no longer ends with the client, so an unresponsive endpoint needs its own limit.
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	key := cfg.Prefix + ".openrds-test-" + randomHex(6)
 	want := []byte("openrds storage test\n")
 	if err := c.putBytes(ctx, key, want); err != nil {
@@ -418,6 +421,9 @@ func (m *manager) importBackup(ctx context.Context, id string) (b backup, err er
 	if _, ok := engines[b.Engine]; !ok {
 		return b, fail(502, "The backup is for an engine this server does not run.")
 	}
+	if err := m.checkBackupSpace(b.Bytes); err != nil {
+		return b, err
+	}
 	finish := m.trackDetail(ctx, b.Name, "Import backup from storage", id)
 	defer func() { finish(err) }()
 	stage, err := os.MkdirTemp(m.backupDir(), ".importing-")
@@ -434,12 +440,16 @@ func (m *manager) importBackup(ctx context.Context, id string) (b backup, err er
 	if err != nil {
 		return b, err
 	}
-	n, err := io.Copy(f, body)
+	guard := m.guardSpace(f)
+	n, err := io.Copy(guard, body)
 	if err == nil {
 		err = f.Sync()
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
+	}
+	if guard.err != nil {
+		return b, guard.err
 	}
 	if err != nil {
 		return b, fail(502, "Could not download the backup: "+err.Error())

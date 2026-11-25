@@ -118,6 +118,14 @@ function logsTab(d) {
 export const resultChip = (r) => h("span", { class: `status ${r === "completed" ? "good" : r === "failed" ? "critical" : "info"}` },
   icon(r === "completed" ? "ok" : r === "failed" ? "error" : "pending"), r.charAt(0).toUpperCase() + r.slice(1));
 
+// Which memory settings the server sized to the memory limit, for settings
+// the user left unset.
+function tunedNote(d) {
+  const auto = Object.entries(d.tuned || {}).filter(([k]) => !(k in (d.parameters || {}))).sort();
+  if (!auto.length) return "Unlisted settings use the default.";
+  return `Unlisted settings use the default. Sized to the memory limit: ${auto.map(([k, v]) => `${k} ${v}`).join(", ")}.`;
+}
+
 function configurationTab(d) {
   const eng = engine(d.engine);
   const params = Object.entries(d.parameters || {}).sort();
@@ -128,12 +136,12 @@ function configurationTab(d) {
   const el = h("div", { class: "stack-gap" },
     d.applied && alertBox(`Applies at next restart: ${pendingChanges(d).join(", ")}.`, "info"),
     settingsPanel(d),
-    panel("Engine parameters", { counter: params.length, description: "Unlisted settings use the default.",
+    panel("Engine parameters", { counter: params.length, description: tunedNote(d),
       actions: can("operator") ? [editButton(d, [icon("sliders"), "Edit parameters"], () => editParameters(d))] : [] },
     paramRows.length ? dataTable({ caption: "Engine parameters", rows: paramRows, columns: [
       { key: "k", label: "Parameter", cls: "wrap", value: r => h("div", { class: "stack" }, h("code", null, r.k), h("small", null, describe(r.k)?.description || "")) },
       { key: "v", label: "Value", value: r => r.v === null ? h("span", { class: "muted" }, "Default") : h("code", null, r.v === "" ? "(empty)" : r.v) },
-      { key: "d", label: "Default", value: r => h("code", { class: "muted" }, describe(r.k)?.default || "(empty)") },
+      { key: "d", label: "Default", value: r => h("code", { class: "muted" }, d.tuned?.[r.k] || describe(r.k)?.default || "(empty)") },
       { key: "s", label: "Status", value: r => r.pending ? h("span", { class: "status info" }, icon("pending"), "Pending restart") : h("span", { class: "status good" }, icon("ok"), "Applied") },
     ] }) : empty("sliders", "Engine defaults", "No custom settings.")),
     infoPanel("Details", [

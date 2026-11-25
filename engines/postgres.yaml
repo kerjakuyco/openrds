@@ -3,8 +3,14 @@ services:
     image: ${OPENRDS_DB_IMAGE:?missing image}
     command: ["postgres"]
     restart: unless-stopped
+    # Time to finish writes and flush caches before Docker kills the server,
+    # also when the host shuts down. OpenRDS's own stops wait as long.
+    stop_grace_period: 2m
     cpus: ${OPENRDS_DB_CPUS:-0}
     mem_limit: ${OPENRDS_DB_MEMORY:-0}
+    # Parallel queries share memory through /dev/shm. Docker's 64 MB default
+    # fails them on large tables; pages used still count against mem_limit.
+    shm_size: ${OPENRDS_DB_SHM:-1073741824}
     labels:
       io.openrds.database: "true"
     environment:
@@ -28,7 +34,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 20s
+      # Crash recovery after a power loss can take minutes; checks run every
+      # 2s meanwhile, so a normal start still turns healthy at once.
+      start_period: 10m
+      start_interval: 2s
     logging:
       driver: json-file
       options:

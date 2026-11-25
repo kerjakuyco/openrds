@@ -28,9 +28,14 @@ function bar(share) {
 }
 
 // Recommendations, most severe first, each with the place to fix it.
-function recommendations(dbs, now) {
+function recommendations(dbs, now, host) {
   const out = [];
   const add = (tone, title, detail, href, action) => out.push({ tone, title, detail, href, action });
+  const disk = host?.backupDisk;
+  if (disk && disk.freeBytes < 2 * disk.reserveBytes) {
+    add(disk.freeBytes < disk.reserveBytes ? "critical" : "warn", disk.freeBytes < disk.reserveBytes ? "Backups are paused: disk almost full" : "Disk space is running low",
+      `${bytes(disk.freeBytes)} free. Backups stop below ${bytes(disk.reserveBytes)} so databases keep running.`, "#/snapshots", "Review snapshots");
+  }
   for (const d of dbs.filter(needsAttention)) {
     add("critical", `${d.name} needs attention`, d.pendingRestore ? "Restore didn’t finish." : `Status: ${d.status}.`, `#/databases/${d.name}/logs`, "Open logs");
   }
@@ -142,7 +147,7 @@ export function dashboardView() {
       h("div", { class: "db-cards" }, sorted.slice(0, CARDS).map(d => databaseCard(d, host)),
         can("operator") && dbs.length < CARDS ? h("a", { class: "db-card add", href: "#/databases/new" }, icon("plus"), "Create database") : null));
 
-    const list = recommendations(dbs, now);
+    const list = recommendations(dbs, now, host);
     const attention = panel("Needs attention", { counter: list.length || null },
       list.length ? h("ul", { class: "attention" }, list.slice(0, 4).map(r => h("li", { class: r.tone },
         icon(r.tone === "critical" ? "error" : r.tone === "warn" ? "alert" : "info"),

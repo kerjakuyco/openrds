@@ -111,6 +111,7 @@ type manager struct {
 	tlsMu      sync.Mutex
 	ca         *authority
 	gateway    string // image for public-access gateways, once found
+	space      func(path string) (free, total uint64, ok bool)
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
@@ -119,7 +120,7 @@ func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
 			return nil, err
 		}
 	}
-	m := &manager{dir: dir, templates: templates, docker: docker, busy: make(map[string]bool), attempts: make(map[string]time.Time)}
+	m := &manager{dir: dir, templates: templates, docker: docker, busy: make(map[string]bool), attempts: make(map[string]time.Time), space: diskSpace}
 	m.history.init(filepath.Join(dir, "metrics.json"), defaultSampleInterval)
 	return m, nil
 }

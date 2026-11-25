@@ -25,6 +25,7 @@ type parameter struct {
 	Unit        string   `json:"unit,omitempty"`
 	Values      []string `json:"values,omitempty"`
 	Description string   `json:"description"`
+	Auto        string   `json:"auto,omitempty"` // how OpenRDS sizes it to the memory limit
 	memoryBound bool     // a cache that must fit inside the memory limit
 }
 
@@ -46,14 +47,14 @@ var sizeUnits = map[string][]string{"postgres": {"kB", "MB", "GB", "TB"}, "mysql
 var postgresParameters = []parameter{
 	{Name: "max_connections", Type: "integer", Default: "100", Min: 5, Max: 10000, Unit: "connections",
 		Description: "Maximum concurrent client connections. Each connection reserves some memory."},
-	{Name: "shared_buffers", Type: "size", Default: "128MB", Min: 16 << 20, Max: 1 << 40, memoryBound: true,
-		Description: "Memory for caching table and index pages. About 25% of the memory limit is a common starting point."},
-	{Name: "effective_cache_size", Type: "size", Default: "4GB", Min: 8 << 10, Max: 1 << 44,
+	{Name: "shared_buffers", Type: "size", Default: "128MB", Min: 16 << 20, Max: 1 << 40, memoryBound: true, Auto: "25% of the memory limit",
+		Description: "Memory for caching table and index pages."},
+	{Name: "effective_cache_size", Type: "size", Default: "4GB", Min: 8 << 10, Max: 1 << 44, Auto: "75% of the memory limit",
 		Description: "The planner’s estimate of memory available for caching, including the operating system’s. It allocates nothing."},
 	{Name: "work_mem", Type: "size", Default: "4MB", Min: 64 << 10, Max: 16 << 30,
 		Description: "Memory per sort or hash step before it spills to disk. One query can use several."},
-	{Name: "maintenance_work_mem", Type: "size", Default: "64MB", Min: 1 << 20, Max: 16 << 30,
-		Description: "Memory for VACUUM, CREATE INDEX and other maintenance operations."},
+	{Name: "maintenance_work_mem", Type: "size", Default: "64MB", Min: 1 << 20, Max: 16 << 30, Auto: "1/16 of the memory limit, from 64MB to 2GB",
+		Description: "Memory for VACUUM, CREATE INDEX and other maintenance operations, per autovacuum worker."},
 	{Name: "random_page_cost", Type: "real", Default: "4", Min: 0, Max: 100,
 		Description: "Planner cost of a non-sequential page read. Values near 1.1 suit SSD storage."},
 	{Name: "effective_io_concurrency", Type: "integer", Default: "1", Min: 0, Max: 1000,
@@ -66,6 +67,28 @@ var postgresParameters = []parameter{
 		Description: "WAL volume that triggers a checkpoint. Larger values smooth out heavy write loads."},
 	{Name: "min_wal_size", Type: "size", Default: "80MB", Min: 32 << 20, Max: 1 << 40,
 		Description: "WAL volume kept for reuse instead of being removed after a checkpoint."},
+	{Name: "checkpoint_completion_target", Type: "real", Default: "0.9", Min: 0, Max: 1,
+		Description: "Share of the time between checkpoints over which checkpoint writes are spread, smoothing out I/O."},
+	{Name: "wal_compression", Type: "enum", Default: "off", Values: []string{"off", "on", "pglz", "lz4", "zstd"},
+		Description: "Compress full-page images in the WAL. lz4 cuts WAL volume under heavy writes for little CPU."},
+	{Name: "synchronous_commit", Type: "enum", Default: "on", Values: []string{"on", "local", "off"},
+		Description: "off returns from COMMIT before the WAL reaches disk: faster, and a crash can lose the last moments of commits, though never corrupt data."},
+	{Name: "autovacuum_max_workers", Type: "integer", Default: "3", Min: 1, Max: 16,
+		Description: "Autovacuum processes that run at once. More help databases with many busy tables."},
+	{Name: "autovacuum_naptime", Type: "integer", Default: "60", Min: 1, Max: 2147483, Unit: "s",
+		Description: "Pause between autovacuum runs on each database."},
+	{Name: "autovacuum_vacuum_scale_factor", Type: "real", Default: "0.2", Min: 0, Max: 100,
+		Description: "Share of a table that must change before autovacuum cleans it. Lower values, such as 0.05, suit large tables."},
+	{Name: "autovacuum_analyze_scale_factor", Type: "real", Default: "0.1", Min: 0, Max: 100,
+		Description: "Share of a table that must change before its statistics are refreshed."},
+	{Name: "autovacuum_vacuum_cost_limit", Type: "integer", Default: "-1", Min: -1, Max: 10000,
+		Description: "Work autovacuum does before it pauses. Higher values, such as 2000, keep up with heavy writes. -1 uses vacuum_cost_limit (200)."},
+	{Name: "idle_session_timeout", Type: "integer", Default: "0", Min: 0, Max: 2147483647, Unit: "ms",
+		Description: "End sessions that stay idle, outside a transaction, for this long. 0 turns this off."},
+	{Name: "track_io_timing", Type: "enum", Default: "off", Values: onOff,
+		Description: "Time disk reads and writes for EXPLAIN (ANALYZE, BUFFERS) and pg_stat_statements. Costs a little CPU."},
+	{Name: "hash_mem_multiplier", Type: "real", Default: "2", Min: 1, Max: 1000,
+		Description: "Multiple of work_mem that hash joins and aggregates may use before spilling to disk."},
 	{Name: "log_min_duration_statement", Type: "integer", Default: "-1", Min: -1, Max: 2147483647, Unit: "ms",
 		Description: "Log each statement that runs at least this long. 0 logs every statement and -1 turns this off."},
 	{Name: "log_statement", Type: "enum", Default: "none", Values: []string{"none", "ddl", "mod", "all"},
@@ -84,6 +107,10 @@ var postgresParameters = []parameter{
 		Description: "Parallel workers one query step may start. 0 turns parallel queries off."},
 	{Name: "max_worker_processes", Type: "integer", Default: "8", Min: 0, Max: 1024,
 		Description: "Background worker processes the server supports, including parallel workers."},
+	{Name: "max_parallel_workers", Type: "integer", Default: "8", Min: 0, Max: 1024,
+		Description: "Parallel workers all queries may use at once. Keep it at or below the CPU limit."},
+	{Name: "max_parallel_maintenance_workers", Type: "integer", Default: "2", Min: 0, Max: 1024,
+		Description: "Parallel workers one CREATE INDEX or VACUUM may start."},
 	{Name: "jit", Type: "enum", Default: "on", Values: onOff,
 		Description: "Compile parts of expensive queries just in time."},
 	{Name: "shared_preload_libraries", Type: "list", Default: "", Values: []string{"pg_stat_statements", "auto_explain", "pg_prewarm"},
@@ -93,8 +120,8 @@ var postgresParameters = []parameter{
 var mysqlParameters = []parameter{
 	{Name: "max_connections", Type: "integer", Default: "151", Min: 10, Max: 100000, Unit: "connections",
 		Description: "Maximum concurrent client connections."},
-	{Name: "innodb_buffer_pool_size", Type: "size", Default: "128M", Min: 5 << 20, Max: 1 << 40, memoryBound: true,
-		Description: "Memory for caching InnoDB data and indexes. Often 50–75% of the memory limit on a dedicated database."},
+	{Name: "innodb_buffer_pool_size", Type: "size", Default: "128M", Min: 5 << 20, Max: 1 << 40, memoryBound: true, Auto: "75% of the memory limit, less 256M for the server",
+		Description: "Memory for caching InnoDB data and indexes."},
 	{Name: "innodb_redo_log_capacity", Type: "size", Default: "100M", Min: 8 << 20, Max: 128 << 30,
 		Description: "Disk space for redo logs. Larger values help sustained write loads."},
 	{Name: "innodb_flush_log_at_trx_commit", Type: "enum", Default: "1", Values: []string{"0", "1", "2"},
@@ -136,6 +163,18 @@ var mysqlParameters = []parameter{
 		Description: "Collect detailed performance data. Turning it off saves memory on small instances."},
 	{Name: "innodb_io_capacity", Type: "integer", Default: "10000", Min: 100, Max: 1000000,
 		Description: "Background I/O operations per second InnoDB may use for flushing."},
+	{Name: "innodb_io_capacity_max", Type: "integer", Default: "20000", Min: 100, Max: 4000000,
+		Description: "I/O operations per second InnoDB may use when flushing falls behind. At least innodb_io_capacity."},
+	{Name: "innodb_log_buffer_size", Type: "size", Default: "64M", Min: 1 << 20, Max: 4095 << 20,
+		Description: "Memory for redo log writes before they reach disk. Larger values help big transactions."},
+	{Name: "innodb_parallel_read_threads", Type: "integer", Default: "4", Min: 1, Max: 256,
+		Description: "Threads for parallel clustered index reads, such as CHECK TABLE and SELECT COUNT(*)."},
+	{Name: "sort_buffer_size", Type: "size", Default: "256K", Min: 32 << 10, Max: 1 << 30,
+		Description: "Memory per sort. Each connection that sorts allocates it, so raise it carefully."},
+	{Name: "join_buffer_size", Type: "size", Default: "256K", Min: 1 << 10, Max: 1 << 30,
+		Description: "Memory per join that cannot use an index. Each such join allocates it."},
+	{Name: "max_execution_time", Type: "integer", Default: "0", Min: 0, Max: 4294967295, Unit: "ms",
+		Description: "Stop SELECT statements that run longer than this. 0 turns the limit off."},
 	{Name: "innodb_lock_wait_timeout", Type: "integer", Default: "50", Min: 1, Max: 1073741824, Unit: "s",
 		Description: "How long a transaction waits for a row lock before giving up."},
 }
@@ -174,11 +213,70 @@ var valkeyParameters = []parameter{
 		Description: "Threads for network I/O. More than one helps busy instances that have several CPU cores."},
 	{Name: "maxmemory-samples", Type: "integer", Default: "5", Min: 1, Max: 64,
 		Description: "Keys sampled for each eviction. Higher values approximate LRU and LFU more closely."},
+	{Name: "maxmemory-eviction-tenacity", Type: "integer", Default: "10", Min: 0, Max: 100,
+		Description: "Effort spent evicting keys per command. Raise it when heavy writes keep memory above the limit."},
+	{Name: "activedefrag", Type: "enum", Default: "no", Values: yesNo,
+		Description: "Defragment memory in the background, so long-running caches with churning keys return memory. Uses some CPU."},
 	{Name: "latency-monitor-threshold", Type: "integer", Default: "0", Min: 0, Max: 2147483647, Unit: "ms",
 		Description: "Record events slower than this for the LATENCY command. 0 turns monitoring off."},
 }
 
 func number(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+
+// Memory settings sized to the instance's memory limit, as RDS sizes them to
+// the instance class, so a larger instance caches more without tuning. A
+// parameter the user sets wins. Without a memory limit the engine defaults
+// stay: OpenRDS cannot know how much of the host a database may use.
+func tunedParameters(engine string, memoryMiB int) map[string]string {
+	if memoryMiB <= 0 {
+		return nil
+	}
+	switch engine {
+	case "postgres":
+		return map[string]string{
+			"shared_buffers":       pgSize(memoryMiB / 4),
+			"effective_cache_size": pgSize(memoryMiB * 3 / 4),
+			"maintenance_work_mem": pgSize(min(max(memoryMiB/16, 64), 2048)),
+		}
+	case "mysql":
+		pool, instances := bufferPool(memoryMiB)
+		return map[string]string{"innodb_buffer_pool_size": strconv.Itoa(pool) + "M", "innodb_buffer_pool_instances": strconv.Itoa(instances)}
+	}
+	return nil
+}
+
+func pgSize(mib int) string {
+	if mib%1024 == 0 {
+		return strconv.Itoa(mib/1024) + "GB"
+	}
+	return strconv.Itoa(mib) + "MB"
+}
+
+// Three quarters of the memory limit, less 256 MiB for the server's own
+// memory (connections, performance_schema), in one pool instance per GiB up
+// to 8. MySQL rounds the pool up to whole chunks of 128 MiB times the
+// instances, and its default instance count depends on the version and the
+// host's CPUs, so OpenRDS sets both and rounds down: rounding up could pass
+// the memory limit.
+func bufferPool(memoryMiB int) (poolMiB, instances int) {
+	pool := max(memoryMiB*3/4-256, 128)
+	instances = min(max(pool/1024, 1), 8)
+	step := 128 * instances
+	return max(pool/step*step, 128), instances
+}
+
+// The settings the server runs with: the memory-sized ones, then the user's.
+func (r record) effectiveParameters() map[string]string {
+	p := tunedParameters(r.Engine, r.MemoryMiB)
+	if p == nil {
+		p = make(map[string]string, len(r.Parameters))
+	}
+	if _, ok := r.Parameters["innodb_buffer_pool_size"]; ok {
+		delete(p, "innodb_buffer_pool_instances") // sized for OpenRDS's pool, not the user's
+	}
+	maps.Copy(p, r.Parameters)
+	return p
+}
 
 // Size in bytes of a value such as 256MB (PostgreSQL) or 256M (MySQL).
 func sizeBytes(engine, value string) (int64, bool) {
@@ -284,14 +382,15 @@ const (
 // user values escape "$".
 func (r record) command() []string {
 	escape := func(v string) string { return strings.ReplaceAll(v, "$", "$$") }
-	keys := slices.Sorted(maps.Keys(r.Parameters))
+	params := r.effectiveParameters()
+	keys := slices.Sorted(maps.Keys(params))
 	var cmd []string
 	switch r.Engine {
 	case "postgres":
 		cmd = []string{"postgres", "-c", "ssl=on", "-c", "ssl_cert_file=" + tlsCertFile, "-c", "ssl_key_file=" + tlsKeyFile,
 			"-c", "hba_file=/run/openrds/pg_hba.conf"}
 		for _, k := range keys {
-			cmd = append(cmd, "-c", k+"="+escape(r.Parameters[k]))
+			cmd = append(cmd, "-c", k+"="+escape(params[k]))
 		}
 	case "mysql":
 		cmd = []string{"mysqld", "--ssl-ca=" + tlsCAFile, "--ssl-cert=" + tlsCertFile, "--ssl-key=" + tlsKeyFile}
@@ -299,7 +398,7 @@ func (r record) command() []string {
 			cmd = append(cmd, "--require-secure-transport=ON")
 		}
 		for _, k := range keys {
-			cmd = append(cmd, "--"+k+"="+escape(r.Parameters[k]))
+			cmd = append(cmd, "--"+k+"="+escape(params[k]))
 		}
 	case "valkey":
 		policy := "noeviction"

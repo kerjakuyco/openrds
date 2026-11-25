@@ -47,11 +47,27 @@ For one change at a time, use the database's **Configuration** tab: each setting
 
 If an immediate change cannot start, for example because the new port is used by another program on the VPS, OpenRDS restores the previous settings, restarts the database with them, and reports why.
 
+A starting database gets up to 15 minutes to become healthy, enough to replay its write-ahead log after the host lost power. A database that exits while starting, for example over a setting it refuses, fails within seconds instead. Stopping or rebooting gives the database up to 2 minutes to finish writes and flush its caches, and Docker waits as long when the host shuts down, so a busy database is not killed mid-write. PostgreSQL gets a `/dev/shm` as large as its memory limit (1 GiB without one), which parallel queries on large tables need: Docker's 64 MB default makes them fail with `could not resize shared memory segment`. Databases created before these settings existed get them at their next start or reboot.
+
 Turn on **deletion protection** to make delete fail until it is turned off. When you delete a database you can take a **final snapshot** first; it needs a running database, and if it fails nothing is deleted.
 
 ### Engine parameters
 
 Each engine offers a checked list of settings, such as `shared_buffers`, `work_mem`, `max_connections` and `shared_preload_libraries` for PostgreSQL; `innodb_buffer_pool_size`, `slow_query_log` and `sql_mode` for MySQL; `maxmemory-policy`, `save` and `notify-keyspace-events` for Valkey. `GET /api/engines` and the parameter editor list every setting with its type, range, default and description. Values are validated before they reach the database command line, and a cache size (`shared_buffers`, `innodb_buffer_pool_size`) must be smaller than the memory limit.
+
+For heavy workloads, PostgreSQL also offers autovacuum settings, `wal_compression`, `checkpoint_completion_target`, `synchronous_commit`, parallel worker limits, `hash_mem_multiplier`, `track_io_timing` and `idle_session_timeout`; MySQL offers `innodb_io_capacity_max`, `innodb_log_buffer_size`, `innodb_parallel_read_threads`, the per-query `sort_buffer_size` and `join_buffer_size`, and `max_execution_time`; Valkey offers `activedefrag` and `maxmemory-eviction-tenacity`.
+
+**Memory settings follow the memory limit**, as RDS sizes them to the instance class, so a larger instance uses its memory without tuning:
+
+| Engine | Setting | With a memory limit |
+| --- | --- | --- |
+| PostgreSQL | `shared_buffers` | 25% of the limit |
+| PostgreSQL | `effective_cache_size` | 75% of the limit |
+| PostgreSQL | `maintenance_work_mem` | 1/16 of the limit, from 64MB to 2GB |
+| MySQL | `innodb_buffer_pool_size` and `innodb_buffer_pool_instances` | 75% of the limit less 256 MiB for the server, in one instance per GiB up to 8, rounded down to whole 128 MiB chunks per instance so MySQL never rounds it up |
+| Valkey | `maxmemory` | 75% of the limit |
+
+A value you set yourself always wins; if you set `innodb_buffer_pool_size`, MySQL chooses its own instance count. Without a memory limit the engine defaults stay, because OpenRDS cannot know how much of the host a database may use. **Configuration** shows the sized values, and they change with the memory limit at the next restart.
 
 Parameters are passed on the command line from a generated Compose override, so they apply when the container starts. **Configuration** lists each one as applied or pending a restart. Valkey’s append-only persistence is not offered: when AOF is switched on through a restart, Valkey starts from an empty append-only file instead of its RDB snapshot. Restores keep the snapshot’s parameters unless you change them.
 
@@ -70,7 +86,11 @@ Stop a capped database and choose **Configuration → Storage → Resize** to in
 
 Backups cover one database: PostgreSQL uses a custom-format `pg_dump` of `app`; MySQL uses `mysqldump` of `app` with routines, events and triggers; Valkey writes an RDB snapshot. These are logical backups, not whole-server snapshots: additional databases, cluster roles, replication state, and point-in-time recovery are outside their scope. MySQL’s consistent snapshot applies to transactional tables; avoid schema changes during a dump. **Restore** always creates a **new** database with fresh credentials and leaves the source and backup intact; the form starts from the source’s size, data volume limit and parameters. Valkey is stopped while the snapshot replaces its data files, then started so it loads that snapshot. If an import fails, the target is marked **Restore incomplete**.
 
-Backups are stored **on the same VPS**. Connect **backup storage** (below), or download a copy to independent storage, to recover from losing the host. Downloaded `.dump`, `.sql`, and `.rdb` files can also be restored with standard `pg_restore`, `mysql`, and Valkey or Redis tools.
+MySQL dumps are plain SQL, so OpenRDS stores them gzip-compressed, usually several times smaller; PostgreSQL's custom format and Valkey's RDB files are compressed by the engine already. Backups taken before compression existed stay as they are and restore as before.
+
+A snapshot, restore or import of a large database can take hours. It keeps running when you close the browser or the SSH tunnel drops, for up to 24 hours, and **Events** shows how it ended.
+
+Backups are stored **on the same VPS**, usually on the disk the databases use, and a full disk stops every database on it. So a backup does not start unless the disk keeps a reserve free after it (5% of the disk, from 2 GiB to 10 GiB), judged by the size of the database's previous backup, and a backup that runs the free space down to the reserve stops and is removed. The dashboard warns when free space gets close. Connect **backup storage** (below), or download a copy to independent storage, to recover from losing the host. Downloaded `.dump`, `.sql.gz` (older MySQL backups: `.sql`) and `.rdb` files can also be restored with standard `pg_restore`, `gunzip` with `mysql`, and Valkey or Redis tools.
 
 ### Backup storage (S3-compatible)
 
@@ -110,7 +130,7 @@ Accounts decide who can do what once connected; the network decides who can conn
 | Console area | What you can do |
 | --- | --- |
 | **Getting started** | Follow a checklist that ticks itself off: create a database, connect an application, turn on automated backups, keep a copy off the VPS, and invite your team. It also explains the main ideas in plain language. The dashboard shows the next step until you finish or hide it. |
-| **Dashboard** | On a new server, pick an engine to create your first database. Afterwards, see your databases with live CPU and memory, the next getting-started step, recommendations (unhealthy databases, backups off or missing, pending restarts, unprotected production databases, open or unencrypted public databases), resources with CPU and memory allocation, and recent activity. |
+| **Dashboard** | On a new server, pick an engine to create your first database. Afterwards, see your databases with live CPU and memory, the next getting-started step, recommendations (unhealthy databases, backups off or missing, low disk space for backups, pending restarts, unprotected production databases, open or unencrypted public databases), resources with CPU and memory allocation, and recent activity. |
 | **Databases** | Filter by name, port, tag, engine or status; sort by any column; select a database and use **Modify** or **Actions** (start, stop, reboot, take snapshot, delete). Each database page follows the RDS console: a summary, then tabs for connectivity and security, database users, monitoring, logs and events, configuration and parameters, maintenance and backups, and tags. |
 | **Snapshots** and **Automated backups** | Restore, download, keep or delete recovery points. Automated backups shows how many databases back up daily and one row per database with its schedule, last and next backup, and a **Turn on** or **Change** button that edits the schedule in place. |
 | **Events** | Review the last 1,000 operations with who ran them and failure details, filtered by database or user, outcome or text. The sidebar counts new failures since your last visit. |

@@ -47,7 +47,7 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | `versions.go` | The engine version catalog: which versions you can choose, and which one is the default |
 | `params.go` | Engine parameters and their validation |
 | `access.go`, `tls.go`, `network.go` | Database users and passwords, TLS certificates, public access and the firewall gateway |
-| `backups.go`, `schedule.go`, `offsite.go` | Snapshots, automated backups and copies to S3-compatible storage |
+| `backups.go`, `schedule.go`, `offsite.go`, `diskspace_*.go` | Snapshots, automated backups, copies to S3-compatible storage, and the free-space reserve backups keep |
 | `quota.go`, `disk-helper.sh` | Data volume limits |
 | `metrics.go`, `activity.go` | Monitoring history and the event log |
 | `web/` | The console: HTML, CSS and JavaScript modules |
