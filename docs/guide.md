@@ -53,7 +53,7 @@ Turn on **deletion protection** to make delete fail until it is turned off. When
 
 ### Engine parameters
 
-Each engine offers a checked list of settings, such as `shared_buffers`, `work_mem`, `max_connections` and `shared_preload_libraries` for PostgreSQL; `innodb_buffer_pool_size`, `slow_query_log` and `sql_mode` for MySQL; `maxmemory-policy`, `save` and `notify-keyspace-events` for Valkey. `GET /api/engines` and the parameter editor list every setting with its type, range, default and description. Values are validated before they reach the database command line, and a cache size (`shared_buffers`, `innodb_buffer_pool_size`) must be smaller than the memory limit.
+Each engine offers a checked list of settings, such as `shared_buffers`, `work_mem`, `max_connections` and `shared_preload_libraries` (`pg_stat_statements` by default, for the Performance tab) for PostgreSQL; `innodb_buffer_pool_size`, `slow_query_log` and `sql_mode` for MySQL; `maxmemory-policy`, `save` and `notify-keyspace-events` for Valkey. `GET /api/engines` and the parameter editor list every setting with its type, range, default and description. Values are validated before they reach the database command line, and a cache size (`shared_buffers`, `innodb_buffer_pool_size`) must be smaller than the memory limit.
 
 For heavy workloads, PostgreSQL also offers autovacuum settings, `wal_compression`, `checkpoint_completion_target`, `synchronous_commit`, parallel worker limits, `hash_mem_multiplier`, `track_io_timing` and `idle_session_timeout`; MySQL offers `innodb_io_capacity_max`, `innodb_log_buffer_size`, `innodb_parallel_read_threads`, the per-query `sort_buffer_size` and `join_buffer_size`, and `max_execution_time`; Valkey offers `activedefrag` and `maxmemory-eviction-tenacity`.
 
@@ -153,6 +153,18 @@ For email, set up the server first: host, port, STARTTLS or TLS, an optional use
 | **Users** and **Account** | Admins search and filter accounts, invite people, change a role straight from the list, resend pending invites, reset passwords, and disable or delete accounts. Everyone can rename themselves, change their password and sign out other sessions. |
 
 The **Monitoring** tab charts CPU utilization (as a share of the CPU limit, or of the host when unlimited), memory in use against the limit, and network and disk throughput over the last 1, 3, 6, 12 or 24 hours. Every 30 seconds (`OPENRDS_METRICS_INTERVAL`, 5s–5m) the control plane reads each running database’s container statistics from the Docker Engine API through the mounted socket. The Docker CLI rounds statistics to three significant digits, which would make long-running throughput coarse. Readings are kept for 24 hours in memory and saved to `metrics.json` every five minutes and at shutdown, so an update keeps the charts. Each chart has a table view and a keyboard-readable crosshair.
+
+Below those, three charts come from the engine itself, read every interval by running its own client inside the container: **Connections** (client connections, and for PostgreSQL and MySQL those running a statement), **throughput** (transactions per second for PostgreSQL, statements for MySQL, commands for Valkey) and the **cache hit ratio** (PostgreSQL's buffer cache, MySQL's InnoDB buffer pool, Valkey's keyspace hits). A falling hit ratio usually means the working set no longer fits in memory: raise the memory limit, and the memory settings follow it. Readings the engine does not answer, for example while it starts, show as gaps.
+
+### Performance
+
+The **Performance** tab shows what the database is doing, like RDS Performance Insights. It needs the Operator role, because statement text can contain data.
+
+- **Running now** lists statements in progress, longest first, with their user and what they wait for (a lock, I/O, a sleep). **Cancel** stops one statement and rolls back its transaction; the session stays connected, and Events records who cancelled it.
+- **Top statements** ranks normalized statements (values replaced by placeholders) by total time, with calls, mean time and rows, since the statistics were last reset. PostgreSQL reads them from `pg_stat_statements`, which OpenRDS loads by default and creates in the `app` database the first time you open the tab; databases created earlier load it at their next restart. MySQL reads `performance_schema`. **Reset statistics** starts them afresh, for example after adding an index.
+- **Valkey** has no statements to rank, so the tab shows its **slow log**: commands slower than `slowlog-log-slower-than` (10 ms by default), newest first, with the client address.
+
+OpenRDS's own queries, and the container's health check, are left out of all of these.
 
 The sidebar groups the console into databases, backups, activity and administration, with a quick link and live status dot for each database. Collapse it to icons on a desktop; on a phone it opens as a drawer. The account menu at its foot holds account settings, the light, dark or system theme, and sign-out.
 

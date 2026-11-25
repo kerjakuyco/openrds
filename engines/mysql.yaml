@@ -27,7 +27,7 @@ services:
       default:
         aliases: ["${OPENRDS_DB_ALIAS:?missing instance alias}"]
     healthcheck:
-      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysql --protocol=tcp -h 127.0.0.1 -u root -D app -Nse 'SELECT 1'"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysql --protocol=tcp -h 127.0.0.1 -u root -D mysql -Nse 'SELECT 1'"]
       interval: 5s
       timeout: 3s
       retries: 30

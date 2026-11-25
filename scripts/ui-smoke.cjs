@@ -140,12 +140,19 @@ async function run() {
     await network.getByText("Off", { exact: true }).waitFor({ timeout: 60000 });
     assert.ok(await page.getByRole("link", { name: "CA certificate" }).getAttribute("href") === "/api/tls/ca.pem");
 
-    // Monitoring renders four charts and their table view.
+    // Monitoring renders the container's four charts, the engine's three, and their table view.
     await page.getByRole("tab", { name: "Monitoring" }).click();
     await page.getByRole("heading", { name: "CPU utilization" }).waitFor();
-    assert.equal(await page.locator("figure.chart").count(), 4);
+    await page.getByRole("heading", { name: "Buffer cache hit ratio" }).waitFor();
+    assert.equal(await page.locator("figure.chart").count(), 7);
     await page.getByRole("button", { name: "Table" }).first().click();
     await page.locator(".chart-table").first().waitFor();
+
+    // Performance: what runs now and the statements that take the most time.
+    await page.getByRole("tab", { name: "Performance" }).click();
+    await page.getByRole("heading", { name: "Running now" }).waitFor();
+    await page.getByRole("heading", { name: "Top statements" }).waitFor();
+    await page.locator("table").filter({ hasText: "Total time" }).or(page.getByText("No statements yet")).first().waitFor({ timeout: 30000 });
 
     // Logs, configuration and storage
     await page.getByRole("tab", { name: "Logs & events" }).click();
@@ -291,7 +298,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, backup storage, notifications, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

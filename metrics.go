@@ -38,6 +38,8 @@ type point struct {
 	Read   float64 `json:"read"`
 	Write  float64 `json:"write"`
 	PIDs   int     `json:"pids"`
+	// What the engine itself reports, when it answered.
+	DB *dbPoint `json:"db,omitempty"`
 }
 
 // Cumulative counters from the previous reading of a container.
@@ -46,6 +48,7 @@ type counters struct {
 	at                         time.Time
 	cpu, system                uint64
 	netIn, netOut, read, write uint64
+	db                         *dbSample
 }
 
 // The fields OpenRDS uses from the Docker Engine stats API.
@@ -164,8 +167,9 @@ func perSecond(now, before uint64, seconds float64) float64 {
 	return float64(now-before) / seconds
 }
 
-func (h *history) add(project, id string, s rawStats) {
+func (h *history) add(project, id string, s rawStats, db *dbSample) {
 	cur := measure(id, s)
+	cur.db = db
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	prev, ok := h.last[project]
@@ -191,6 +195,9 @@ func (h *history) add(project, id string, s rawStats) {
 		used -= cache
 	}
 	p.Memory = int64(used)
+	if db != nil {
+		p.DB = engineRates(prev.db, db)
+	}
 	h.points[project] = append(h.points[project], p)
 }
 
@@ -248,19 +255,21 @@ func (h *history) series(project string, span time.Duration, now time.Time) []po
 	out := []point{}
 	var sum point
 	var n, key int64
+	var db dbAverage
 	flush := func() {
 		if n == 0 {
 			return
 		}
 		f := float64(n)
 		out = append(out, point{At: sum.At / n, CPU: sum.CPU / f, Memory: sum.Memory / n, Limit: sum.Limit,
-			NetIn: sum.NetIn / f, NetOut: sum.NetOut / f, Read: sum.Read / f, Write: sum.Write / f, PIDs: sum.PIDs})
+			NetIn: sum.NetIn / f, NetOut: sum.NetOut / f, Read: sum.Read / f, Write: sum.Write / f, PIDs: sum.PIDs, DB: db.point()})
 	}
 	for _, p := range pts {
 		if k := p.At / bucket; n == 0 || k != key {
 			flush()
-			sum, n, key = point{}, 0, k
+			sum, n, key, db = point{}, 0, k, dbAverage{}
 		}
+		db.add(p.DB)
 		sum.At += p.At
 		sum.CPU += p.CPU
 		sum.Memory += p.Memory
@@ -274,6 +283,56 @@ func (h *history) series(project string, span time.Duration, now time.Time) []po
 	}
 	flush()
 	return out
+}
+
+// Engine readings averaged over a chart bucket. Readings the engine did not
+// answer are left out rather than counted as zero.
+type dbAverage struct {
+	sum            dbPoint
+	n, active, hit int
+}
+
+func (a *dbAverage) add(p *dbPoint) {
+	if p == nil {
+		return
+	}
+	a.n++
+	a.sum.Conns += p.Conns
+	a.sum.Ops += p.Ops
+	a.sum.MaxConns = p.MaxConns
+	if p.Active != nil {
+		a.active++
+		a.sum.Active = ptrAdd(a.sum.Active, *p.Active)
+	}
+	if p.Hit != nil {
+		a.hit++
+		a.sum.Hit = ptrAdd(a.sum.Hit, *p.Hit)
+	}
+}
+
+func ptrAdd(p *float64, v float64) *float64 {
+	if p == nil {
+		return &v
+	}
+	sum := *p + v
+	return &sum
+}
+
+func (a *dbAverage) point() *dbPoint {
+	if a.n == 0 {
+		return nil
+	}
+	f := float64(a.n)
+	p := &dbPoint{Conns: a.sum.Conns / f, Ops: a.sum.Ops / f, MaxConns: a.sum.MaxConns}
+	if a.active > 0 {
+		v := *a.sum.Active / float64(a.active)
+		p.Active = &v
+	}
+	if a.hit > 0 {
+		v := *a.sum.Hit / float64(a.hit)
+		p.Hit = &v
+	}
+	return p
 }
 
 type historyView struct {
@@ -348,8 +407,10 @@ func (m *manager) sample(ctx context.Context, now time.Time) {
 		return
 	}
 	known := make(map[string]bool, len(records))
+	byProject := make(map[string]record, len(records))
 	for _, r := range records {
 		known[r.Project] = true
+		byProject[r.Project] = r
 	}
 	m.history.prune(known, now)
 	if m.engine == nil {
@@ -368,7 +429,10 @@ func (m *manager) sample(ctx context.Context, now time.Time) {
 			err = statsErr
 			continue
 		}
-		m.history.add(project, id, s)
+		// Engine readings are best effort: a starting or overloaded database
+		// still gets its container reading.
+		db, _ := m.sampleEngine(ctx, byProject[project], id)
+		m.history.add(project, id, s, db)
 	}
 	m.history.report(err)
 }

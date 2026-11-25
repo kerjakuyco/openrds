@@ -113,8 +113,8 @@ var postgresParameters = []parameter{
 		Description: "Parallel workers one CREATE INDEX or VACUUM may start."},
 	{Name: "jit", Type: "enum", Default: "on", Values: onOff,
 		Description: "Compile parts of expensive queries just in time."},
-	{Name: "shared_preload_libraries", Type: "list", Default: "", Values: []string{"pg_stat_statements", "auto_explain", "pg_prewarm"},
-		Description: "Libraries loaded when the server starts. For query statistics, add pg_stat_statements, then run CREATE EXTENSION pg_stat_statements."},
+	{Name: "shared_preload_libraries", Type: "list", Default: "pg_stat_statements", Values: []string{"pg_stat_statements", "auto_explain", "pg_prewarm"},
+		Description: "Libraries loaded when the server starts. pg_stat_statements, on by default, collects the statement statistics Performance insights shows."},
 }
 
 var mysqlParameters = []parameter{
@@ -265,12 +265,21 @@ func bufferPool(memoryMiB int) (poolMiB, instances int) {
 	return max(pool/step*step, 128), instances
 }
 
-// The settings the server runs with: the memory-sized ones, then the user's.
+// Settings OpenRDS changes from the engine's own default, as RDS's default
+// parameter groups do: PostgreSQL loads pg_stat_statements for Performance
+// insights. Its overhead is small.
+var defaultParameters = map[string]map[string]string{
+	"postgres": {"shared_preload_libraries": "pg_stat_statements"},
+}
+
+// The settings the server runs with: OpenRDS's defaults, the memory-sized
+// ones, then the user's.
 func (r record) effectiveParameters() map[string]string {
-	p := tunedParameters(r.Engine, r.MemoryMiB)
+	p := maps.Clone(defaultParameters[r.Engine])
 	if p == nil {
 		p = make(map[string]string, len(r.Parameters))
 	}
+	maps.Copy(p, tunedParameters(r.Engine, r.MemoryMiB))
 	if _, ok := r.Parameters["innodb_buffer_pool_size"]; ok {
 		delete(p, "innodb_buffer_pool_instances") // sized for OpenRDS's pool, not the user's
 	}

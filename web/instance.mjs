@@ -7,9 +7,10 @@ import { databaseActions, takeSnapshot, confirmReboot } from "./actions.mjs";
 import { backupTable } from "./backups.mjs";
 import { tagEditor } from "./forms.mjs";
 import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
+import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
 import { settingsPanel, editParameters, editBackups } from "./settings.mjs";
 
-const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["logs", "Logs & events"],
+const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["insights", "Performance"], ["logs", "Logs & events"],
   ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
 let chartRange = "1h";
 
@@ -50,6 +51,20 @@ function monitoringTab(d) {
     timeChart({ title: "Disk throughput", subtitle: "Bytes per second read and written",
       series: [{ label: "Read", cls: "s1", value: p => p.read }, { label: "Write", cls: "s2", value: p => p.write }], format: rate, binary: true, floor: 1024 }),
   ];
+  // What the engine reports about itself; readings it did not answer are gaps.
+  const terms = ENGINE_TERMS[d.engine];
+  const amount = (n) => n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString();
+  const engineChart = (options, pick) => Object.assign(timeChart(options), { pick });
+  charts.push(
+    engineChart({ title: "Connections", subtitle: d.engine === "valkey" ? "Connected clients" : "Client connections, and those running a statement",
+      series: [{ label: "Connected", cls: "s1", value: p => p.db.conns }, ...(d.engine === "valkey" ? [] : [{ label: "Running", cls: "s2", value: p => p.db.active ?? 0 }])],
+      format: amount, axisFormat: v => String(v) }, pts => pts.filter(p => p.db)),
+    engineChart({ title: `${terms.ops} per second`, subtitle: "Throughput reported by the engine",
+      series: [{ label: terms.ops, cls: "s1", value: p => p.db.ops }], format: amount, axisFormat: v => String(v) }, pts => pts.filter(p => p.db)),
+    engineChart({ title: terms.hit, subtitle: `Share of ${terms.hitWhat}`,
+      series: [{ label: "Hit ratio", cls: "s1", value: p => p.db.hit }], format: v => `${v.toFixed(1)}%`, axisFormat: v => `${v}%`, domainMax: () => 100,
+      empty: "No reads in this range yet." }, pts => pts.filter(p => p.db && p.db.hit != null)),
+  );
   charts.forEach(c => group.add(c));
   const ranges = ["1h", "3h", "6h", "12h", "24h"];
   const buttons = ranges.map(r => h("button", { type: "button", "aria-pressed": String(r === chartRange), onclick: () => { chartRange = r; buttons.forEach(b => b.setAttribute("aria-pressed", String(b.textContent === r))); load(); } }, r));
@@ -70,7 +85,7 @@ function monitoringTab(d) {
           u ? panel("Live readings", {}, keyValues([["CPU", u.CPUPerc], ["Memory", u.MemUsage], ["Network in / out", u.NetIO], ["Disk read / write", u.BlockIO]], "cols-4")) : null);
       } else notice.replaceChildren();
       const step = Math.max(v.interval, v.range / 240);
-      charts.forEach(c => c.update({ points: v.points || [], from: v.now - v.range, to: v.now, step }));
+      charts.forEach(c => c.update({ points: c.pick ? c.pick(v.points || []) : v.points || [], from: v.now - v.range, to: v.now, step }));
       note.textContent = `Every ${v.interval}s · updated ${clock(Date.now())}`;
     } catch (err) {
       charts.forEach(c => c.setLoading(false));
@@ -206,13 +221,14 @@ function tagsTab(d) {
   return { el };
 }
 
-const BUILD = { connectivity: connectivityTab, users: usersTab, monitoring: monitoringTab, logs: logsTab, configuration: configurationTab, backups: backupsTab, tags: tagsTab };
+const BUILD = { connectivity: connectivityTab, users: usersTab, monitoring: monitoringTab, insights: insightsTab, logs: logsTab, configuration: configurationTab, backups: backupsTab, tags: tagsTab };
 // What each tab shows from the inventory. A tab is rebuilt only when this
 // changes, so a revealed URI, a log scroll position or a chart range survives a refresh.
 const SIGNATURE = {
   connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, state.me?.role]),
   users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, state.me?.role]),
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
+  insights: d => JSON.stringify([d.status, d.pendingRestore, state.me?.role]),
   logs: () => "",
   configuration: d => JSON.stringify([d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
     d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, state.me?.role]),

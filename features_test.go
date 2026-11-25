@@ -505,26 +505,26 @@ func TestMetricHistoryRatesAndBuckets(t *testing.T) {
 	var h history
 	h.init(t.TempDir()+"/metrics.json", 30*time.Second)
 	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
-	h.add("p", "aaaaaaaaaaaa", reading(t0, 1e9, 100e9, 0, 0, 110<<20))
+	h.add("p", "aaaaaaaaaaaa", reading(t0, 1e9, 100e9, 0, 0, 110<<20), nil)
 	if len(h.points["p"]) != 0 {
 		t.Fatal("the first reading must only set a baseline")
 	}
 	// 30 s on a 4-core host is 120 s of host CPU time; 3 s of it is 10% of one core.
-	h.add("p", "aaaaaaaaaaaa", reading(t0.Add(30*time.Second), 4e9, 220e9, 3000, 300, 110<<20))
+	h.add("p", "aaaaaaaaaaaa", reading(t0.Add(30*time.Second), 4e9, 220e9, 3000, 300, 110<<20), nil)
 	p := h.points["p"][0]
 	if p.CPU < 9.99 || p.CPU > 10.01 || p.Memory != 100<<20 || p.NetIn != 100 || p.NetOut != 50 || p.Read != 10 || p.Write != 20 || p.PIDs != 7 {
 		t.Fatalf("rates: %+v", p)
 	}
-	h.add("p", "aaaaaaaaaaaa", reading(t0.Add(60*time.Second), 1e8, 340e9, 10, 10, 50<<20))
+	h.add("p", "aaaaaaaaaaaa", reading(t0.Add(60*time.Second), 1e8, 340e9, 10, 10, 50<<20), nil)
 	if p := h.points["p"][1]; p.CPU != 0 || p.NetIn != 0 || p.Read != 0 {
 		t.Fatalf("a counter reset must read as zero: %+v", p)
 	}
-	h.add("p", "bbbbbbbbbbbb", reading(t0.Add(90*time.Second), 5e9, 460e9, 10, 10, 50<<20))
+	h.add("p", "bbbbbbbbbbbb", reading(t0.Add(90*time.Second), 5e9, 460e9, 10, 10, 50<<20), nil)
 	if len(h.points["p"]) != 2 {
 		t.Fatal("a recreated container must start a new baseline")
 	}
 	for i := range 240 {
-		h.add("q", "cccccccccccc", reading(t0.Add(time.Duration(i)*30*time.Second), uint64(i)*1e9, uint64(i)*100e9, uint64(i)*3000, 0, 100<<20))
+		h.add("q", "cccccccccccc", reading(t0.Add(time.Duration(i)*30*time.Second), uint64(i)*1e9, uint64(i)*100e9, uint64(i)*3000, 0, 100<<20), nil)
 	}
 	now := t0.Add(2 * time.Hour)
 	if got := len(h.series("q", time.Hour, now)); got > 120 || got < 115 {
