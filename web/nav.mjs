@@ -82,6 +82,7 @@ export function initNav({ onSignOut, theme, setTheme }) {
       "-",
       { label: "Account settings", icon: "key", run: () => { location.hash = "#/account"; } },
       can("admin") && { label: "Users", icon: "users", run: () => { location.hash = "#/users"; } },
+      can("admin") && { label: "Notifications", icon: "alert", run: () => { location.hash = "#/notifications"; } },
       "-",
       { element: h("div", { class: "menu-theme-row", role: "presentation" }, h("span", { class: "menu-heading" }, "Theme"), themes) },
       "-",

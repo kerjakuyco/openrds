@@ -36,6 +36,7 @@ Each database runs in its own container with its own volume, network and generat
 - **Secure by default.** Databases listen only on the server itself. Add read-only or read-write database users, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
 - **Easy to operate.** Monitoring charts, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix. Snapshots and restores of large databases finish even if your browser disconnects, and backups never fill the disk your databases need.
 - **Made for teams.** Accounts with admin, operator and viewer roles, invitations, password resets and an audit trail.
+- **Alerts where you work.** Slack, Discord, Telegram, webhook or email messages when a database turns unhealthy, crashes or runs out of memory, an operation fails, or disk space runs low.
 - **Simple to run.** One Go binary and Docker. No external services, no frontend build step.
 
 ## Supported engines

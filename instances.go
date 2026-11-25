@@ -554,6 +554,8 @@ type hostInfo struct {
 	Version     string       `json:"dockerVersion"`
 	VolumeQuota quotaSupport `json:"volumeQuota"`
 	BackupDisk  *diskInfo    `json:"backupDisk,omitempty"`
+	// Notification channels set up, so the dashboard can suggest one.
+	NotificationChannels int `json:"notificationChannels"`
 }
 
 // Space on the disk that holds backups. Backups stop below the reserve.
@@ -576,6 +578,9 @@ func (m *manager) host(ctx context.Context) (hostInfo, error) {
 	}
 	if free, total, ok := m.space(m.backupDir()); ok {
 		host.BackupDisk = &diskInfo{free, total, backupReserve(total)}
+	}
+	if cfg, err := m.loadNotify(); err == nil {
+		host.NotificationChannels = len(cfg.Channels)
 	}
 	return host, err
 }

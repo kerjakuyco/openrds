@@ -125,12 +125,28 @@ docker compose exec openrds openrds reset-password YOUR_USERNAME
 
 Accounts decide who can do what once connected; the network decides who can connect. The console still listens only on the VPS, so each person reaches it through their own SSH tunnel, or through a TLS reverse proxy you put in front of it.
 
+## Notifications
+
+Admins choose where OpenRDS sends problems under **Administration → Notifications**, like RDS event subscriptions. A channel is a Slack incoming webhook, a Discord webhook, a Telegram bot in a chat, any webhook that accepts JSON, or email through your SMTP server. Each channel receives the kinds of events you pick:
+
+| Events | When |
+| --- | --- |
+| **Database health** | A database turns unhealthy, crashes and is restarted by Docker (with a separate message when it ran out of memory), keeps crashing while starting, or stops on its own; and when it is healthy again. |
+| **Failed operations** | Any operation in Events that failed, such as an automated backup, a restore or a copy to backup storage. The same failure is sent again only after 6 hours, so a copy retried every 10 minutes sends one message. |
+| **Disk space** | Free space for backups falls below twice the reserve, falls below the reserve so backups pause, and recovers. |
+
+OpenRDS checks every database once a minute. Changes an operation makes, such as a reboot or a stop you asked for, are not alerts, and the first check after the console starts only takes note. Health changes also appear in **Events**, where OpenRDS is shown as their author.
+
+Adding a channel sends a test message first and saves the channel only when it arrives, so a mistyped URL is caught at once; **Send test** repeats it. Each channel shows when its last message went out, or why it failed. A message names the server, the time and a console link for the database, which opens through your SSH tunnel. Webhook receivers get JSON with `source`, `server`, `category`, `severity` (`critical`, `warning`, `resolved` or `info`), `database`, `title`, `detail`, `at` and the whole message as `text`.
+
+For email, set up the server first: host, port, STARTTLS or TLS, an optional user and password (for Gmail, an app password) and the sender address. OpenRDS connects and signs in before saving, and never sends a password over an unencrypted connection except to a relay on the server itself. Webhook URLs, bot tokens and the SMTP password are kept in `notifications.json` in the control volume and are never shown again.
+
 ## Monitor and operate
 
 | Console area | What you can do |
 | --- | --- |
 | **Getting started** | Follow a checklist that ticks itself off: create a database, connect an application, turn on automated backups, keep a copy off the VPS, and invite your team. It also explains the main ideas in plain language. The dashboard shows the next step until you finish or hide it. |
-| **Dashboard** | On a new server, pick an engine to create your first database. Afterwards, see your databases with live CPU and memory, the next getting-started step, recommendations (unhealthy databases, backups off or missing, low disk space for backups, pending restarts, unprotected production databases, open or unencrypted public databases), resources with CPU and memory allocation, and recent activity. |
+| **Dashboard** | On a new server, pick an engine to create your first database. Afterwards, see your databases with live CPU and memory, the next getting-started step, recommendations (unhealthy databases, backups off or missing, low disk space for backups, no notification channel, pending restarts, unprotected production databases, open or unencrypted public databases), resources with CPU and memory allocation, and recent activity. |
 | **Databases** | Filter by name, port, tag, engine or status; sort by any column; select a database and use **Modify** or **Actions** (start, stop, reboot, take snapshot, delete). Each database page follows the RDS console: a summary, then tabs for connectivity and security, database users, monitoring, logs and events, configuration and parameters, maintenance and backups, and tags. |
 | **Snapshots** and **Automated backups** | Restore, download, keep or delete recovery points. Automated backups shows how many databases back up daily and one row per database with its schedule, last and next backup, and a **Turn on** or **Change** button that edits the schedule in place. |
 | **Events** | Review the last 1,000 operations with who ran them and failure details, filtered by database or user, outcome or text. The sidebar counts new failures since your last visit. |
@@ -142,7 +158,7 @@ The sidebar groups the console into databases, backups, activity and administrat
 
 ## Where state lives
 
-- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, backup storage settings (`offsite.json`), the TLS certificate authority and database certificates (`tls/`), generated Compose overrides, activity history, metric history, and completed backups.
+- `openrds_control` is the Docker volume mounted at `/var/lib/openrds`. It holds the API key (`admin-token`), accounts (`users.json`, with password hashes), instance metadata and database passwords, backup storage settings (`offsite.json`), notification settings (`notifications.json`), the TLS certificate authority and database certificates (`tls/`), generated Compose overrides, activity history, metric history, and completed backups.
 - Each database has its own named data volume. Its internal Compose project name is in `instances/<name>.json` in the control volume. Treat this metadata as secret.
 - The control plane uses the host Docker socket to operate these projects and read their statistics; anyone with shell access to the server, the API key or an administrator account is a trusted operator. This release manages one host.
 - To update: run the install command again, or pull your chosen revision and run `sh install.sh`. Rebuilding the dashboard preserves existing database containers, volumes, and credentials. Existing databases keep automated backups off until you set a retention period. `docker compose down` in the checkout stops the dashboard; **`down -v` also deletes the control volume**.

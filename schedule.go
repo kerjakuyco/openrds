@@ -144,7 +144,7 @@ func (m *manager) expireBackups(ctx context.Context, now time.Time) {
 	}
 }
 
-// Run backup windows and expiry once a minute until ctx ends.
+// Run backup windows, expiry and health and disk checks once a minute until ctx ends.
 func (m *manager) maintain(ctx context.Context) {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
@@ -155,6 +155,8 @@ func (m *manager) maintain(ctx context.Context) {
 			go m.automatedBackup(ctx, name)
 		}
 		go m.syncOffsite() // copies new backups and retries failed ones
+		go m.watchHealth(ctx)
+		m.watchDisk(ctx)
 		select {
 		case <-ctx.Done():
 			return

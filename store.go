@@ -112,6 +112,7 @@ type manager struct {
 	ca         *authority
 	gateway    string // image for public-access gateways, once found
 	space      func(path string) (free, total uint64, ok bool)
+	alerts     alertState
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {

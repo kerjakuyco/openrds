@@ -9,6 +9,7 @@ import { backupsView } from "./backups.mjs";
 import { storageView } from "./storage.mjs";
 import { eventsView } from "./events.mjs";
 import { usersView } from "./users.mjs";
+import { notificationsView } from "./notifications.mjs";
 import { accountView } from "./account.mjs";
 import { startView } from "./start.mjs";
 import { renderAuth } from "./auth.mjs";
@@ -47,6 +48,7 @@ const ROUTES = [
   [/^\/backup-storage$/, () => storageView()],
   [/^\/events$/, () => { markEventsSeen(); return eventsView(); }],
   [/^\/users$/, () => usersView()],
+  [/^\/notifications$/, () => notificationsView()],
   [/^\/account$/, () => accountView({ onIdentity })],
 ];
 const LEGACY = { overview: "/", databases: "/databases", backups: "/snapshots", activity: "/events" };

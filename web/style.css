@@ -397,6 +397,8 @@ h3.sub .icon { color: var(--muted); width: 17px; height: 17px }
 .unit { color: var(--muted); font-size: 12px }
 .checks { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; min-width: 200px }
 .checks .check { font-size: 12px; align-items: center; gap: 6px }
+.category-checks { border: 0; padding: 0; margin: 0; display: grid; gap: 10px }
+.chips { display: flex; flex-wrap: wrap; gap: 4px }
 .param-editor > .row select { flex: 1 1 220px; max-width: 360px }
 .tag-editor { display: grid; gap: 10px; justify-items: start }
 .tag-rows { display: grid; gap: 8px; width: 100% }

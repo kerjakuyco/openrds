@@ -19,6 +19,8 @@ type event struct {
 	Result string    `json:"result"`
 	Detail string    `json:"detail,omitempty"`
 	Actor  string    `json:"actor,omitempty"` // account, "admin token" or "system"
+	// Set when the event's alert was already sent, as for health changes.
+	alerted bool
 }
 
 func (m *manager) readActivity() ([]event, error) {
@@ -30,10 +32,10 @@ func (m *manager) readActivity() ([]event, error) {
 	return items, err
 }
 
+// Record an event. A failure is also sent to the notification channels.
 func (m *manager) logEvent(ctx context.Context, e event) {
 	e.At, e.Actor = time.Now().UTC(), actorFrom(ctx)
 	m.activityMu.Lock()
-	defer m.activityMu.Unlock()
 	items, err := m.readActivity()
 	if err == nil {
 		items = append([]event{e}, items...)
@@ -42,8 +44,12 @@ func (m *manager) logEvent(ctx context.Context, e event) {
 		}
 		err = writeJSON(filepath.Join(m.dir, "activity.json"), items)
 	}
+	m.activityMu.Unlock()
 	if err != nil {
 		log.Printf("writing activity history: %v", err)
+	}
+	if e.Result == "failed" && !e.alerted {
+		m.alertFailure(e)
 	}
 }
 

@@ -210,6 +210,19 @@ async function run() {
     assert.equal(await page.getByLabel("Region", { exact: true }).inputValue(), "auto");
     assert.ok((await page.getByLabel("Endpoint URL").inputValue()).includes("r2.cloudflarestorage.com"));
 
+    // Notifications: a channel whose test message cannot arrive is not saved.
+    await page.locator('nav#nav [data-nav="notifications"]').click();
+    await page.getByRole("heading", { name: "Notifications", level: 1 }).waitFor();
+    await page.getByRole("button", { name: "Add channel" }).first().click();
+    const channel = page.getByRole("dialog");
+    await channel.getByText("Webhook", { exact: true }).click();
+    await channel.getByLabel("Name", { exact: true }).fill("ci hook");
+    await channel.getByLabel("Webhook URL").fill(`http://127.0.0.1:${await freePort()}/hook`);
+    await channel.getByRole("button", { name: "Send test and add" }).click();
+    await channel.getByText("The test message did not arrive", { exact: false }).waitFor();
+    await channel.getByRole("button", { name: "Cancel" }).click();
+    await page.getByText("No channels yet").waitFor();
+
     // Restore form is prefilled from the snapshot.
     await page.locator('nav#nav [data-nav="snapshots"]').click();
     const snapshot = page.locator("tbody tr").filter({ hasText: name });
@@ -274,7 +287,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, backup storage, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, backup storage, notifications, monitoring, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

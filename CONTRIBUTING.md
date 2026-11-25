@@ -50,6 +50,7 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | `backups.go`, `schedule.go`, `offsite.go`, `diskspace_*.go` | Snapshots, automated backups, copies to S3-compatible storage, and the free-space reserve backups keep |
 | `quota.go`, `disk-helper.sh` | Data volume limits |
 | `metrics.go`, `activity.go` | Monitoring history and the event log |
+| `notify.go` | Notifications: health and disk checks, and messages to Slack, Discord, Telegram, webhooks and email |
 | `web/` | The console: HTML, CSS and JavaScript modules |
 | `scripts/` | End-to-end checks against a real Docker installation |
 | `docs/` | Install guide, user guide and API reference |

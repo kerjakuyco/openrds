@@ -63,6 +63,7 @@ function recommendations(dbs, now, host) {
   if (older.length) add("info", `${plural(older.length, "database")} ${older.length === 1 ? "needs" : "need"} a reboot`, `To turn on TLS and users: ${older.slice(0, 4).map(d => d.name).join(", ")}${older.length > 4 ? "…" : ""}.`,
     `#/databases/${older[0].name}/connectivity`, "Review");
   if (dbs.length && state.storage && !state.storage.enabled) add("info", "Backups are only on this server", "Copy them to S3-compatible storage.", "#/backup-storage", "Set up");
+  if (dbs.length && can("admin") && host && !host.notificationChannels) add("info", "No one gets alerts", "Send problems to Slack, Telegram or email.", "#/notifications", "Set up");
   if (state.storage?.failed) add("warn", `${plural(state.storage.failed, "backup")} not copied to storage`, state.storage.lastError || "Copies failed.", "#/backup-storage", "Review");
   const uncapped = dbs.filter(d => isLive(d) && !d.memoryMiB);
   if (uncapped.length) add("info", `${plural(uncapped.length, "database")} without a memory limit`, "One could slow the others.", uncapped.length === 1 ? `#/databases/${uncapped[0].name}/modify` : "#/databases", "Review");

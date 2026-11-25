@@ -20,7 +20,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | --- | --- |
 | GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit |
 | GET | `/engines` — engines, versions (`latest`, `stable`), the default version, suggested ports, memory minimums and adjustable parameters; `auto` on a parameter says how OpenRDS sizes it to the memory limit |
-| GET | `/host` — Docker host name, CPU count, memory capacity, engine version, `volumeQuota.state` (`supported`, `unsupported` or `unknown`) and `backupDisk` (`freeBytes`, `totalBytes`, and `reserveBytes`, the free space backups leave) |
+| GET | `/host` — Docker host name, CPU count, memory capacity, engine version, `volumeQuota.state` (`supported`, `unsupported` or `unknown`) and `backupDisk` (`freeBytes`, `totalBytes`, and `reserveBytes`, the free space backups leave) and `notificationChannels` |
 | GET | `/instances/{name}/connection` (add `?user=` for a database user; each call is recorded), `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
 | GET | `/instances/{name}/history?range=1h` — readings for `1h`, `3h`, `6h`, `12h` or `24h`, averaged to about 240 points |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
@@ -33,6 +33,10 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | GET / PUT / DELETE | `/storage` — backup storage status (anyone), connect with `{"provider","endpoint","region","bucket","prefix","accessKeyId","secretAccessKey","pathStyle"}` after a test (admin; an empty secret keeps the saved one), or disconnect (admin) |
 | POST | `/storage/test` — admin: test settings without saving |
 | GET | `/storage/backups` — operator: copies in storage, with `local` when the library also has them |
+| GET | `/notifications` — admin: channels with `target` (secrets left out), `categories`, `lastSentAt` and `lastError`, and the email server without its password |
+| POST / PATCH / DELETE | `/notifications/channels`, `/notifications/channels/{id}` — admin: `{"kind","name","url","token","chatId","to","categories"}` with `kind` `slack`, `discord`, `telegram`, `webhook` or `email` and `categories` from `health`, `failures`, `disk`. A new or changed destination gets a test message before it is saved; an empty `url` or `token` keeps the saved one |
+| POST | `/notifications/channels/{id}/test` — admin: send a test message |
+| PUT / DELETE | `/notifications/smtp` — admin: `{"host","port","security","username","password","from"}` with `security` `starttls`, `tls` or `none`; checked by connecting and signing in. Removing it needs the email channels gone first |
 | POST / DELETE | `/storage/backups/{id}/import` (bring a copy into the library as a snapshot), `/storage/backups/{id}` (delete a copy that is not in the library) |
 | DELETE | `/instances/{name}` — add `?finalSnapshot=true` to take a final snapshot first; refused while deletion protection is on |
 | GET | `/backups`, `/backups/{id}/download`, `/activity` |
@@ -48,7 +52,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | POST | `/users/{id}/reset` — admin: sign the account out and issue a new link |
 | PATCH | `/account` — your `name`; POST `/account/password` with `{"current","password"}`; POST `/account/signout` ends your other sessions |
 
-Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, `final` for final snapshots, and `compression` (`gzip`) when OpenRDS compressed the dump, as it does for MySQL. `bytes` is the size stored and downloaded.
+Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users` and `/notifications`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, `final` for final snapshots, and `compression` (`gzip`) when OpenRDS compressed the dump, as it does for MySQL. `bytes` is the size stored and downloaded.
 
 Operations are synchronous; the first provision may take several minutes to pull the image. A change keeps running for up to 24 hours even when the client disconnects, so a snapshot or restore of a large database finishes; `GET /activity` shows how it ended. Reads stop with their client after 30 minutes at most. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
 
