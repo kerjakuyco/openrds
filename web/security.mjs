@@ -224,7 +224,7 @@ export function connectivityPanel(d, all) {
   const rules = d.firewall || [];
   const tls = !d.tlsReady ? chip("After a reboot", "neutral")
     : d.requireTLS ? chip("Required", "good") : d.engine === "valkey" ? chip("Off", "warn") : chip("Optional", "info");
-  const names = ["localhost", "127.0.0.1", `openrds-${d.name}`, d.publicHost].filter(Boolean);
+  const names = ["localhost", "127.0.0.1", `openrds-${d.name}`, d.engine === "postgres" && `openrds-${d.name}-pooler`, d.publicHost].filter(Boolean);
   const actions = [];
   if (can("operator")) actions.push(btn([icon("globe"), "Edit network"], () => editNetwork(d, all), "small"));
   actions.push(h("a", { class: "btn small", href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, icon("download"), "CA certificate"));

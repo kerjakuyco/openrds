@@ -108,12 +108,15 @@ func (m *manager) prepareNetwork(s *instanceSpec) error {
 		return err
 	}
 	s.Firewall, s.PublicHost = rules, strings.TrimSpace(s.PublicHost)
-	if s.PublicAccess && s.PublicPort == 0 {
+	if s.PublicAccess && s.PublicPort == 0 || s.Pooler != nil {
 		all, err := m.records()
 		if err != nil {
 			return err
 		}
-		s.PublicPort = suggestPublicPort(all, *s)
+		if s.PublicAccess && s.PublicPort == 0 {
+			s.PublicPort = suggestPublicPort(all, *s)
+		}
+		normalizePooler(s, all)
 	}
 	return nil
 }

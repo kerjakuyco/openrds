@@ -258,7 +258,15 @@ func (m *manager) applyAccess(ctx context.Context, current, next record, script 
 			return fail(502, "The change is active but could not be saved for restarts: "+err.Error())
 		}
 	}
-	return m.save(next)
+	if err := m.save(next); err != nil {
+		return err
+	}
+	if next.Pooler.on() {
+		if err := m.reloadPoolerUsers(ctx, next); err != nil {
+			return fail(502, "The change is active in the database. The connection pooler gets it when it restarts: "+err.Error())
+		}
+	}
+	return nil
 }
 
 // Change the owner's password (user empty or the owner) or an extra user's.

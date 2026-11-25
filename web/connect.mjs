@@ -161,13 +161,14 @@ REDIS_PASSWORD=${p.password}` })],
 };
 
 // Whether a string uses TLS: always when it is required, and over the
-// internet whenever the engine offers it next to plain text.
+// internet whenever the engine offers it next to plain text. The pooler
+// follows the database.
 const usesTLS = (d, where) => d.tlsReady && (d.requireTLS || (where === "internet" && d.engine !== "valkey"));
 
 function settings(d, eng, where, user, password) {
   const internet = where === "internet";
   const host = internet ? (d.publicHost || "YOUR_SERVER_ADDRESS") : "127.0.0.1";
-  const port = internet ? d.publicPort : d.port;
+  const port = internet ? d.publicPort : where === "pooler" ? d.pooler.port : d.port;
   const tls = usesTLS(d, where);
   const scheme = { postgres: "postgresql", mysql: "mysql", valkey: tls ? "rediss" : "redis" }[d.engine];
   const query = tls && d.engine === "postgres" ? "?sslmode=verify-full&sslrootcert=openrds-ca.pem" : "";
@@ -230,6 +231,7 @@ export function connectGuide(d, eng, { canReveal }) {
   }
   const local = stringRow("vps", "Connection string");
   const remote = d.publicAccess ? stringRow("internet", "From the internet") : null;
+  const pooled = d.pooler ? stringRow("pooler", "Through the connection pooler") : null;
   const notes = h("div", { class: "conn-after" });
 
   // Code examples and another user, out of the way until wanted.
@@ -254,6 +256,7 @@ export function connectGuide(d, eng, { canReveal }) {
     }
     local.update();
     remote?.update();
+    pooled?.update();
 
     const tls = usesTLS(d, "vps") || (d.publicAccess && usesTLS(d, "internet"));
     const list = [];
@@ -284,6 +287,6 @@ export function connectGuide(d, eng, { canReveal }) {
   const el = h("section", { class: "panel connect-guide" },
     h("header", { class: "panel-head" },
       h("div", null, h("h2", null, icon("link"), "Connect your application"), h("p", { class: "muted" }, "Copy this into your app’s settings."))),
-    h("div", { class: "panel-body" }, local, remote, notes, more));
+    h("div", { class: "panel-body" }, local, pooled, remote, notes, more));
   return { el };
 }

@@ -10,6 +10,12 @@ RUN apk add --no-cache util-linux e2fsprogs e2fsprogs-extra
 COPY --chmod=0755 disk-helper.sh /usr/local/bin/disk-helper
 ENTRYPOINT ["/usr/local/bin/disk-helper"]
 
+# Connection pooling for PostgreSQL. PgBouncer refuses to run as root.
+FROM alpine:3.22 AS pooler
+RUN apk add --no-cache pgbouncer && adduser -D -H -u 1001 -s /sbin/nologin pgbouncer
+USER pgbouncer
+CMD ["pgbouncer", "/run/openrds/pgbouncer.ini"]
+
 FROM docker:29-cli AS runtime
 LABEL org.opencontainers.image.source="https://github.com/kerjakuyco/openrds" \
       org.opencontainers.image.licenses="Apache-2.0"

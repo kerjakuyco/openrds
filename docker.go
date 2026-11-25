@@ -170,7 +170,25 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 	if r.Engine == "valkey" && r.RequireTLS {
 		env = append(env, "OPENRDS_VALKEY_CLI_FLAGS=--tls --insecure")
 	}
-	path, err := m.writeOverride(r, digest(files))
+	if r.Pooler.on() {
+		image, err := m.poolerImage(ctx)
+		if err != nil {
+			return err
+		}
+		base = append(base, "--file", filepath.Join(m.templates, "pooler.yaml"))
+		env = append(env, "OPENRDS_POOLER_IMAGE="+image, "OPENRDS_POOLER_PORT="+strconv.Itoa(r.Pooler.Port), "OPENRDS_POOLER_ALIAS="+poolerAlias(r))
+	}
+	// Each container is recreated only when its own files change: a new
+	// database user reloads the pooler, not the database.
+	dbFiles, poolerFiles := maps.Clone(files), map[string]string{}
+	for _, k := range []string{"OPENRDS_POOLER_INI", "OPENRDS_POOLER_USERS"} {
+		if v, ok := dbFiles[k]; ok {
+			poolerFiles[k] = v
+			delete(dbFiles, k)
+		}
+	}
+	poolerFiles["OPENRDS_TLS_CERT"], poolerFiles["OPENRDS_TLS_KEY"] = files["OPENRDS_TLS_CERT"], files["OPENRDS_TLS_KEY"]
+	path, err := m.writeOverride(r, digest(dbFiles), digest(poolerFiles))
 	if err != nil {
 		return fmt.Errorf("writing the Compose override: %w", err)
 	}
@@ -188,8 +206,13 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 }
 
 func (m *manager) states(ctx context.Context) (map[string]string, error) {
+	return m.statesFor(ctx, "io.openrds.database=true")
+}
+
+// The state of the containers with a label, by Compose project.
+func (m *manager) statesFor(ctx context.Context, label string) (map[string]string, error) {
 	var out bytes.Buffer
-	err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--filter", "label=io.openrds.database=true",
+	err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--filter", "label="+label,
 		"--format", `{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`)
 	if err != nil {
 		return nil, err

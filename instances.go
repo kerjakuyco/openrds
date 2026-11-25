@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -29,6 +30,7 @@ type instanceView struct {
 	LatestBackup   *time.Time        `json:"latestBackupAt,omitempty"`
 	NextBackup     *time.Time        `json:"nextBackupAt,omitempty"`
 	Live           *point            `json:"live,omitempty"`
+	PoolerStatus   string            `json:"poolerStatus,omitempty"`
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -45,6 +47,12 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		return nil, err
 	}
 	automated := latestAutomated(all, backups)
+	var poolers map[string]string
+	if slices.ContainsFunc(all, func(r record) bool { return r.Pooler.on() }) {
+		if poolers, err = m.statesFor(ctx, "io.openrds.pooler=true"); err != nil {
+			return nil, fail(503, "Cannot read connection pooler status: "+err.Error())
+		}
+	}
 	latest := make(map[string]time.Time)
 	for _, r := range all {
 		for _, b := range backups {
@@ -80,6 +88,12 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		}
 		if state == "running" {
 			v.Live = m.history.latest(r.Project, now)
+		}
+		if r.Pooler.on() {
+			v.PoolerStatus = poolers[r.Project]
+			if v.PoolerStatus == "" {
+				v.PoolerStatus = "not running"
+			}
 		}
 		result = append(result, v)
 	}
@@ -232,14 +246,22 @@ func (m *manager) start(ctx context.Context, r *record) error {
 			return fmt.Errorf("the database is running, but its public port did not open: %w", err)
 		}
 	}
+	if r.Pooler.on() {
+		if err := m.applyPooler(ctx, *r, *r, true); err != nil {
+			return fmt.Errorf("the database is running, but its connection pooler did not start: %w", err)
+		}
+	}
 	return nil
 }
 
-// Stop the database, and its gateway so nothing listens for it.
+// Stop the database, and its gateway and pooler so nothing listens for it.
 func (m *manager) stop(ctx context.Context, r record) error {
 	services := []string{"db"}
 	if r.PublicAccess {
 		services = append(services, "gateway")
+	}
+	if r.Pooler.on() {
+		services = append(services, "pooler")
 	}
 	return m.compose(ctx, r, nil, nil, append([]string{"stop", "--timeout", stopWait}, services...)...)
 }
@@ -352,6 +374,7 @@ type modification struct {
 	PublicPort          *int              `json:"publicPort"`
 	PublicHost          *string           `json:"publicHost"`
 	Firewall            *[]firewallRule   `json:"firewall"`
+	Pooler              *poolerSpec       `json:"pooler"` // replaced as a whole; {"enabled": false} turns it off
 	ApplyImmediately    bool              `json:"applyImmediately"`
 }
 
@@ -422,6 +445,13 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 		}
 		next.Firewall = rules
 	}
+	if mod.Pooler != nil {
+		p := *mod.Pooler
+		if p.Enabled && p.Port == 0 && r.Pooler.on() {
+			p.Port = r.Pooler.Port // a change of settings keeps the port
+		}
+		next.Pooler = &p
+	}
 	if len(next.Tags) == 0 {
 		next.Tags = nil
 	}
@@ -441,6 +471,7 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	if next.PublicAccess && next.PublicPort == 0 {
 		next.PublicPort = suggestPublicPort(all, next.instanceSpec)
 	}
+	normalizePooler(&next.instanceSpec, all)
 	if err := checkSpec(next.instanceSpec); err != nil {
 		return result, err
 	}
@@ -459,8 +490,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	recreate := !next.runtime().equal(r.runtime()) || next.Port != r.Port
 	gatewayChanged := next.PublicAccess != r.PublicAccess ||
 		next.PublicAccess && (next.PublicPort != r.PublicPort || allowList(next.Firewall) != allowList(r.Firewall))
+	poolerChanged := !samePooler(next.Pooler, r.Pooler)
 	running := false
-	if recreate || gatewayChanged {
+	if recreate || gatewayChanged || poolerChanged {
 		states, err := m.states(ctx)
 		if err != nil {
 			return result, fail(503, "Cannot read database status: "+err.Error())
@@ -468,8 +500,11 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 		running = live(states[r.Project])
 	}
 	action := "Modify database"
-	if !recreate && gatewayChanged {
+	switch {
+	case !recreate && gatewayChanged:
 		action = "Change network access"
+	case !recreate && poolerChanged:
+		action = "Change connection pooling"
 	}
 	finish := m.track(ctx, name, action)
 	defer func() { finish(err) }()
@@ -512,6 +547,17 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 				m.applyGateway(ctx, next, back, running)
 			}
 			return result, fail(502, "Network access did not change: the public port could not be opened. "+err.Error())
+		}
+	}
+	if poolerChanged {
+		if err = m.applyPooler(ctx, r, next, running); err != nil {
+			// Put the previous pooler back, so the record matches what runs.
+			back := next
+			back.Pooler = r.Pooler
+			if saveErr := m.save(back); saveErr == nil {
+				m.applyPooler(ctx, next, back, running)
+			}
+			return result, fail(502, "Connection pooling did not change: "+describe(err))
 		}
 	}
 	if next.BackupRetentionDays != r.BackupRetentionDays {

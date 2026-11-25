@@ -56,6 +56,7 @@ type instanceSpec struct {
 	PublicPort          int               `json:"publicPort,omitempty"`
 	PublicHost          string            `json:"publicHost,omitempty"`
 	Firewall            []firewallRule    `json:"firewall,omitempty"`
+	Pooler              *poolerSpec       `json:"pooler,omitempty"` // PostgreSQL connection pooling
 }
 
 // The container settings that change only when Compose recreates the database.
@@ -243,16 +244,23 @@ func checkSpec(s instanceSpec) error {
 	if err := checkNetwork(s); err != nil {
 		return err
 	}
+	if err := checkPooler(s); err != nil {
+		return err
+	}
 	return checkParameters(s.Engine, s.MemoryMiB, s.Parameters)
 }
 
 // The host ports an instance holds: its loopback port, and its public port
 // while public access is on.
 func (s instanceSpec) hostPorts() []int {
+	ports := []int{s.Port}
 	if s.PublicAccess {
-		return []int{s.Port, s.PublicPort}
+		ports = append(ports, s.PublicPort)
 	}
-	return []int{s.Port}
+	if s.Pooler.on() {
+		ports = append(ports, s.Pooler.Port)
+	}
+	return ports
 }
 
 // Refuse host ports held by another instance or by the console itself.

@@ -11,6 +11,7 @@ services:
       - "127.0.0.1:${OPENRDS_PORT:-8080}:8080"
     environment:
       OPENRDS_DISK_HELPER_IMAGE: openrds-disk-helper:local
+      OPENRDS_POOLER_IMAGE: openrds-pooler:local
       OPENRDS_METRICS_INTERVAL: ${OPENRDS_METRICS_INTERVAL:-30s}
       OPENRDS_PUBLIC_PORT: ${OPENRDS_PORT:-8080}
     volumes:
@@ -33,6 +34,12 @@ services:
       context: .
       target: disk-helper
     image: openrds-disk-helper:local
+  pooler:
+    profiles: ["helper"]
+    build:
+      context: .
+      target: pooler
+    image: openrds-pooler:local
 
 volumes:
   control:

@@ -1,0 +1,47 @@
+# Connection pooling: PgBouncer in front of PostgreSQL, like RDS Proxy.
+# Many client connections share a few server connections.
+services:
+  pooler:
+    image: ${OPENRDS_POOLER_IMAGE:?missing pooler image}
+    pull_policy: never
+    command: ["pgbouncer", "/run/openrds/pgbouncer.ini"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 256
+    ulimits:
+      nofile: { soft: 131072, hard: 131072 } # two descriptors per client and server connection
+    labels:
+      io.openrds.pooler: "true"
+    ports:
+      - "127.0.0.1:${OPENRDS_POOLER_PORT:?missing pooler port}:6432"
+    networks:
+      default:
+        aliases: ["${OPENRDS_POOLER_ALIAS:?missing pooler alias}"]
+    # The users file is writable by PgBouncer's user, so a password change
+    # reaches it without a restart.
+    secrets:
+      - { source: pooler_ini, target: /run/openrds/pgbouncer.ini, uid: "1001", gid: "1001", mode: 0400 }
+      - { source: pooler_users, target: /run/openrds/userlist.txt, uid: "1001", gid: "1001", mode: 0600 }
+      - { source: tls_cert, target: /run/openrds/server.crt, uid: "1001", gid: "1001", mode: 0444 }
+      - { source: tls_key, target: /run/openrds/server.key, uid: "1001", gid: "1001", mode: 0400 }
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "6432"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  pooler_ini:
+    environment: OPENRDS_POOLER_INI
+  pooler_users:
+    environment: OPENRDS_POOLER_USERS

@@ -294,7 +294,7 @@ def client(engine, c, query, tls=None):
     if engine == "postgres":
         image, variable = "postgres:17-alpine", "PGPASSWORD"
         mode = {None: "sslmode=prefer", "off": "sslmode=disable", "verify": "sslmode=verify-full sslrootcert=/tmp/ca.pem"}[tls]
-        run = f'psql -XAt -v ON_ERROR_STOP=1 "host={host} user={c["user"]} dbname={c["database"]} {mode}" -c "$Q"'
+        run = f'psql -XAt -v ON_ERROR_STOP=1 "host={host} port={c.get("networkPort", 5432)} user={c["user"]} dbname={c["database"]} {mode}" -c "$Q"'
     elif engine == "mysql":
         image, variable = "mysql:8.4", "MYSQL_PWD"
         mode = {None: "", "off": "--ssl-mode=DISABLED", "verify": "--ssl-mode=VERIFY_IDENTITY --ssl-ca=/tmp/ca.pem"}[tls]
@@ -340,6 +340,54 @@ def reachable(engine, port):
             return len(s.recv(64)) > 0  # the MySQL greeting
     except (OSError, ssl.SSLError):
         return False
+
+
+def pgbench(c, args):
+    """Run pgbench next to the database, as c's user."""
+    done = subprocess.run(["docker", "run", "--rm", "--network", c["network"], "--env", "PGPASSWORD", "--entrypoint", "pgbench",
+                           "postgres:17-alpine", "-h", c["networkHost"], "-p", str(c.get("networkPort", 5432)), "-U", c["user"], *args, c["database"]],
+                          env={**os.environ, "PGPASSWORD": c["password"]}, capture_output=True, text=True)
+    return done.returncode, done.stdout + done.stderr
+
+
+def exercise_pooler():
+    """PgBouncer in front of PostgreSQL: more clients than max_connections, users, passwords and TLS."""
+    name = f"smoke-pool-{secrets.token_hex(3)}"
+    api("instances", "POST", {"name": name, "engine": "postgres", "port": free_port(), "parameters": {"max_connections": "20"}})
+    try:
+        result = api(f"instances/{name}/modify", "POST", {"pooler": {"enabled": True, "port": free_port()}})
+        assert result == {"restarted": False, "pendingRestart": False}, result
+        d = next(i for i in api("instances") if i["name"] == name)
+        assert d["pooler"]["mode"] == "transaction" and d["poolerStatus"] == "running", d
+
+        def pooled(c):
+            return {**c, "networkHost": f"openrds-{name}-pooler", "networkPort": 6432}
+        owner = api(f"instances/{name}/connection")
+        assert must("postgres", pooled(owner), "SELECT 1") == "1"
+        code, out = pgbench(owner, ["-i", "-q"])
+        assert code == 0, out
+        code, out = pgbench(owner, ["-c", "50", "-j", "4", "-T", "5", "-S"])
+        assert code != 0 and "too many clients" in out, "50 direct clients should exceed max_connections 20"
+        code, out = pgbench(pooled(owner), ["-c", "50", "-j", "4", "-T", "5", "-S", "-M", "prepared"])
+        assert code == 0 and "number of failed transactions: 0" in out, out
+
+        api(f"instances/{name}/users", "POST", {"name": "app", "access": "read-write"})
+        assert must("postgres", pooled(api(f"instances/{name}/connection?user=app")), "SELECT current_user") == "app"
+        api(f"instances/{name}/password", "POST", {"password": ""})
+        fresh = api(f"instances/{name}/connection")
+        must("postgres", pooled(fresh), "SELECT 1")
+        refuses("postgres", pooled(owner), "SELECT 1")
+
+        assert api(f"instances/{name}/modify", "POST", {"requireTLS": True, "applyImmediately": True})["restarted"]
+        must("postgres", pooled(fresh), "SELECT 1", tls="verify")
+        refuses("postgres", pooled(fresh), "SELECT 1", tls="off")
+
+        assert api(f"instances/{name}/modify", "POST", {"pooler": {"enabled": False}}) == {"restarted": False, "pendingRestart": False}
+        assert "pooler" not in next(i for i in api("instances") if i["name"] == name)
+        refuses("postgres", pooled(fresh), "SELECT 1")
+        print("postgres: connection pooling with more clients than max_connections, users, passwords and TLS passed", flush=True)
+    finally:
+        api(f"instances/{name}", "DELETE")
 
 
 def exercise_security(engine):
@@ -539,6 +587,7 @@ if __name__ == "__main__":
         assert quota == "supported", host["volumeQuota"]
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise_security(database_engine)
+    exercise_pooler()
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise(database_engine, quota == "supported")
     exercise_versions(quota == "supported")

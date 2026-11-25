@@ -8,6 +8,7 @@ import { backupTable } from "./backups.mjs";
 import { tagEditor } from "./forms.mjs";
 import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
 import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
+import { poolerPanel } from "./pooler.mjs";
 import { settingsPanel, editParameters, editBackups } from "./settings.mjs";
 
 const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["insights", "Performance"], ["logs", "Logs & events"],
@@ -31,6 +32,7 @@ function connectivityTab(d) {
   const el = h("div", { class: "stack-gap" },
     ...connectivityPanel(d, all),
     connectGuide(d, eng, { canReveal: can("operator") }).el,
+    poolerPanel(d),
     firewallPanel(d, all));
   return { el };
 }
@@ -225,7 +227,7 @@ const BUILD = { connectivity: connectivityTab, users: usersTab, monitoring: moni
 // What each tab shows from the inventory. A tab is rebuilt only when this
 // changes, so a revealed URI, a log scroll position or a chart range survives a refresh.
 const SIGNATURE = {
-  connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, state.me?.role]),
+  connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, d.pooler, d.poolerStatus, state.me?.role]),
   users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, state.me?.role]),
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
   insights: d => JSON.stringify([d.status, d.pendingRestore, state.me?.role]),

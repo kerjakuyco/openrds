@@ -18,7 +18,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 
 | Method | Path (under `/api`) |
 | --- | --- |
-| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit |
+| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit, and with pooling `pooler` and `poolerStatus` |
 | GET | `/engines` — engines, versions (`latest`, `stable`), the default version, suggested ports, memory minimums and adjustable parameters; `auto` on a parameter says how OpenRDS sizes it to the memory limit |
 | GET | `/host` — Docker host name, CPU count, memory capacity, engine version, `volumeQuota.state` (`supported`, `unsupported` or `unknown`) and `backupDisk` (`freeBytes`, `totalBytes`, and `reserveBytes`, the free space backups leave) and `notificationChannels` |
 | GET | `/instances/{name}/connection` (add `?user=` for a database user; each call is recorded), `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
@@ -26,7 +26,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | GET | `/instances/{name}/insights` — operator: `running` statements (`id`, `user`, `state`, `wait`, `seconds`, `query`), `statements` by total time (`query`, `calls`, `totalMs`, `meanMs`, `rows`; `null` with `statementsNote` when the engine does not collect them) and, for Valkey, the `slow` log |
 | POST | `/instances/{name}/insights/reset` — operator: reset statement statistics or clear the slow log; `/instances/{name}/sessions/{id}/cancel` — cancel the statement a session runs |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
-| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `backupRetentionDays`, `backupWindow`, `backupIntervalHours` (1, 2, 3, 4, 6, 12 or 24), `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
+| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `pooler` (`{"enabled", "mode", "poolSize", "maxClients", "port"}`, PostgreSQL only: `mode` `transaction` or `session`; `{"enabled": false}` turns it off; omitted settings take their defaults and a changed one keeps the port), `backupRetentionDays`, `backupWindow`, `backupIntervalHours` (1, 2, 3, 4, 6, 12 or 24), `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
 | POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
 | POST | `/instances/{name}/password` — change the owner password: `{"password": ""}` generates one; returns `{"password"}` |
 | POST | `/instances/{name}/users` — `{"name","access","password"}` with `access` `read-only` or `read-write`; returns `{"name","password"}` |

@@ -140,6 +140,9 @@ func (m *manager) loadAuthority() (*authority, error) {
 // loopback, the Compose network and, when set, the public address.
 func tlsHosts(r record) []string {
 	hosts := []string{"localhost", "127.0.0.1", "::1", "db", "openrds-" + r.Name}
+	if r.Engine == "postgres" {
+		hosts = append(hosts, poolerAlias(r)) // clients reach the pooler by this name too
+	}
 	if r.PublicHost != "" && !slices.Contains(hosts, r.PublicHost) {
 		hosts = append(hosts, r.PublicHost)
 	}
@@ -256,6 +259,10 @@ func (m *manager) injected(r record) (map[string]string, error) {
 	switch r.Engine {
 	case "postgres":
 		files["OPENRDS_PG_HBA"] = pgHBA(r)
+		if r.Pooler.on() {
+			files["OPENRDS_POOLER_INI"] = poolerIni(r)
+			files["OPENRDS_POOLER_USERS"] = poolerUsers(r)
+		}
 	case "valkey":
 		files["OPENRDS_VALKEY_USERS"] = valkeyUsers(r)
 	}

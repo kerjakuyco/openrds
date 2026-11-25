@@ -35,6 +35,16 @@ Every database starts private: its port is published on the VPS loopback interfa
 
 Databases created by earlier versions get TLS, password changes and database users after one reboot.
 
+## Connection pooling
+
+PostgreSQL gives every connection its own process, so an app with many workers, processes or serverless functions runs into `max_connections` and spends memory and time on connecting. **Connection pooling**, like RDS Proxy, puts PgBouncer in front of the database: many clients share a few server connections. Turn it on under **Connectivity & security → Connection pooling**; the database keeps running.
+
+- **Transaction mode** (the default) lends a server connection for one transaction at a time, so a pool of 20 can serve hundreds of clients. Prepared statements work. Session state does not carry over between transactions: `SET` (use `SET LOCAL`), `LISTEN`, session advisory locks and temporary tables need **session mode** or a direct connection.
+- **Session mode** keeps a server connection per client until it disconnects. Everything works; it saves only the cost of connecting.
+- **Pool size** is the number of server connections per user and database (20 by default). The pooler opens at most `max_connections` less 10, so direct connections, backups and OpenRDS always fit. **Client connections** is how many clients it accepts at once (1,000 by default, up to 50,000).
+
+The pooler listens on its own loopback port (6432, or the next free port) and as `openrds-<name>-pooler:6432` on the database's Docker network, and the connection guide adds a **Through the connection pooler** string. It accepts the owner and every database user with their passwords; a new user or password works through it at once, without disconnecting anyone. It uses TLS when the client asks, or always when the database requires TLS, and the database's certificate names the pooler, so `sslmode=verify-full` works. Changing pooling settings restarts only the pooler, so clients connected through it reconnect. Public access still reaches the database directly. In a test with `max_connections` 20, 60 `pgbench` clients failed directly with *too many clients already* and ran without errors through the pooler.
+
 ## Modify, reboot and protect
 
 For one change at a time, use the database's **Configuration** tab: each setting (instance size, host port, storage, automated backups, Require TLS, deletion protection and engine parameters) has its own **Change** button or switch, and changes that need a restart ask whether to apply now or at the next restart.

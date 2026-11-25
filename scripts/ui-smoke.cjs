@@ -93,6 +93,13 @@ async function run() {
     await page.getByLabel("Language or tool").selectOption("node");
     await page.locator("pre").filter({ hasText: "new pg.Pool" }).waitFor();
 
+    // Connection pooling: turned on in place, with its own connection string.
+    await page.getByRole("button", { name: "Turn on pooling" }).click();
+    await page.getByRole("dialog").getByText("Each transaction borrows", { exact: false }).waitFor();
+    await page.getByRole("dialog").getByRole("button", { name: "Turn on" }).click();
+    await page.getByText("Through the connection pooler").waitFor({ timeout: 60000 });
+    await page.locator("code").filter({ hasText: `openrds-${name}-pooler:6432` }).waitFor();
+
     // Database users: create a read-only user and see its password once,
     // change the owner password, then delete the user.
     await page.getByRole("tab", { name: "Database users" }).click();
@@ -298,7 +305,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

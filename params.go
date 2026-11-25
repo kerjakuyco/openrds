@@ -437,12 +437,16 @@ func (m *manager) overridePath(r record) string {
 
 // A generated Compose file (JSON is YAML) with the command and a label that
 // changes with the injected files, so Compose recreates the container then.
-func (m *manager) writeOverride(r record, secrets string) (string, error) {
+func (m *manager) writeOverride(r record, secrets, poolerSecrets string) (string, error) {
 	path := m.overridePath(r)
-	doc := map[string]any{"services": map[string]any{"db": map[string]any{
+	services := map[string]any{"db": map[string]any{
 		"command": r.command(),
 		"labels":  map[string]string{"io.openrds.secrets": secrets},
-	}}}
+	}}
+	if r.Pooler.on() {
+		services["pooler"] = map[string]any{"labels": map[string]string{"io.openrds.secrets": poolerSecrets}}
+	}
+	doc := map[string]any{"services": services}
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return "", err
