@@ -169,6 +169,9 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		base = append(base, "--file", filepath.Join(m.templates, "volume-quota.yaml"))
 		env = append(env, "OPENRDS_DISK_LINK="+r.diskKey())
 	}
+	if r.PITR {
+		base = append(base, "--file", filepath.Join(m.templates, "pitr.yaml"))
+	}
 	if r.staging {
 		base = append(base, "--file", filepath.Join(m.templates, "upgrade.yaml"))
 	}

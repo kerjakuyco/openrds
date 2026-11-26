@@ -183,6 +183,56 @@ function tlsSwitch(d, why) {
   return input;
 }
 
+// Point-in-time recovery starts with the server, so it asks when to restart.
+function pitrSwitch(d, why) {
+  const input = h("input", { type: "checkbox", class: "switch", role: "switch", checked: Boolean(d.pitr), disabled: Boolean(why) || !d.backupRetentionDays, "aria-label": "Point-in-time recovery" });
+  if (!d.backupRetentionDays) input.title = "Turn on automated backups first.";
+  input.addEventListener("change", () => {
+    const on = input.checked;
+    const apply = applyChoice(d);
+    let saved = false;
+    const dlg = modal({
+      title: on ? "Turn on point-in-time recovery?" : "Turn off point-in-time recovery?", kicker: d.name, confirm: on ? "Turn on" : "Turn off", tone: on ? "primary" : "danger",
+      body: [h("p", { class: "muted" }, on
+        ? `PostgreSQL archives its WAL at least once a minute, and automated backups become physical base backups. You can then restore to any second of the last ${plural(d.backupRetentionDays, "day")}. The first base backup is taken right after the restart.`
+        : "WAL stops being archived. Existing base backups and WAL stay until the retention period ends."), apply.el],
+      run: async () => { await submit(d, { pitr: on, applyImmediately: apply.now() }, "point-in-time recovery setting"); saved = true; },
+    });
+    dlg.addEventListener("close", () => { if (!saved) input.checked = !on; });
+  });
+  return input;
+}
+
+const utc = (iso) => iso ? `${iso.slice(0, 19).replace("T", " ")} UTC` : "—";
+
+// Restore a database as it was at a moment, into a new database.
+export function restoreToTime(d) {
+  const w = d.recovery || {};
+  const toLocalInput = (iso) => iso.slice(0, 19);
+  const at = h("input", { type: "datetime-local", step: "1", min: toLocalInput(w.earliest), max: toLocalInput(w.latest), value: toLocalInput(w.latest) });
+  const name = h("input", { type: "text", value: `${d.name.slice(0, 33)}-pitr`, spellcheck: "false", autocomplete: "off" });
+  const used = new Set((state.instances || []).flatMap(x => [x.port, x.publicPort, x.pooler?.port]).filter(Boolean));
+  let free = d.port + 100;
+  while (used.has(free)) free++;
+  const port = h("input", { type: "number", min: "1024", max: "65535", value: String(free), class: "num" });
+  modal({
+    title: "Restore to point in time", kicker: d.name, confirm: "Restore", wide: true,
+    body: [
+      h("p", { class: "muted" }, `A new database is created as ${d.name} was at that second. ${d.name} keeps running unchanged.`),
+      field("Restore to (UTC)", at, { hint: `Any second from ${utc(w.earliest)} to ${utc(w.latest)}.` }),
+      h("div", { class: "form-grid" }, field("New DB identifier", name), field("Host port", port)),
+      h("p", { class: "muted" }, "It gets the source’s size, storage, parameters and TLS setting, and its own owner password. Database users from the source are turned off; create them again."),
+    ],
+    run: async () => {
+      if (!at.value) throw new Error("Choose the time to restore to.");
+      const targetTime = new Date(`${at.value.length === 16 ? `${at.value}:00` : at.value}Z`).toISOString();
+      const spec = { name: name.value.trim(), port: Number(port.value), targetTime };
+      track(`Restore ${d.name} to ${utc(targetTime)}`, api(`instances/${d.name}/restore-to-time`, { method: "POST", body: spec }),
+        { success: `${spec.name} is ready, as ${d.name} was at ${utc(targetTime)}.`, onDone: (err) => { if (!err) location.hash = `#/databases/${spec.name}`; } });
+    },
+  });
+}
+
 function storageUsage(d) {
   const measured = h("span", { role: "status", class: "muted" });
   const measure = btn("Measure usage", async (b) => {
@@ -258,5 +308,6 @@ export function settingsPanel(d) {
       row("Automated backups", "On a schedule, in a quiet window.", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} · ${scheduleLabel(d.backupWindow, d.backupIntervalHours)}` : h("span", { class: "status warn" }, icon("alert"), "Off"),
         change("Change", editBackups)),
       row("Require TLS", d.tlsReady ? "Refuse unencrypted connections." : "Reboot once to turn this on.", d.requireTLS ? "On" : "Off", tlsSwitch(d, why || (!d.tlsReady ? "Reboot first." : ""))),
+      d.engine === "postgres" ? row("Point-in-time recovery", d.backupRetentionDays ? "Restore to any second of the retention period." : "Needs automated backups.", d.pitr ? "On" : "Off", pitrSwitch(d, why)) : null,
       row("Deletion protection", "Blocks deleting the database.", d.deletionProtection ? "On" : "Off", protectionSwitch(d, why))));
 }

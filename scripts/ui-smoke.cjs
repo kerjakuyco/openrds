@@ -179,9 +179,17 @@ async function run() {
     await page.getByRole("dialog").getByRole("button", { name: "Save backups" }).click();
     await backupsRow.getByText("3 days", { exact: false }).waitFor({ timeout: 30000 });
     await backupsRow.getByText("Every 6 hours from", { exact: false }).waitFor();
+    // Point-in-time recovery: archiving starts with a restart, then the first base backup opens the window.
+    const pitrRow = page.locator(".set-row").filter({ hasText: "Point-in-time recovery" });
+    await pitrRow.getByRole("switch").check();
+    await page.getByRole("dialog").getByRole("button", { name: "Turn on" }).click();
+    await pitrRow.getByText("On", { exact: true }).waitFor({ timeout: 120000 });
 
     // Snapshot from the maintenance tab
     await page.getByRole("tab", { name: "Maintenance & backups" }).click();
+    await page.getByRole("button", { name: "Restore to point in time" }).click({ timeout: 180000 });
+    await page.getByRole("dialog").getByText("Any second from", { exact: false }).waitFor();
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     await page.getByRole("button", { name: "Take snapshot" }).click();
     await page.getByText(`Snapshot of ${name} saved`, { exact: false }).waitFor({ timeout: 120000 });
 
@@ -315,7 +323,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, snapshot, deferred modify and reboot, search, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

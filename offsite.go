@@ -284,6 +284,9 @@ func (m *manager) syncOffsite() {
 			}
 		}
 	}
+	if err := m.syncWAL(ctx, c, cfg); err != nil {
+		m.logEvent(ctx, event{Name: "Backup storage", Kind: "storage", Action: "Copy WAL to storage", Result: "failed", Detail: err.Error()})
+	}
 	m.offsite.mu.Lock()
 	m.offsite.last = time.Now().UTC()
 	m.offsite.mu.Unlock()

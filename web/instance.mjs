@@ -9,7 +9,7 @@ import { tagEditor } from "./forms.mjs";
 import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
 import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
 import { poolerPanel } from "./pooler.mjs";
-import { settingsPanel, editParameters, editBackups } from "./settings.mjs";
+import { settingsPanel, editParameters, editBackups, restoreToTime } from "./settings.mjs";
 
 const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["insights", "Performance"], ["logs", "Logs & events"],
   ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
@@ -198,9 +198,12 @@ function backupsTab(d) {
       ["Backup", [["Automated backups", on ? h("span", { class: "status good" }, icon("ok"), "On") : h("span", { class: "status warn" }, icon("alert"), "Off")],
         ["Retention period", on ? plural(d.backupRetentionDays, "day") : "—"], ["Schedule", on ? scheduleLabel(d.backupWindow, d.backupIntervalHours) : "—"]]],
       ["Recovery points", [["Latest backup", d.latestBackupAt ? `${when(d.latestBackupAt)} (${ago(d.latestBackupAt)})` : "None yet"],
-        ["Next automated backup", d.nextBackupAt ? `${when(d.nextBackupAt)} (${ago(d.nextBackupAt)})` : "—"]]],
+        ["Next automated backup", d.nextBackupAt ? `${when(d.nextBackupAt)} (${ago(d.nextBackupAt)})` : "—"],
+        ...(d.engine === "postgres" ? [["Point-in-time recovery", !d.pitr ? "Off" : d.recovery?.earliest
+          ? h("span", null, `${when(d.recovery.earliest)} – ${when(d.recovery.latest)}`) : h("span", { class: "muted" }, "Starting: the first base backup is on its way")]] : [])]],
       ["Protection", [["Deletion protection", h("span", { class: "row tight" }, d.deletionProtection ? "On" : "Off", can("operator") ? toggle : null)]]],
-    ], { actions: can("operator") ? [editButton(d, [icon("edit"), "Change"], () => editBackups(d)), snap] : [] }),
+    ], { actions: can("operator") ? [editButton(d, [icon("edit"), "Change"], () => editBackups(d)), snap,
+      d.recovery?.earliest ? editButton(d, [icon("restore"), "Restore to point in time"], () => restoreToTime(d)) : null].filter(Boolean) : [] }),
     panel("Snapshots and backups", { description: "Restoring creates a new database." }, list));
   render(d);
   return { el, update: render };
@@ -232,9 +235,9 @@ const SIGNATURE = {
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
   insights: d => JSON.stringify([d.status, d.pendingRestore, state.me?.role]),
   logs: () => "",
-  configuration: d => JSON.stringify([d.version, d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
+  configuration: d => JSON.stringify([d.version, d.pitr, d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
     d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, state.me?.role]),
-  backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt]),
+  backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt, d.pitr, d.recovery]),
   tags: d => JSON.stringify(d.tags || {}),
 };
 

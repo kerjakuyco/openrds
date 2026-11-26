@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -105,7 +106,11 @@ func (m *manager) dueBackups(ctx context.Context, now time.Time) []string {
 			continue
 		}
 		opened, open := backupWindow(r.BackupWindow, r.BackupIntervalHours, now)
-		if !open || !latest[r.Name].Before(opened) {
+		if r.archiving() && !hasBase(backups, r) {
+			// Point-in-time recovery starts with a base backup, so take one now,
+			// trying once an hour if it fails.
+			opened, open = now.Truncate(time.Hour), true
+		} else if !open || !latest[r.Name].Before(opened) {
 			continue
 		}
 		if states == nil {
@@ -125,6 +130,11 @@ func (m *manager) dueBackups(ctx context.Context, now time.Time) []string {
 		m.mu.Unlock()
 	}
 	return due
+}
+
+// Whether the database's current data has a base backup to replay WAL onto.
+func hasBase(backups []backup, r record) bool {
+	return slices.ContainsFunc(backups, func(b backup) bool { return b.Format == "physical" && b.DataKey == r.diskKey() })
 }
 
 func (m *manager) automatedBackup(ctx context.Context, name string) {
@@ -159,6 +169,9 @@ func (m *manager) expireBackups(ctx context.Context, now time.Time) {
 			}
 		}
 	}
+	if list, err = m.backups(); err == nil {
+		m.pruneWAL(ctx, list)
+	}
 }
 
 // Run backup windows, expiry and health and disk checks once a minute until ctx ends.
@@ -173,6 +186,7 @@ func (m *manager) maintain(ctx context.Context) {
 		}
 		go m.syncOffsite() // copies new backups and retries failed ones
 		go m.watchHealth(ctx)
+		go m.collectAllWAL(ctx)
 		m.watchDisk(ctx)
 		select {
 		case <-ctx.Done():

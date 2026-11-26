@@ -109,6 +109,18 @@ A snapshot, restore or import of a large database can take hours. It keeps runni
 
 Backups are stored **on the same VPS**, usually on the disk the databases use, and a full disk stops every database on it. So a backup does not start unless the disk keeps a reserve free after it (5% of the disk, from 2 GiB to 10 GiB), judged by the size of the database's previous backup, and a backup that runs the free space down to the reserve stops and is removed. The dashboard warns when free space gets close. Connect **backup storage** (below), or download a copy to independent storage, to recover from losing the host. Downloaded `.dump`, `.sql.gz` (older MySQL backups: `.sql`) and `.rdb` files can also be restored with standard `pg_restore`, `gunzip` with `mysql`, and Valkey or Redis tools.
 
+### Point-in-time recovery (PostgreSQL)
+
+Like RDS, a PostgreSQL database can be restored to **any second** of its retention period, not only to its backups. Turn on **Configuration → Point-in-time recovery** (it needs automated backups, and applies with a restart). Then:
+
+- PostgreSQL archives every finished WAL segment, and at least once a minute when anything changed, to an archive volume of its own. OpenRDS collects the segments every minute into the backup library, gzip-compressed, and copies them to backup storage when it is connected. So a restore can miss at most about the last two minutes.
+- Automated backups become **physical base backups** (`pg_basebackup`), the starting points for replaying WAL. The first one is taken right after the restart. They also restore faster than logical dumps for large databases, into the same PostgreSQL version. Snapshots you take stay logical dumps, which restore into the same or a newer version.
+- **Maintenance & backups** shows the recovery window, from the end of the oldest base backup to the newest archived WAL, and **Restore to point in time** picks a second in it (in UTC). A **new** database is created from the newest base backup before that second, replays WAL up to it, and opens. The source keeps running. The new database gets the source's size, storage, parameters and TLS setting and its own owner password; database users from the source are turned off, so create them again.
+- WAL older than the oldest base backup is removed, here and in backup storage, as backups expire. Turning point-in-time recovery off stops archiving; what was archived stays until the retention period ends. An engine upgrade starts a new window with a base backup of the new version, and keeps the old one for its retention period.
+- After losing the server, connect the same backup storage on a new one, **Import** a base backup, and restore it with a target time (API: `targetTime`): the WAL comes from storage.
+
+If collection fails five times in a row, Events records it, and notifications send it.
+
 ### Backup storage (S3-compatible)
 
 Under **Backups → Backup storage**, an admin connects any S3-compatible object storage: Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or another service. Choose the provider to fill in its usual endpoint, region and URL style, then enter the bucket, an optional folder and an access key that can read, write, list and delete in the bucket. **Test connection** writes, reads and deletes a small object; settings are only saved when that works. Create the bucket first and keep it private: copies are logical dumps of your data, not encrypted by OpenRDS, so rely on the provider's encryption at rest.

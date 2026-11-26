@@ -5,7 +5,7 @@ import { markDownloaded } from "./start.mjs";
 import { editBackups } from "./settings.mjs";
 import { storageCell } from "./storage.mjs";
 
-const kindLabel = (b) => b.final ? "Final snapshot" : b.kind === "automated" ? "Automated" : "Manual";
+const kindLabel = (b) => b.final ? "Final snapshot" : b.format === "physical" ? "Base backup" : b.kind === "automated" ? "Automated" : "Manual";
 const BADGE = { postgres: "PG", mysql: "My", valkey: "Vk" };
 
 function confirmDeleteBackup(b) {

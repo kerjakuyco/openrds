@@ -225,14 +225,15 @@ function databaseForm({ mode, eng, initial, source }) {
   versionSelect.addEventListener("change", () => { v.version = versionSelect.value; changed(); });
   function fillVersions() {
     const floor = mode === "restore" ? source.version : null;
-    const list = eng.versions.filter(x => !floor || newerOrSame(x.version, floor));
+    const physical = mode === "restore" && source.format === "physical"; // a base backup starts only its own version
+    const list = eng.versions.filter(x => physical ? x.version === floor : !floor || newerOrSame(x.version, floor));
     if (!list.some(x => x.version === v.version)) v.version = (list.find(x => x.version === floor) || list.find(x => x.status === "stable") || list[0])?.version;
     versionSelect.replaceChildren(...list.map(x => h("option", { value: x.version, selected: x.version === v.version }, versionLabel(eng, x))));
   }
   fillVersions();
   const versionField = () => field("Engine version", versionSelect, { hint: mode === "restore"
-    ? "The same version or newer. Backups can’t move to an older version."
-    : "Stable is the safe choice. To upgrade later, restore a snapshot into a newer version." });
+    ? source.format === "physical" ? "A base backup restores into its own version. Upgrade the new database afterwards if you need a newer one." : "The same version or newer. Backups can’t move to an older version."
+    : "Stable is the safe choice. Upgrade it in place later from Configuration." });
 
   // 1. Engine and template (create only)
   let engineCards = null, templateCards = null;

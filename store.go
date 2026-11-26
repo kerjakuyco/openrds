@@ -57,6 +57,7 @@ type instanceSpec struct {
 	PublicHost          string            `json:"publicHost,omitempty"`
 	Firewall            []firewallRule    `json:"firewall,omitempty"`
 	Pooler              *poolerSpec       `json:"pooler,omitempty"` // PostgreSQL connection pooling
+	PITR                bool              `json:"pitr,omitempty"`   // PostgreSQL point-in-time recovery
 }
 
 // The container settings that change only when Compose recreates the database.
@@ -66,15 +67,16 @@ type runtimeConfig struct {
 	Parameters map[string]string `json:"parameters,omitempty"`
 	RequireTLS bool              `json:"requireTLS,omitempty"`
 	PublicHost string            `json:"publicHost,omitempty"` // named in the TLS certificate
+	PITR       bool              `json:"pitr,omitempty"`       // WAL archiving starts with the server
 }
 
 func (s instanceSpec) runtime() runtimeConfig {
-	return runtimeConfig{s.CPUs, s.MemoryMiB, s.Parameters, s.RequireTLS, s.PublicHost}
+	return runtimeConfig{s.CPUs, s.MemoryMiB, s.Parameters, s.RequireTLS, s.PublicHost, s.PITR}
 }
 
 func (c runtimeConfig) equal(o runtimeConfig) bool {
 	return c.CPUs == o.CPUs && c.MemoryMiB == o.MemoryMiB && maps.Equal(c.Parameters, o.Parameters) &&
-		c.RequireTLS == o.RequireTLS && c.PublicHost == o.PublicHost
+		c.RequireTLS == o.RequireTLS && c.PublicHost == o.PublicHost && c.PITR == o.PITR
 }
 
 // Containers started by this version have TLS certificates, the managed
@@ -120,6 +122,7 @@ type manager struct {
 	gateway    string // image for public-access gateways, once found
 	space      func(path string) (free, total uint64, ok bool)
 	alerts     alertState
+	pitr       pitrState
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
@@ -250,6 +253,9 @@ func checkSpec(s instanceSpec) error {
 		return err
 	}
 	if err := checkPooler(s); err != nil {
+		return err
+	}
+	if err := checkPITR(s); err != nil {
 		return err
 	}
 	return checkParameters(s.Engine, s.MemoryMiB, s.Parameters)

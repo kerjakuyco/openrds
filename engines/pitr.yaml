@@ -1,0 +1,15 @@
+# Point-in-time recovery: PostgreSQL archives finished WAL segments to this
+# volume, outside its data, until OpenRDS collects them. The entrypoint gives
+# the volume to the postgres user before the server starts.
+services:
+  db:
+    entrypoint:
+      - sh
+      - -c
+      - rmdir /var/lib/postgresql/data/lost+found /var/lib/postgresql/lost+found /var/lib/mysql/lost+found /data/lost+found 2>/dev/null || true; [ ! -d /archive ] || chown postgres:postgres /archive; exec docker-entrypoint.sh "$@"
+      - openrds
+    volumes:
+      - archive:/archive
+
+volumes:
+  archive:

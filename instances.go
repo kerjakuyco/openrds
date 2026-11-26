@@ -31,6 +31,7 @@ type instanceView struct {
 	NextBackup     *time.Time        `json:"nextBackupAt,omitempty"`
 	Live           *point            `json:"live,omitempty"`
 	PoolerStatus   string            `json:"poolerStatus,omitempty"`
+	Recovery       *recoveryWindow   `json:"recovery,omitempty"` // point-in-time recovery window
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -89,6 +90,10 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		if state == "running" {
 			v.Live = m.history.latest(r.Project, now)
 		}
+		if r.PITR || r.archiving() {
+			w := m.window(r, backups)
+			v.Recovery = &w
+		}
 		if r.Pooler.on() {
 			v.PoolerStatus = poolers[r.Project]
 			if v.PoolerStatus == "" {
@@ -102,12 +107,29 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 
 // Retain metadata (and any provisioned volume) on Docker failure so the
 // operator can retry Start or explicitly delete the instance.
-func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup) (err error) {
+func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup) error {
+	return m.provisionAt(ctx, spec, from, nil)
+}
+
+// Like provision, rolling a physical backup forward to target when given.
+func (m *manager) provisionAt(ctx context.Context, spec instanceSpec, from *backup, target *time.Time) (err error) {
 	if err := m.checkDiskRequest(ctx, spec.DiskGiB); err != nil {
 		return err // reject before reserving a name/port or touching an instance
 	}
+	physical := from != nil && from.Format == "physical"
+	if target != nil && !physical {
+		return fail(400, "Only physical backups, taken with point-in-time recovery on, restore to a time.")
+	}
 	var input io.Reader
-	if from != nil {
+	if physical {
+		spec.Engine = from.Engine
+		if spec.Version == "" {
+			spec.Version = from.version()
+		}
+		if spec.Version != from.version() {
+			return fail(400, fmt.Sprintf("A physical backup restores into %s %s, the version it comes from.", engines[from.Engine].title, from.version()))
+		}
+	} else if from != nil {
 		spec.Engine = from.Engine
 		if spec.Version == "" {
 			spec.Version = from.version()
@@ -128,12 +150,27 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 		return err
 	}
 	defer release()
-	action := "Provision database"
-	if from != nil {
+	action, detail := "Provision database", ""
+	switch {
+	case target != nil:
+		action, detail = "Restore to point in time", fmt.Sprintf("%s as of %s UTC", from.Name, target.Format("2006-01-02 15:04:05"))
+	case from != nil:
 		action = "Restore backup"
 	}
-	finish := m.track(ctx, r.Name, action)
+	finish := m.trackDetail(ctx, r.Name, action, detail)
 	defer func() { finish(err) }()
+	if physical {
+		if r.DiskGiB > 0 {
+			if err := m.attachDisk(ctx, r); err != nil {
+				return fail(502, "Restore did not finish: the disk could not be prepared. "+err.Error())
+			}
+		}
+		if err := m.restorePhysical(ctx, &r, *from, target); err != nil {
+			return fail(502, "Restore did not finish. The new instance is marked incomplete; the backup is intact. "+err.Error())
+		}
+		r.PendingRestore = false
+		return writeJSON(m.recordPath(r.Name), r)
+	}
 	if err := m.start(ctx, &r); err != nil {
 		return fail(502, "Provisioning did not finish. The instance was kept for inspection. "+err.Error())
 	}
@@ -327,7 +364,7 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 			return fail(409, "This instance has an incomplete restore, so it has no data to back up. Delete it without a final snapshot.")
 		}
 		finish := m.track(ctx, name, "Final snapshot")
-		_, err := m.snapshot(ctx, r, "manual", true, "")
+		_, err := m.snapshot(ctx, r, "manual", true, "", false)
 		finish(err)
 		if err != nil {
 			return fail(502, "The final snapshot failed, so the database was not deleted. Start the database to take one, or delete it without a final snapshot. "+describe(err))
@@ -351,6 +388,7 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 	}
 	m.history.forget(r.Project)
 	m.forgetTLS(r)
+	m.docker.run(ctx, nil, nil, nil, "volume", "rm", "--force", r.Project+"_archive") // WAL not yet collected
 	if err := os.Remove(m.overridePath(r)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -375,6 +413,7 @@ type modification struct {
 	PublicHost          *string           `json:"publicHost"`
 	Firewall            *[]firewallRule   `json:"firewall"`
 	Pooler              *poolerSpec       `json:"pooler"` // replaced as a whole; {"enabled": false} turns it off
+	PITR                *bool             `json:"pitr"`
 	ApplyImmediately    bool              `json:"applyImmediately"`
 }
 
@@ -444,6 +483,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 			return result, err
 		}
 		next.Firewall = rules
+	}
+	if mod.PITR != nil {
+		next.PITR = *mod.PITR
 	}
 	if mod.Pooler != nil {
 		p := *mod.Pooler

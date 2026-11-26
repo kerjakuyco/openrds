@@ -49,6 +49,7 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | `access.go`, `tls.go`, `network.go` | Database users and passwords, TLS certificates, public access and the firewall gateway |
 | `pooler.go`, `engines/pooler.yaml` | Connection pooling with PgBouncer for PostgreSQL |
 | `upgrade.go`, `engines/upgrade.yaml` | Engine version upgrades that keep the endpoint |
+| `pitr.go`, `engines/pitr.yaml` | Point-in-time recovery for PostgreSQL: WAL archiving and collection, base backups, restore to a time |
 | `backups.go`, `schedule.go`, `offsite.go`, `diskspace_*.go` | Snapshots, automated backups, copies to S3-compatible storage, and the free-space reserve backups keep |
 | `quota.go`, `disk-helper.sh` | Data volume limits |
 | `metrics.go`, `insights.go`, `activity.go` | Monitoring history, engine readings and Performance insights, and the event log |

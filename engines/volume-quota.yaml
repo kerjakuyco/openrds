@@ -5,7 +5,7 @@ services:
     entrypoint:
       - sh
       - -c
-      - rmdir /var/lib/postgresql/data/lost+found /var/lib/postgresql/lost+found /var/lib/mysql/lost+found /data/lost+found 2>/dev/null || true; exec docker-entrypoint.sh "$@"
+      - rmdir /var/lib/postgresql/data/lost+found /var/lib/postgresql/lost+found /var/lib/mysql/lost+found /data/lost+found 2>/dev/null || true; [ ! -d /archive ] || chown postgres:postgres /archive; exec docker-entrypoint.sh "$@"
       - openrds
 volumes:
   data:

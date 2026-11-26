@@ -398,6 +398,9 @@ func (r record) command() []string {
 	case "postgres":
 		cmd = []string{"postgres", "-c", "ssl=on", "-c", "ssl_cert_file=" + tlsCertFile, "-c", "ssl_key_file=" + tlsKeyFile,
 			"-c", "hba_file=/run/openrds/pg_hba.conf"}
+		if r.PITR {
+			cmd = append(cmd, "-c", "archive_mode=on", "-c", "archive_timeout="+strconv.Itoa(archiveTimeout), "-c", "archive_command="+archiveCommand)
+		}
 		for _, k := range keys {
 			cmd = append(cmd, "-c", k+"="+escape(params[k]))
 		}

@@ -344,17 +344,21 @@ func handler(m *manager, a auth) http.Handler {
 		if err != nil {
 			return err
 		}
-		spec := instanceSpec{DiskGiB: b.DiskGiB}
-		if err := decode(w, r, &spec); err != nil {
+		body := struct {
+			instanceSpec
+			TargetTime *time.Time `json:"targetTime"` // physical backups: roll forward to this time
+		}{instanceSpec: instanceSpec{DiskGiB: b.DiskGiB}}
+		if err := decode(w, r, &body); err != nil {
 			return err
 		}
+		spec := body.instanceSpec
 		if spec.Parameters == nil {
 			spec.Parameters = maps.Clone(b.Parameters) // omitted or null inherits; {} restores defaults
 		}
 		if err := m.prepareNetwork(&spec); err != nil {
 			return err
 		}
-		if err := m.provision(r.Context(), spec, &b); err != nil {
+		if err := m.provisionAt(r.Context(), spec, &b, body.TargetTime); err != nil {
 			return err
 		}
 		sendJSON(w, 201, map[string]string{"name": spec.Name})
@@ -414,6 +418,7 @@ func handler(m *manager, a auth) http.Handler {
 	notifyRoutes(add, m)
 	insightRoutes(add, m)
 	upgradeRoutes(add, m)
+	pitrRoutes(add, m)
 	add("GET /api/storage/backups", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		list, err := m.remoteBackups(r.Context())
 		if err == nil {

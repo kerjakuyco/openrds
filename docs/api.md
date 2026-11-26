@@ -18,7 +18,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 
 | Method | Path (under `/api`) |
 | --- | --- |
-| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit, and with pooling `pooler` and `poolerStatus` |
+| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit, with pooling `pooler` and `poolerStatus`, and with point-in-time recovery `recovery` (`earliest`, `latest`) |
 | GET | `/engines` — engines, versions (`latest`, `stable`), the default version, suggested ports, memory minimums and adjustable parameters; `auto` on a parameter says how OpenRDS sizes it to the memory limit |
 | GET | `/host` — Docker host name, CPU count, memory capacity, engine version, `volumeQuota.state` (`supported`, `unsupported` or `unknown`) and `backupDisk` (`freeBytes`, `totalBytes`, and `reserveBytes`, the free space backups leave) and `notificationChannels` |
 | GET | `/instances/{name}/connection` (add `?user=` for a database user; each call is recorded), `/instances/{name}/metrics`, `/instances/{name}/logs`, `/instances/{name}/storage` (on-demand `usedBytes` for a running instance) |
@@ -26,8 +26,9 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | GET | `/instances/{name}/insights` — operator: `running` statements (`id`, `user`, `state`, `wait`, `seconds`, `query`), `statements` by total time (`query`, `calls`, `totalMs`, `meanMs`, `rows`; `null` with `statementsNote` when the engine does not collect them) and, for Valkey, the `slow` log |
 | POST | `/instances/{name}/insights/reset` — operator: reset statement statistics or clear the slow log; `/instances/{name}/sessions/{id}/cancel` — cancel the statement a session runs |
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
-| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `pooler` (`{"enabled", "mode", "poolSize", "maxClients", "port"}`, PostgreSQL only: `mode` `transaction` or `session`; `{"enabled": false}` turns it off; omitted settings take their defaults and a changed one keeps the port), `backupRetentionDays`, `backupWindow`, `backupIntervalHours` (1, 2, 3, 4, 6, 12 or 24), `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
+| POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `pooler` (`{"enabled", "mode", "poolSize", "maxClients", "port"}`, PostgreSQL only: `mode` `transaction` or `session`; `{"enabled": false}` turns it off; omitted settings take their defaults and a changed one keeps the port), `backupRetentionDays`, `backupWindow`, `backupIntervalHours` (1, 2, 3, 4, 6, 12 or 24), `pitr` (PostgreSQL point-in-time recovery; needs a restart, like `requireTLS`), `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
 | POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
+| POST | `/instances/{name}/restore-to-time` — operator: `{"name","port","targetTime"}` creates a new database as the source was at `targetTime` (RFC 3339), within the source's `recovery` window |
 | POST | `/instances/{name}/upgrade` — body: `{"version": "19"}`, a newer listed version: upgrades in place keeping the endpoint, after a snapshot (`note` says why it was taken); the previous version comes back if it fails |
 | POST | `/instances/{name}/password` — change the owner password: `{"password": ""}` generates one; returns `{"password"}` |
 | POST | `/instances/{name}/users` — `{"name","access","password"}` with `access` `read-only` or `read-write`; returns `{"name","password"}` |
@@ -43,7 +44,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | POST / DELETE | `/storage/backups/{id}/import` (bring a copy into the library as a snapshot), `/storage/backups/{id}` (delete a copy that is not in the library) |
 | DELETE | `/instances/{name}` — add `?finalSnapshot=true` to take a final snapshot first; refused while deletion protection is on |
 | GET | `/backups`, `/backups/{id}/download`, `/activity` |
-| POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine, version, data-volume limit and parameters are inherited. Set `version` (same or newer), `diskGiB` or `parameters` to override them. |
+| POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine, version, data-volume limit and parameters are inherited. Set `version` (same or newer), `diskGiB` or `parameters` to override them. A physical backup (`format: "physical"`) restores into its own version, and with `targetTime` rolls forward to that time using WAL from the library or backup storage. |
 | POST | `/backups/{id}/keep` — turn an automated backup into a snapshot that never expires |
 | DELETE | `/backups/{id}` |
 | GET | `/status` — public: `{"setup": true}` until the first account exists |
@@ -55,7 +56,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | POST | `/users/{id}/reset` — admin: sign the account out and issue a new link |
 | PATCH | `/account` — your `name`; POST `/account/password` with `{"current","password"}`; POST `/account/signout` ends your other sessions |
 
-Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users` and `/notifications`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, `final` for final snapshots, and `compression` (`gzip`) when OpenRDS compressed the dump, as it does for MySQL. `bytes` is the size stored and downloaded.
+Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users` and `/notifications`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, `final` for final snapshots, and `compression` (`gzip`) when OpenRDS compressed the dump, as it does for MySQL. Base backups for point-in-time recovery have `format: "physical"`, `startedAt` and `dataKey`. `bytes` is the size stored and downloaded.
 
 Operations are synchronous; the first provision may take several minutes to pull the image. A change keeps running for up to 24 hours even when the client disconnects, so a snapshot or restore of a large database finishes; `GET /activity` shows how it ended. Reads stop with their client after 30 minutes at most. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
 

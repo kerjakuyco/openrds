@@ -493,6 +493,7 @@ def exercise_storage():
     """Off-server copies in an S3-compatible gateway that checks signatures."""
     suffix = secrets.token_hex(4)
     name, restored, gateway, bucket = f"s3-{suffix}", f"s3-{suffix}-restore", f"smoke-s3-{suffix}", "openrds-smoke"
+    pitr, rewound = f"pitr-{suffix}", f"pitr-{suffix}-at"
     control = cli("docker", "compose", "ps", "-q", "openrds")
     network = cli("docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", control).split()[0]
     secret = secrets.token_hex(16)
@@ -533,17 +534,40 @@ def exercise_storage():
         # Deleting from the library deletes the copy too.
         api(f"backups/{backup['id']}", "DELETE")
         wait_for("the copy to be deleted", lambda: backup["id"] not in {b["id"] for b in api("storage/backups")}, 60)
-        print("storage: signed copies, import after loss, restore and mirrored deletes passed", flush=True)
+
+        # Point-in-time recovery after losing the server: the base backup and the WAL come back from storage.
+        api("instances", "POST", {"name": pitr, "engine": "postgres", "port": free_port(), "memoryMiB": 256, "backupRetentionDays": 1, "pitr": True})
+        base = wait_for("the first base backup", lambda: next((b for b in api("backups") if b["name"] == pitr and b.get("format") == "physical"), None), 180)
+        write_value("postgres", pitr)
+        time.sleep(2)
+        target = datetime.datetime.now(datetime.timezone.utc)
+        time.sleep(2)
+        sql("postgres", pitr, "UPDATE smoke SET id = 43")
+        sql("postgres", pitr, "SELECT pg_switch_wal()")
+        key = base["dataKey"]
+        local = lambda: set(cli("docker", "compose", "exec", "-T", "openrds", "sh", "-c", f"ls /var/lib/openrds/pitr/{key} | grep gz$ || true").split())
+        remote = lambda: set(cli("docker", "exec", gateway, "sh", "-c", f"ls /tmp/{bucket}/smoke/wal/{key} 2>/dev/null || true").split())
+        wait_for("WAL past the target", lambda: next(i for i in api("instances") if i["name"] == pitr)["recovery"].get("latest", "") > target.isoformat(), 180)
+        wait_for("the WAL copies", lambda: local() <= remote(), 180)
+        wait_for("the base backup copy", lambda: next(b for b in api("backups") if b["id"] == base["id"]).get("offsite", {}).get("status") == "copied")
+        api("storage", "DELETE")
+        api(f"backups/{base['id']}", "DELETE")
+        cli("docker", "compose", "exec", "-T", "openrds", "rm", "-rf", f"/var/lib/openrds/pitr/{key}")
+        api("storage", "PUT", settings)
+        api(f"storage/backups/{base['id']}/import", "POST")
+        api(f"backups/{base['id']}/restore", "POST", {"name": rewound, "port": free_port(), "targetTime": target.isoformat()})
+        assert read_value("postgres", rewound) == "42", "the value as it was at the target, before the update"
+        print("storage: signed copies, import after loss, restore, mirrored deletes and point-in-time recovery from storage passed", flush=True)
     finally:
         try:
             api("storage", "DELETE")
         except RuntimeError:
             pass
         for db in api("instances"):
-            if db["name"] in (name, restored):
+            if db["name"] in (name, restored, pitr, rewound):
                 api(f"instances/{db['name']}", "DELETE")
         for b in api("backups"):
-            if b["name"] in (name, restored):
+            if b["name"] in (name, restored, pitr, rewound):
                 api(f"backups/{b['id']}", "DELETE")
         subprocess.run(["docker", "rm", "-f", gateway], capture_output=True)
 

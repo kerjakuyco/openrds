@@ -30,6 +30,11 @@ type backup struct {
 	Expires *time.Time `json:"expiresAt,omitempty"`
 	Final   bool       `json:"final,omitempty"`
 	Note    string     `json:"note,omitempty"` // why OpenRDS took it, such as before an upgrade
+	// "physical" for a PostgreSQL base backup, the start of point-in-time
+	// recovery; empty for a logical dump.
+	Format  string    `json:"format,omitempty"`
+	DataKey string    `json:"dataKey,omitempty"` // whose WAL it replays
+	Started time.Time `json:"startedAt,omitzero"`
 	// The source configuration, offered again when restoring.
 	CPUs       float64           `json:"cpus,omitempty"`
 	MemoryMiB  int               `json:"memoryMiB,omitempty"`
@@ -79,6 +84,9 @@ func (m *manager) openBackupData(b backup) (io.Reader, io.Closer, error) {
 
 // The file name a download gets, such as orders-20260101-030000.sql.gz.
 func (b backup) fileName() string {
+	if b.Format == "physical" {
+		return b.Name + "-" + b.Created.Format("20060102-150405") + "-base.tar.gz"
+	}
 	name := b.Name + "-" + b.Created.Format("20060102-150405") + engines[b.Engine].suffix
 	if b.Compression == "gzip" {
 		name += ".gz"
@@ -234,11 +242,12 @@ func (m *manager) makeBackup(ctx context.Context, name, kind string) (b backup, 
 	}
 	finish := m.track(ctx, name, label)
 	defer func() { finish(err) }()
-	return m.snapshot(ctx, r, kind, false, "")
+	// With point-in-time recovery on, automated backups are base backups.
+	return m.snapshot(ctx, r, kind, false, "", kind == "automated" && r.archiving())
 }
 
 // Write one logical backup while the caller holds the instance.
-func (m *manager) snapshot(ctx context.Context, r record, kind string, final bool, note string) (b backup, err error) {
+func (m *manager) snapshot(ctx context.Context, r record, kind string, final bool, note string, physical bool) (b backup, err error) {
 	if err := m.checkBackupSpace(m.expectedBackupBytes(r.Name)); err != nil {
 		return b, err
 	}
@@ -253,14 +262,18 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 	}
 	eng := engines[r.Engine]
 	args := append([]string{"exec", "-T", "db"}, eng.dump...)
+	if physical {
+		args = append([]string{"exec", "-T", "db"}, baseBackupCommand...)
+	}
 	var input io.Reader
 	if eng.dumpAuth {
 		input = strings.NewReader(r.Password + "\n")
 	}
+	started := time.Now().UTC()
 	guard := m.guardSpace(f)
 	out := &countingWriter{w: guard}
 	var z *gzip.Writer
-	if eng.compress {
+	if eng.compress || physical {
 		z, _ = gzip.NewWriterLevel(guard, gzip.BestSpeed) // fast enough to keep up with the dump
 		out.w = z
 	}
@@ -292,6 +305,9 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 		Kind: kind, Final: final, Note: note, CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, Parameters: maps.Clone(r.Parameters)}
 	if z != nil {
 		b.Compression = "gzip"
+	}
+	if physical {
+		b.Format, b.DataKey, b.Started = "physical", r.diskKey(), started
 	}
 	if kind == "automated" {
 		expires := b.Created.AddDate(0, 0, r.BackupRetentionDays)
