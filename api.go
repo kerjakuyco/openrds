@@ -413,6 +413,7 @@ func handler(m *manager, a auth) http.Handler {
 	})
 	notifyRoutes(add, m)
 	insightRoutes(add, m)
+	upgradeRoutes(add, m)
 	add("GET /api/storage/backups", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		list, err := m.remoteBackups(r.Context())
 		if err == nil {

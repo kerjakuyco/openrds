@@ -95,6 +95,11 @@ type record struct {
 	Applied *runtimeConfig `json:"applied,omitempty"`
 	Users   []dbUser       `json:"users,omitempty"`
 	Layout  int            `json:"layout,omitempty"` // of the running container; see currentLayout
+	// Which data volume holds the data: an engine upgrade moves it to a new one.
+	DataGeneration int `json:"dataGeneration,omitempty"`
+	// While an upgrade restores data, the new container has no host port and
+	// another network name, so clients cannot reach a half-filled database.
+	staging bool
 }
 
 type manager struct {

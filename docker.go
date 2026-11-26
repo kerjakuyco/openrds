@@ -132,6 +132,15 @@ func shmBytes(memoryMiB int) string {
 	return strconv.FormatInt(int64(memoryMiB)<<20, 10)
 }
 
+// The database's name on its Docker network; another one while an upgrade
+// fills it, so clients do not find it early.
+func dbAlias(r record) string {
+	if r.staging {
+		return "openrds-" + r.Name + "-upgrading"
+	}
+	return "openrds-" + r.Name
+}
+
 func valkeyMaxMemory(memoryMiB int) string {
 	if memoryMiB <= 0 {
 		return "0"
@@ -148,7 +157,7 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		"OPENRDS_DB_PORT=" + strconv.Itoa(r.Port),
 		"OPENRDS_DB_IMAGE=" + r.image(),
 		"OPENRDS_DATA_MOUNT=" + r.dataMount(),
-		"OPENRDS_DB_ALIAS=openrds-" + r.Name,
+		"OPENRDS_DB_ALIAS=" + dbAlias(r),
 		"OPENRDS_DB_CPUS=" + strconv.FormatFloat(r.CPUs, 'f', -1, 64),
 		"OPENRDS_DB_MEMORY=" + strconv.FormatInt(int64(r.MemoryMiB)*1024*1024, 10),
 		"OPENRDS_DB_SHM=" + shmBytes(r.MemoryMiB),
@@ -158,7 +167,10 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 	}
 	if r.DiskGiB > 0 {
 		base = append(base, "--file", filepath.Join(m.templates, "volume-quota.yaml"))
-		env = append(env, "OPENRDS_DISK_LINK="+r.Project)
+		env = append(env, "OPENRDS_DISK_LINK="+r.diskKey())
+	}
+	if r.staging {
+		base = append(base, "--file", filepath.Join(m.templates, "upgrade.yaml"))
 	}
 	files, err := m.injected(r)
 	if err != nil {

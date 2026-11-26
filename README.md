@@ -48,7 +48,7 @@ Each database runs in its own container with its own volume, network and generat
 | **MySQL** | 9.7 LTS (latest), 8.4 LTS (stable) | 8.4 | `mysqldump` with routines, events and triggers |
 | **Valkey** (Redis compatible) | 9.2 (latest), 9.1 (stable), 9.0, 8.1, 8.0, 7.2 | 9.1 | RDB snapshot |
 
-A database keeps its version until you choose to upgrade it by restoring a snapshot into a newer version. [More about versions](docs/guide.md#engine-versions).
+A database keeps its version until you upgrade it: **Upgrade** moves it to a newer version in place, keeping its endpoint, credentials and users, with a snapshot taken first. [More about versions](docs/guide.md#engine-versions).
 
 ## Screenshots
 
@@ -133,7 +133,6 @@ OpenRDS grows toward the managed-database experience, one release at a time. Ide
 
 - Point-in-time restore
 - Read replicas
-- Major version upgrades that keep the endpoint
 
 Have a different idea? [Request a feature](https://github.com/kerjakuyco/openrds/issues/new?template=feature_request.yml) or upvote an existing one.
 

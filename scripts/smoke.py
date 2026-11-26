@@ -266,7 +266,20 @@ def exercise_versions(quotas):
                     assert isinstance(err.__cause__, urllib.error.HTTPError) and err.__cause__.code == 400, err
                 else:
                     raise AssertionError("restore into an older version accepted")
-            print(f"{engine}: {oldest} snapshot restored into {latest}; unlisted and older versions refused", flush=True)
+            # In place: the same database moves to the latest version and keeps its port, credentials and data.
+            before = api(f"instances/{name}/connection")
+            api(f"instances/{name}/upgrade", "POST", {"version": latest})
+            after = api(f"instances/{name}/connection")
+            assert (after["port"], after["password"], after["network"]) == (before["port"], before["password"], before["network"]), after
+            assert server_version(engine, name) == latest and read_value(engine, name) == "42"
+            assert any(b["name"] == name and b["version"] == oldest and "Before the upgrade" in b.get("note", "") for b in api("backups"))
+            try:
+                api(f"instances/{name}/upgrade", "POST", {"version": oldest})
+            except RuntimeError as err:
+                assert isinstance(err.__cause__, urllib.error.HTTPError) and err.__cause__.code == 400, err
+            else:
+                raise AssertionError("an upgrade to an older version was accepted")
+            print(f"{engine}: {oldest} snapshot restored into {latest}, upgraded in place keeping the endpoint; unlisted and older versions refused", flush=True)
         finally:
             for db in api("instances"):
                 if db["name"] in (name, target, older):
@@ -377,6 +390,11 @@ def exercise_pooler():
         fresh = api(f"instances/{name}/connection")
         must("postgres", pooled(fresh), "SELECT 1")
         refuses("postgres", pooled(owner), "SELECT 1")
+        # Two changes within a second still reach the pooler.
+        api(f"instances/{name}/password", "POST", {"password": ""})
+        api(f"instances/{name}/password", "POST", {"password": ""})
+        fresh = api(f"instances/{name}/connection")
+        must("postgres", pooled(fresh), "SELECT 1")
 
         assert api(f"instances/{name}/modify", "POST", {"requireTLS": True, "applyImmediately": True})["restarted"]
         must("postgres", pooled(fresh), "SELECT 1", tls="verify")

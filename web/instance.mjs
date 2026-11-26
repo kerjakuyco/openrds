@@ -232,7 +232,7 @@ const SIGNATURE = {
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
   insights: d => JSON.stringify([d.status, d.pendingRestore, state.me?.role]),
   logs: () => "",
-  configuration: d => JSON.stringify([d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
+  configuration: d => JSON.stringify([d.version, d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
     d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, state.me?.role]),
   backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt]),
   tags: d => JSON.stringify(d.tags || {}),

@@ -399,6 +399,7 @@ h3.sub .icon { color: var(--muted); width: 17px; height: 17px }
 .checks .check { font-size: 12px; align-items: center; gap: 6px }
 .category-checks { border: 0; padding: 0; margin: 0; display: grid; gap: 10px }
 .chips { display: flex; flex-wrap: wrap; gap: 4px }
+.plain-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; line-height: 1.5 }
 code.statement { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 12px; line-height: 1.45 }
 .param-editor > .row select { flex: 1 1 220px; max-width: 360px }
 .tag-editor { display: grid; gap: 10px; justify-items: start }

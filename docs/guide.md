@@ -22,7 +22,14 @@ The initial PostgreSQL role administers its isolated cluster; the MySQL user has
 | MySQL | 9.7 LTS (latest), 8.4 LTS (stable) | 8.4 |
 | Valkey | 9.2 (latest), 9.1 (stable), 9.0, 8.1, 8.0, 7.2 | 9.1 |
 
-A database keeps its engine version, so nothing upgrades by surprise. To upgrade, take a snapshot and restore it into a new database on a newer version. The restore form offers the snapshot's version or newer, never an older one, because newer versions read backups from older ones but not the other way round. Databases created before versions could be chosen keep the version they started with (PostgreSQL 17, MySQL 8.4, Valkey 9.1). `GET /api/engines` lists the versions.
+A database keeps its engine version, so nothing upgrades by surprise. To move to a newer version, choose **Configuration → Engine version → Upgrade**, like RDS's *Modify engine version*. The database keeps its name, port, Docker network name, passwords, users, pooler, public access and settings, so applications need no change:
+
+1. OpenRDS downloads the new version first, so that adds no downtime.
+2. It keeps clients out (PostgreSQL accepts only local connections, MySQL goes into offline mode, Valkey pauses writes) and takes a snapshot, noted *Before the upgrade to …*, which is kept.
+3. It stops the database and starts the new version on a fresh data volume, with no host port and another network name, restores the snapshot and recreates the database users.
+4. It starts the new version on the database's own port and network name, with its gateway and pooler, and removes the previous version's volume.
+
+Clients are disconnected for about as long as a snapshot and a restore of the database take: about 10 seconds for a small one. Writes that arrive meanwhile are refused, never lost after being accepted. If any step fails, the previous version starts again on its untouched volume with all its data, and the snapshot stays. Versions only go up. A database with a disk limit gets a new disk of the same size for the new version. To try a version without touching a database, restore a snapshot into a new one: the restore form offers the snapshot's version or newer, never an older one, because newer versions read backups from older ones but not the other way round. Databases created before versions could be chosen keep the version they started with (PostgreSQL 17, MySQL 8.4, Valkey 9.1). `GET /api/engines` lists the versions.
 
 ## Access and security
 

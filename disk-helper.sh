@@ -5,7 +5,8 @@
 set -eu
 
 link_ok() {
-  printf '%s' "${OPENRDS_LINK:-}" | grep -Eq '^openrds-db-[a-f0-9]{32}$'
+  # An engine upgrade gives the database a new disk: <project>-<generation>.
+  printf '%s' "${OPENRDS_LINK:-}" | grep -Eq '^openrds-db-[a-f0-9]{32}(-[1-9][0-9]{0,8})?$'
 }
 
 image_ok() {

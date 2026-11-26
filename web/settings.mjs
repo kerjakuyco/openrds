@@ -197,6 +197,42 @@ function storageUsage(d) {
   return [measure, measured];
 }
 
+// Dotted versions compared numerically: 9.10 is newer than 9.7.
+const newer = (a, b) => {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+
+// Upgrade to a newer engine version, keeping the endpoint, like RDS's
+// "Modify engine version".
+export function upgradeEngine(d) {
+  const eng = engine(d.engine);
+  const options = (eng?.versions || []).filter(v => newer(v.version, d.version));
+  if (!options.length) {
+    modal({ title: "Engine version", kicker: d.name, confirm: "Close", cancel: "", body: h("p", { class: "muted" }, `${d.engineLabel} is the newest version OpenRDS offers.`), run: async () => {} });
+    return;
+  }
+  const suggested = options.find(v => v.status === "stable") || options[0]; // the catalog lists newest first
+  const version = select(options.map(v => [v.version, `${eng.title} ${v.version}${v.lts ? " LTS" : ""}${v.status === "latest" ? " · Latest" : v.status === "stable" ? " · Stable" : ""}`]), suggested.version);
+  modal({
+    title: "Upgrade engine version", kicker: d.name, confirm: "Upgrade", tone: "danger", typed: d.name, wide: true,
+    body: [
+      field("New version", version, { hint: `From ${d.engineLabel}. Versions only go up.` }),
+      h("ul", { class: "plain-list" },
+        h("li", null, h("strong", null, "Downtime. "), "Clients are disconnected while OpenRDS copies the data, about as long as a snapshot and a restore of this database."),
+        h("li", null, h("strong", null, "Same endpoint. "), "The port, network name, passwords, users, pooler and settings stay as they are."),
+        h("li", null, h("strong", null, "Safe to try. "), "A snapshot is taken first and kept. If anything fails, the current version comes back with all its data.")),
+      d.applied ? alertBox("Pending changes apply during the upgrade.", "info") : null,
+    ],
+    run: async () => {
+      const target = version.value;
+      track(`Upgrade ${d.name} to ${eng.title} ${target}`, api(`instances/${d.name}/upgrade`, { method: "POST", body: { version: target } }),
+        { success: `${d.name} now runs ${eng.title} ${target}.` });
+    },
+  });
+}
+
 // The settings list on the Configuration tab.
 export function settingsPanel(d) {
   const why = blocked(d);
@@ -214,6 +250,7 @@ export function settingsPanel(d) {
   const stopped = ["stopped", "not provisioned"].includes(d.status);
   return panel("Settings", { description: "Change one thing at a time." },
     h("div", { class: "set-list" },
+      row("Engine version", "Upgrades keep the endpoint.", d.engineLabel, change("Upgrade", upgradeEngine, !isLive(d) || d.pendingRestore)),
       row("Instance size", "CPU and memory limits.", sizeLabel(d), change("Change", editSize)),
       row("Host port", "Private to this server.", h("code", null, String(d.port)), change("Change", editPort)),
       row("Storage", d.diskGiB ? "Resize while stopped." : "No size limit.", h("span", { class: "row tight" }, d.diskGiB ? `${d.diskGiB} GiB limit` : "Uncapped", ...storageUsage(d)),

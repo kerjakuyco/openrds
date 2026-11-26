@@ -1,0 +1,5 @@
+# While an engine upgrade restores data into the new version, the database
+# publishes no host port; its network name also differs (OPENRDS_DB_ALIAS).
+services:
+  db:
+    ports: !reset []

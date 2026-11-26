@@ -447,6 +447,9 @@ func (m *manager) writeOverride(r record, secrets, poolerSecrets string) (string
 		services["pooler"] = map[string]any{"labels": map[string]string{"io.openrds.secrets": poolerSecrets}}
 	}
 	doc := map[string]any{"services": services}
+	if r.DataGeneration > 0 {
+		doc["volumes"] = map[string]any{"data": map[string]any{"name": r.dataVolume()}}
+	}
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return "", err

@@ -29,6 +29,7 @@ type backup struct {
 	Kind    string     `json:"kind"`
 	Expires *time.Time `json:"expiresAt,omitempty"`
 	Final   bool       `json:"final,omitempty"`
+	Note    string     `json:"note,omitempty"` // why OpenRDS took it, such as before an upgrade
 	// The source configuration, offered again when restoring.
 	CPUs       float64           `json:"cpus,omitempty"`
 	MemoryMiB  int               `json:"memoryMiB,omitempty"`
@@ -233,11 +234,11 @@ func (m *manager) makeBackup(ctx context.Context, name, kind string) (b backup, 
 	}
 	finish := m.track(ctx, name, label)
 	defer func() { finish(err) }()
-	return m.snapshot(ctx, r, kind, false)
+	return m.snapshot(ctx, r, kind, false, "")
 }
 
 // Write one logical backup while the caller holds the instance.
-func (m *manager) snapshot(ctx context.Context, r record, kind string, final bool) (b backup, err error) {
+func (m *manager) snapshot(ctx context.Context, r record, kind string, final bool, note string) (b backup, err error) {
 	if err := m.checkBackupSpace(m.expectedBackupBytes(r.Name)); err != nil {
 		return b, err
 	}
@@ -288,7 +289,7 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 		return b, fail(502, "The database returned an empty backup.")
 	}
 	b = backup{ID: randomHex(16), Name: r.Name, Engine: r.Engine, Version: r.version(), Created: time.Now().UTC(), Bytes: info.Size(), DiskGiB: r.DiskGiB,
-		Kind: kind, Final: final, CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, Parameters: maps.Clone(r.Parameters)}
+		Kind: kind, Final: final, Note: note, CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, Parameters: maps.Clone(r.Parameters)}
 	if z != nil {
 		b.Compression = "gzip"
 	}

@@ -251,6 +251,16 @@ async function run() {
     assert.equal(await page.getByLabel("max_connections value").inputValue(), "120");
     await page.getByRole("link", { name: "Cancel" }).click();
 
+    // Engine upgrade in place: the same database moves to the latest version.
+    await page.goto(`${base}/#/databases/${name}/configuration`);
+    const versionRow = page.locator(".set-row").filter({ hasText: "Engine version" });
+    await versionRow.getByRole("button", { name: "Upgrade" }).click();
+    const upgrade = page.getByRole("dialog");
+    await upgrade.getByText("Same endpoint.", { exact: false }).waitFor();
+    await upgrade.getByRole("textbox").fill(name);
+    await upgrade.getByRole("button", { name: "Upgrade" }).click();
+    await page.getByText(`${name} now runs PostgreSQL`, { exact: false }).waitFor({ timeout: 300000 });
+
     await page.locator('nav#nav [data-nav="events"]').click();
     await page.locator("#result-filter").selectOption("completed");
     await page.locator("#activity-list tr").filter({ hasText: name }).filter({ hasText: "Create snapshot" }).waitFor();
@@ -305,7 +315,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, snapshot, deferred modify and reboot, search, restore form, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, snapshot, deferred modify and reboot, search, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

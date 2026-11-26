@@ -83,13 +83,13 @@ func (m *manager) diskImagePath(ctx context.Context, project string) (string, er
 }
 
 func (m *manager) diskHelper(ctx context.Context, command string, r record, gib int) error {
-	image, err := m.diskImagePath(ctx, r.Project)
+	image, err := m.diskImagePath(ctx, r.diskKey())
 	if err != nil {
 		return err
 	}
 	return m.docker.run(ctx, nil, nil, nil, "run", "--rm", "--privileged", "--pid=host",
 		"--mount", "type=volume,src="+diskImageVolume+",dst=/images",
-		"--env", "OPENRDS_LINK="+r.Project,
+		"--env", "OPENRDS_LINK="+r.diskKey(),
 		"--env", "OPENRDS_BYTES="+quotaBytes(gib),
 		"--env", "OPENRDS_IMAGE="+image,
 		diskHelperImage(), command)
@@ -194,7 +194,7 @@ func (m *manager) checkDiskRequest(ctx context.Context, gib int) error {
 // Compose can reuse a pre-existing volume by name. Never adopt an uncapped,
 // differently sized, or unrelated volume for a capped instance.
 func (m *manager) checkExistingVolume(ctx context.Context, r record) error {
-	name := r.Project + "_data"
+	name := r.dataVolume()
 	var out bytes.Buffer
 	if err := m.docker.run(ctx, nil, nil, &out, "volume", "ls", "--quiet", "--filter", "name=^"+name+"$"); err != nil {
 		return err
@@ -207,7 +207,7 @@ func (m *manager) checkExistingVolume(ctx context.Context, r record) error {
 	if err := m.docker.run(ctx, nil, nil, &out, "volume", "inspect", "--format", format, name); err != nil {
 		return err
 	}
-	if strings.TrimSpace(out.String()) != "local|ext4|/dev/openrds/"+r.Project+"|"+r.Project+"|data" {
+	if strings.TrimSpace(out.String()) != "local|ext4|/dev/openrds/"+r.diskKey()+"|"+r.Project+"|data" {
 		return fmt.Errorf("existing volume %s does not match this instance’s capped ext4 volume; it was left intact", name)
 	}
 	return nil

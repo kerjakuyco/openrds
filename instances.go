@@ -327,7 +327,7 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 			return fail(409, "This instance has an incomplete restore, so it has no data to back up. Delete it without a final snapshot.")
 		}
 		finish := m.track(ctx, name, "Final snapshot")
-		_, err := m.snapshot(ctx, r, "manual", true)
+		_, err := m.snapshot(ctx, r, "manual", true, "")
 		finish(err)
 		if err != nil {
 			return fail(502, "The final snapshot failed, so the database was not deleted. Start the database to take one, or delete it without a final snapshot. "+describe(err))

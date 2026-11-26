@@ -28,6 +28,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | POST | `/instances/{name}/start`, `/instances/{name}/stop`, `/instances/{name}/reboot`, `/instances/{name}/backups` |
 | POST | `/instances/{name}/modify` — any of `cpus`, `memoryMiB`, `port`, `pooler` (`{"enabled", "mode", "poolSize", "maxClients", "port"}`, PostgreSQL only: `mode` `transaction` or `session`; `{"enabled": false}` turns it off; omitted settings take their defaults and a changed one keeps the port), `backupRetentionDays`, `backupWindow`, `backupIntervalHours` (1, 2, 3, 4, 6, 12 or 24), `deletionProtection`, `tags`, `parameters`, `requireTLS`, `publicAccess`, `publicPort`, `publicHost`, `firewall` (`[{"cidr","description"}]`), plus `applyImmediately`; returns `{"restarted": …, "pendingRestart": …}`. Tags and parameters are replaced as a whole. |
 | POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
+| POST | `/instances/{name}/upgrade` — body: `{"version": "19"}`, a newer listed version: upgrades in place keeping the endpoint, after a snapshot (`note` says why it was taken); the previous version comes back if it fails |
 | POST | `/instances/{name}/password` — change the owner password: `{"password": ""}` generates one; returns `{"password"}` |
 | POST | `/instances/{name}/users` — `{"name","access","password"}` with `access` `read-only` or `read-write`; returns `{"name","password"}` |
 | POST / DELETE | `/instances/{name}/users/{user}/password` (change), `/instances/{name}/users/{user}` (delete and end its sessions) |

@@ -60,7 +60,9 @@ func (f *fakeDocker) run(_ context.Context, env []string, in io.Reader, out io.W
 			}
 			f.running[project] = true
 		case "stop":
-			f.running[project] = false
+			if slices.Contains(args, "db") { // stopping only the gateway or pooler leaves the database running
+				f.running[project] = false
+			}
 		case "down":
 			delete(f.running, project)
 		case "exec":
