@@ -300,7 +300,8 @@ export function settingsPanel(d) {
   const stopped = ["stopped", "not provisioned"].includes(d.status);
   return panel("Settings", { description: "Change one thing at a time." },
     h("div", { class: "set-list" },
-      row("Engine version", "Upgrades keep the endpoint.", d.engineLabel, change("Upgrade", upgradeEngine, !isLive(d) || d.pendingRestore)),
+      row("Engine version", d.replicaOf ? `Follows ${d.replicaOf}.` : d.replicas?.length ? "Promote or delete read replicas first." : "Upgrades keep the endpoint.", d.engineLabel,
+        change("Upgrade", upgradeEngine, !isLive(d) || d.pendingRestore || Boolean(d.replicaOf) || Boolean(d.replicas?.length))),
       row("Instance size", "CPU and memory limits.", sizeLabel(d), change("Change", editSize)),
       row("Host port", "Private to this server.", h("code", null, String(d.port)), change("Change", editPort)),
       row("Storage", d.diskGiB ? "Resize while stopped." : "No size limit.", h("span", { class: "row tight" }, d.diskGiB ? `${d.diskGiB} GiB limit` : "Uncapped", ...storageUsage(d)),
@@ -308,6 +309,6 @@ export function settingsPanel(d) {
       row("Automated backups", "On a schedule, in a quiet window.", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} · ${scheduleLabel(d.backupWindow, d.backupIntervalHours)}` : h("span", { class: "status warn" }, icon("alert"), "Off"),
         change("Change", editBackups)),
       row("Require TLS", d.tlsReady ? "Refuse unencrypted connections." : "Reboot once to turn this on.", d.requireTLS ? "On" : "Off", tlsSwitch(d, why || (!d.tlsReady ? "Reboot first." : ""))),
-      d.engine === "postgres" ? row("Point-in-time recovery", d.backupRetentionDays ? "Restore to any second of the retention period." : "Needs automated backups.", d.pitr ? "On" : "Off", pitrSwitch(d, why)) : null,
+      d.engine === "postgres" && !d.replicaOf ? row("Point-in-time recovery", d.backupRetentionDays ? "Restore to any second of the retention period." : "Needs automated backups.", d.pitr ? "On" : "Off", pitrSwitch(d, why)) : null,
       row("Deletion protection", "Blocks deleting the database.", d.deletionProtection ? "On" : "Off", protectionSwitch(d, why))));
 }

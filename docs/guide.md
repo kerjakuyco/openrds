@@ -52,6 +52,18 @@ PostgreSQL gives every connection its own process, so an app with many workers, 
 
 The pooler listens on its own loopback port (6432, or the next free port) and as `openrds-<name>-pooler:6432` on the database's Docker network, and the connection guide adds a **Through the connection pooler** string. It accepts the owner and every database user with their passwords; a new user or password works through it at once, without disconnecting anyone. It uses TLS when the client asks, or always when the database requires TLS, and the database's certificate names the pooler, so `sslmode=verify-full` works. Changing pooling settings restarts only the pooler, so clients connected through it reconnect. Public access still reaches the database directly. In a test with `max_connections` 20, 60 `pgbench` clients failed directly with *too many clients already* and ran without errors through the pooler.
 
+## Read replicas
+
+A **read replica** is a read-only copy of a database that follows its changes, usually within a second. Send reports, dashboards and other reads to replicas to take load off the source. Create one from **Connectivity & security → Read replicas** or **Actions → Create read replica**; a database can have up to 5.
+
+- A replica is a database of its own: its own port and Docker network name (`openrds-<replica>`), size, connection pooler, public access, backups and tags. It starts with its source's storage, parameters and TLS setting. It runs its source's engine version.
+- It has the **same users and passwords** as its source. Create users and change passwords on the source; they reach its replicas at once.
+- **PostgreSQL** copies the source with `pg_basebackup` and streams its WAL through a replication slot. The slot keeps WAL on the source while a replica is away, up to a quarter of the source's disk limit (16 GB without one); a replica that falls further behind stops and must be created again. A replica needs `max_connections` and `max_worker_processes` at least as high as its source's, so raise them on replicas first. **MySQL** loads a consistent dump of the source and applies its binary log from that point; the replica is read-only even for administrators. **Valkey** copies the data with its own replication, over TLS when the source requires it. Replication connections always use TLS for PostgreSQL and MySQL.
+- The source keeps running while a replica is created. Other changes to the source wait until its data is copied.
+- **Connectivity & security** shows each replica's state and lag, and **Monitoring** charts a PostgreSQL or MySQL replica's lag. Notifications report a replica that stops replicating, cannot reach its running source for 10 minutes, or falls 10 minutes behind, and when it recovers.
+- **Promote** makes a replica a standalone database that accepts writes, keeping its endpoint, data, users and settings. The source is not changed. To replicate again, create a new replica.
+- A database with replicas cannot be deleted or upgraded: promote or delete its replicas first. Point-in-time recovery stays on the source.
+
 ## Modify, reboot and protect
 
 For one change at a time, use the database's **Configuration** tab: each setting (instance size, host port, storage, automated backups, Require TLS, deletion protection and engine parameters) has its own **Change** button or switch, and changes that need a restart ask whether to apply now or at the next restart.

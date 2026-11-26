@@ -233,7 +233,8 @@ func pgHBA(r record) string {
 	lines := []string{
 		"# Managed by OpenRDS. Changes here are replaced at the next restart.",
 		"local all all trust",
-		"local replication all trust", // base backups for point-in-time recovery
+		"local replication all trust", // base backups for point-in-time recovery and replicas
+		"hostssl replication " + replicationUser + " all scram-sha-256",
 		"host all all 127.0.0.1/32 scram-sha-256",
 		"host all all ::1/128 scram-sha-256",
 		"hostssl all all all scram-sha-256",

@@ -71,7 +71,7 @@ func checkDBUser(r record, name, access string) error {
 	if !dbUserPattern.MatchString(name) {
 		return fail(400, "Start the username with a letter and use up to 32 lowercase letters, digits and underscores.")
 	}
-	if slices.Contains(reservedUsers, name) || strings.HasPrefix(name, "pg_") || strings.HasPrefix(name, "mysql") {
+	if slices.Contains(reservedUsers, name) || strings.HasPrefix(name, "pg_") || strings.HasPrefix(name, "mysql") || strings.HasPrefix(name, "openrds") {
 		return fail(400, fmt.Sprintf("%q is reserved. Choose another username.", name))
 	}
 	if access != "read-only" && access != "read-write" {
@@ -131,11 +131,24 @@ func valkeyUsers(r record) string {
 	for _, u := range r.Users {
 		fmt.Fprintf(&b, "user %s\n", valkeyUserRule(u))
 	}
+	switch {
+	case r.ReplicaOf != "":
+		b.WriteString(valkeyReplicaConfig(r))
+	case r.ReplicationPassword != "":
+		// Replicas sign in as this user, which can only replicate.
+		fmt.Fprintf(&b, "user %s on #%s +psync +replconf +ping\n", replicationUser, valkeyHash(r.ReplicationPassword))
+	}
 	return b.String()
 }
 
 // Run statements inside the container as the engine's local administrator.
 func (m *manager) admin(ctx context.Context, r record, script string) error {
+	_, err := m.query(ctx, r, script)
+	return err
+}
+
+// Like admin, returning what the statements print.
+func (m *manager) query(ctx context.Context, r record, script string) (string, error) {
 	var args []string
 	input := script
 	switch r.Engine {
@@ -155,7 +168,7 @@ func (m *manager) admin(ctx context.Context, r record, script string) error {
 			err = fmt.Errorf("valkey: %s", line)
 		}
 	}
-	return err
+	return out.String(), err
 }
 
 // Replace the users file in a running Valkey container, so a restart by
@@ -232,6 +245,8 @@ func (m *manager) beginAccess(ctx context.Context, name string) (record, func(),
 		return r, nil, fail(503, "Cannot read database status: "+err.Error())
 	}
 	switch {
+	case r.ReplicaOf != "":
+		err = fail(409, fmt.Sprintf("%s is a read replica: it has the users and passwords of %s. Change them there.", r.Name, r.ReplicaOf))
 	case r.PendingRestore:
 		err = fail(409, "This instance has an incomplete restore.")
 	case states[r.Project] != "running":
@@ -266,7 +281,7 @@ func (m *manager) applyAccess(ctx context.Context, current, next record, script 
 			return fail(502, "The change is active in the database. The connection pooler gets it when it restarts: "+err.Error())
 		}
 	}
-	return nil
+	return m.propagateAccess(ctx, current, next, script)
 }
 
 // Change the owner's password (user empty or the owner) or an extra user's.

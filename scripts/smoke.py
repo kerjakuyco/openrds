@@ -322,7 +322,7 @@ def client(engine, c, query, tls=None):
     done = subprocess.run(["docker", "run", "--rm", "--network", c["network"], "--env", variable, "--env", "CA", "--env", "Q",
                            "--entrypoint", "sh", image, "-c", script], env=env, capture_output=True, text=True)
     out = (done.stdout + done.stderr).strip()
-    ok = done.returncode == 0 and not any(code in out for code in ("NOPERM", "NOAUTH", "WRONGPASS", "ERR "))
+    ok = done.returncode == 0 and not any(code in out for code in ("NOPERM", "NOAUTH", "WRONGPASS", "READONLY", "ERR "))
     return ok, out
 
 
@@ -406,6 +406,36 @@ def exercise_pooler():
         print("postgres: connection pooling with more clients than max_connections, users, passwords and TLS passed", flush=True)
     finally:
         api(f"instances/{name}", "DELETE")
+
+
+def exercise_replicas(engine):
+    """A read replica: copied, follows its source, refuses writes, keeps its source, then is promoted."""
+    source = f"smoke-src-{secrets.token_hex(3)}"
+    replica = f"{source}-replica"
+    api("instances", "POST", {"name": source, "engine": engine, "port": free_port(), "memoryMiB": {"postgres": 256, "mysql": 1024, "valkey": 128}[engine]})
+    try:
+        write_value(engine, source)
+        api(f"instances/{source}/replicas", "POST", {"name": replica, "port": free_port()})
+        try:
+            state = api(f"instances/{replica}/replication")
+            assert state["state"] == "replicating", state
+            assert read_value(engine, replica) == "42"
+            src, rep = api(f"instances/{source}/connection"), api(f"instances/{replica}/connection")
+            assert rep["password"] == src["password"] and rep["networkHost"] == f"openrds-{replica}"
+            valkey = engine == "valkey"
+            refuses(engine, rep, ["SET", "x", "1"] if valkey else "INSERT INTO smoke VALUES (7)")
+            must(engine, src, ["SET", "later", "7"] if valkey else "INSERT INTO smoke VALUES (7)")
+            wait_for(f"{engine} replica to receive a new write",
+                     lambda: must(engine, rep, ["GET", "later"] if valkey else "SELECT COUNT(*) FROM smoke") == ("7" if valkey else "2"), 60)
+            refused(f"instances/{source}", "DELETE", 409)
+            api(f"instances/{replica}/promote", "POST")
+            must(engine, rep, ["SET", "x", "1"] if valkey else "INSERT INTO smoke VALUES (8)")
+            assert "replicaOf" not in next(i for i in api("instances") if i["name"] == replica)
+        finally:
+            api(f"instances/{replica}", "DELETE")
+    finally:
+        api(f"instances/{source}", "DELETE")
+    print(f"{engine}: read replica copied, followed its source, refused writes and was promoted", flush=True)
 
 
 def exercise_security(engine):
@@ -504,12 +534,15 @@ def exercise_storage():
     try:
         wait_for("the gateway", lambda: subprocess.run(["docker", "exec", gateway, "mkdir", "-p", f"/tmp/{bucket}"]).returncode == 0, 30)
         wrong = {**settings, "secretAccessKey": "not-the-secret-0000"}
-        try:
-            api("storage/test", "POST", wrong)
-        except RuntimeError as err:
-            assert "access denied" in str(err), err
-        else:
+
+        def refusal():
+            try:
+                api("storage/test", "POST", wrong)
+            except RuntimeError as err:
+                return str(err)
             raise AssertionError("a wrong secret was accepted")
+        # The gateway takes a moment to listen after its container starts.
+        assert "access denied" in wait_for("the gateway to answer", lambda: (lambda e: "cannot reach" not in e and e)(refusal()), 60)
         wait_for("the connection", lambda: api("storage", "PUT", settings)["enabled"], 30)
         api("instances", "POST", {"name": name, "engine": "postgres", "port": free_port(), "memoryMiB": 256})
         write_value("postgres", name)
@@ -630,6 +663,8 @@ if __name__ == "__main__":
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise_security(database_engine)
     exercise_pooler()
+    for database_engine in ("postgres", "mysql", "valkey"):
+        exercise_replicas(database_engine)
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise(database_engine, quota == "supported")
     exercise_versions(quota == "supported")

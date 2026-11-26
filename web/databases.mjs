@@ -83,7 +83,7 @@ export function databasesView() {
         return radio;
       } },
       { key: "name", label: "DB identifier", sort: d => d.name, value: d => h("div", { class: "db-cell" }, h("span", { class: `engine-badge ${d.engine}`, "aria-hidden": "true" }, { postgres: "PG", mysql: "My", valkey: "Vk" }[d.engine]),
-        h("span", { class: "stack" }, h("a", { href: `#/databases/${d.name}`, class: "db-link", "aria-label": `Open ${d.name}` }, d.name), h("small", null, d.engineLabel),
+        h("span", { class: "stack" }, h("a", { href: `#/databases/${d.name}`, class: "db-link", "aria-label": `Open ${d.name}` }, d.name), h("small", null, d.replicaOf ? `${d.engineLabel} · replica of ${d.replicaOf}` : d.engineLabel),
           Object.keys(d.tags || {}).length ? h("span", { class: "tag-chips" }, Object.entries(d.tags).slice(0, 2).map(([k, v]) => h("span", { class: "tag-chip" }, v ? `${k}: ${v}` : k))) : null)) },
       { key: "status", label: "Status", sort: d => (d.busy ? "0" : "") + d.status, value: status },
       { key: "size", label: "Size", sort: d => d.cpus * 1e6 + d.memoryMiB, value: d => sizeLabel(d) },

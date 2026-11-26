@@ -92,6 +92,13 @@ func (m *manager) upgrade(ctx context.Context, name, version string) (err error)
 		return fail(409, "This instance has an incomplete restore.")
 	case r.Layout < currentLayout:
 		return fail(409, fmt.Sprintf("Reboot %s once first. It was started by an earlier version of OpenRDS.", r.Name))
+	case r.ReplicaOf != "":
+		return fail(409, fmt.Sprintf("%s is a read replica and runs the version of %s. Promote it first to upgrade it on its own.", r.Name, r.ReplicaOf))
+	}
+	if reps, err := m.replicasOf(r.Name); err != nil {
+		return err
+	} else if len(reps) > 0 {
+		return fail(409, fmt.Sprintf("Promote or delete the read replicas of %s first (%s): replication needs the same version on both sides.", r.Name, replicaNames(reps)))
 	}
 	states, err := m.states(ctx)
 	if err != nil {

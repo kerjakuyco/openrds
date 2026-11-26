@@ -147,6 +147,35 @@ async function run() {
     await network.getByText("Off", { exact: true }).waitFor({ timeout: 60000 });
     assert.ok(await page.getByRole("link", { name: "CA certificate" }).getAttribute("href") === "/api/tls/ca.pem");
 
+    // Read replica: created from the Connectivity tab, followed, then promoted.
+    const replicaPanel = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: /^Read replicas/ }) });
+    await replicaPanel.getByText("No read replicas").waitFor();
+    await replicaPanel.getByRole("button", { name: "Create read replica" }).click();
+    dialog = page.getByRole("dialog");
+    const replicaName = `${name}-replica`;
+    await dialog.getByLabel("Replica DB identifier").fill(replicaName);
+    await dialog.getByLabel("Host port").fill(String(await freePort()));
+    await dialog.getByRole("button", { name: "Create replica" }).click();
+    await page.waitForURL(new RegExp(`#/databases/${replicaName}$`), { timeout: 360000 });
+    await page.locator(".kicker").filter({ hasText: `Read replica of ${name}` }).waitFor();
+    const replication = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Replication", exact: true }) });
+    await replication.getByText("Replicating").waitFor({ timeout: 60000 });
+    await page.getByRole("tab", { name: "Database users" }).click();
+    await page.getByText("A read replica has the users and passwords of its source", { exact: false }).waitFor();
+    assert.ok(await page.getByRole("button", { name: "Create user" }).isDisabled(), "users are managed on the source");
+    await page.getByRole("tab", { name: "Monitoring" }).click();
+    await page.getByRole("heading", { name: "Replica lag" }).waitFor();
+    await page.locator(".page-actions").getByRole("button", { name: "Actions" }).click();
+    await page.getByRole("menuitem", { name: "Promote to standalone" }).click();
+    dialog = page.getByRole("dialog");
+    await dialog.getByPlaceholder(replicaName).fill(replicaName);
+    await dialog.getByRole("button", { name: "Promote" }).click();
+    await page.getByText(`${replicaName} is now a standalone database.`).waitFor({ timeout: 120000 });
+    await page.locator(".kicker").filter({ hasText: "Read replica" }).waitFor({ state: "detached" });
+    await api(`instances/${replicaName}`, "DELETE");
+    await page.goto(`${base}/#/databases/${name}/connectivity`);
+    await replicaPanel.getByText("No read replicas").waitFor({ timeout: 30000 });
+
     // Monitoring renders the container's four charts, the engine's three, and their table view.
     await page.getByRole("tab", { name: "Monitoring" }).click();
     await page.getByRole("heading", { name: "CPU utilization" }).waitFor();
@@ -323,7 +352,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, backup storage, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

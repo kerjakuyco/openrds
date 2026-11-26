@@ -1,6 +1,7 @@
 // Database operations shared by the list and the database page.
 import { h, api, modal, alertBox, isLive, isRunning, nextId } from "./lib.mjs";
 import { track, go } from "./store.mjs";
+import { createReplica, confirmPromote, replicaBlocker } from "./replicas.mjs";
 
 const post = (path) => api(path, { method: "POST" });
 
@@ -30,6 +31,14 @@ export function confirmReboot(d) {
 }
 
 export function confirmDelete(d, { after = "#/databases" } = {}) {
+  if (d.replicas?.length) {
+    modal({
+      title: `${d.name} has read replicas`, kicker: "Delete database", confirm: "Show replicas",
+      body: h("p", { class: "muted" }, `Promote or delete ${d.replicas.join(", ")} first. Replicas need their source.`),
+      run: async () => go(`#/databases/${d.name}/connectivity`),
+    });
+    return;
+  }
   if (d.deletionProtection) {
     modal({
       title: `${d.name} is protected`, kicker: "Deletion protection", confirm: "Modify database",
@@ -64,6 +73,9 @@ export function databaseActions(d) {
     { label: "Reboot", icon: "reboot", disabled: d.busy || !live, reason: !live ? "Not running" : "", run: () => confirmReboot(d) },
     "-",
     { label: "Take snapshot", icon: "camera", disabled: d.busy || !isRunning(d), reason: isRunning(d) ? "" : "The database must be running", run: () => takeSnapshot(d) },
+    d.replicaOf
+      ? { label: "Promote to standalone", icon: "arrow", disabled: d.busy || !isRunning(d), reason: d.busy ? "Another operation is running" : isRunning(d) ? "" : "The replica must be running", run: () => confirmPromote(d) }
+      : { label: "Create read replica", icon: "copy", disabled: Boolean(replicaBlocker(d)), reason: replicaBlocker(d), run: () => createReplica(d) },
     { label: "Modify", icon: "edit", disabled: d.busy || d.pendingRestore, run: () => go(`#/databases/${d.name}/modify`) },
     "-",
     { label: "Delete", icon: "trash", danger: true, disabled: d.busy, run: () => confirmDelete(d) },

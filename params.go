@@ -401,6 +401,9 @@ func (r record) command() []string {
 		if r.PITR {
 			cmd = append(cmd, "-c", "archive_mode=on", "-c", "archive_timeout="+strconv.Itoa(archiveTimeout), "-c", "archive_command="+archiveCommand)
 		}
+		if r.ReplicationPassword != "" && r.ReplicaOf == "" {
+			cmd = append(cmd, "-c", "max_slot_wal_keep_size="+slotKeep(r)) // replicas cannot fill the source's disk
+		}
 		for _, k := range keys {
 			cmd = append(cmd, "-c", k+"="+escape(params[k]))
 		}
@@ -408,6 +411,13 @@ func (r record) command() []string {
 		cmd = []string{"mysqld", "--ssl-ca=" + tlsCAFile, "--ssl-cert=" + tlsCertFile, "--ssl-key=" + tlsKeyFile}
 		if r.RequireTLS {
 			cmd = append(cmd, "--require-secure-transport=ON")
+		}
+		if r.ServerID > 0 {
+			cmd = append(cmd, "--server-id="+strconv.Itoa(r.ServerID))
+		}
+		if r.ReplicaOf != "" {
+			// Events run on the source; their changes arrive by replication.
+			cmd = append(cmd, "--relay-log-recovery=ON", "--event-scheduler=OFF")
 		}
 		for _, k := range keys {
 			cmd = append(cmd, "--"+k+"="+escape(params[k]))

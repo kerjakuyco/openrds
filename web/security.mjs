@@ -23,6 +23,7 @@ const everyone = (rules) => (rules || []).some(r => r.cidr === "0.0.0.0/0" || r.
 // Why credential changes are unavailable right now, if they are.
 export function accessBlocker(d) {
   if (!can("operator")) return "Viewers can’t change this.";
+  if (d.replicaOf) return `Users come from ${d.replicaOf}. Change them there.`;
   if (d.busy) return "Another operation is running.";
   if (!isRunning(d)) return "Start the database first.";
   if (!d.tlsReady) return "Reboot once to turn this on.";
@@ -147,6 +148,7 @@ export function usersTab(d) {
   if (blocker) create.title = blocker;
   const el = h("div", { class: "stack-gap" },
     upgradeNotice(d),
+    d.replicaOf ? alertBox(h("span", null, "A read replica has the users and passwords of its source. Manage them on ", h("a", { href: `#/databases/${d.replicaOf}/users` }, d.replicaOf), "."), "info") : null,
     panel("Database users", { counter: rows.length, description: "Give each app its own user.", actions: can("operator") ? [create] : [] },
       h("div", { class: "flush" }, dataTable({ caption: "Database users", rows, columns: [
         { key: "name", label: "User", value: u => h("code", null, u.name) },

@@ -10,6 +10,7 @@ import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
 import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
 import { poolerPanel } from "./pooler.mjs";
 import { settingsPanel, editParameters, editBackups, restoreToTime } from "./settings.mjs";
+import { replicationPanel, lagLabel } from "./replicas.mjs";
 
 const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["insights", "Performance"], ["logs", "Logs & events"],
   ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
@@ -32,6 +33,7 @@ function connectivityTab(d) {
   const el = h("div", { class: "stack-gap" },
     ...connectivityPanel(d, all),
     connectGuide(d, eng, { canReveal: can("operator") }).el,
+    replicationPanel(d),
     poolerPanel(d),
     firewallPanel(d, all));
   return { el };
@@ -67,6 +69,11 @@ function monitoringTab(d) {
       series: [{ label: "Hit ratio", cls: "s1", value: p => p.db.hit }], format: v => `${v.toFixed(1)}%`, axisFormat: v => `${v}%`, domainMax: () => 100,
       empty: "No reads in this range yet." }, pts => pts.filter(p => p.db && p.db.hit != null)),
   );
+  if (d.replicaOf && d.engine !== "valkey") {
+    charts.push(engineChart({ title: "Replica lag", subtitle: `Seconds behind ${d.replicaOf}`,
+      series: [{ label: "Lag", cls: "s1", value: p => p.db.lag }], format: lagLabel, axisFormat: v => `${v}s`,
+      empty: "No lag readings yet." }, pts => pts.filter(p => p.db && p.db.lag != null)));
+  }
   charts.forEach(c => group.add(c));
   const ranges = ["1h", "3h", "6h", "12h", "24h"];
   const buttons = ranges.map(r => h("button", { type: "button", "aria-pressed": String(r === chartRange), onclick: () => { chartRange = r; buttons.forEach(b => b.setAttribute("aria-pressed", String(b.textContent === r))); load(); } }, r));
@@ -230,12 +237,13 @@ const BUILD = { connectivity: connectivityTab, users: usersTab, monitoring: moni
 // What each tab shows from the inventory. A tab is rebuilt only when this
 // changes, so a revealed URI, a log scroll position or a chart range survives a refresh.
 const SIGNATURE = {
-  connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, d.pooler, d.poolerStatus, state.me?.role]),
-  users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, state.me?.role]),
-  monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, state.host?.cpus]),
+  connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, d.pooler, d.poolerStatus,
+    d.replicaOf, (d.replicas || []).map(n => [n, instance(n)?.replication?.state, instance(n)?.replication?.lagSeconds, instance(n)?.port]), state.me?.role]),
+  users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, d.replicaOf, state.me?.role]),
+  monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, d.replicaOf, state.host?.cpus]),
   insights: d => JSON.stringify([d.status, d.pendingRestore, state.me?.role]),
   logs: () => "",
-  configuration: d => JSON.stringify([d.version, d.pitr, d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
+  configuration: d => JSON.stringify([d.version, d.pitr, d.replicaOf, d.replicas, d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
     d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, state.me?.role]),
   backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt, d.pitr, d.recovery]),
   tags: d => JSON.stringify(d.tags || {}),
@@ -261,6 +269,10 @@ function banners(d) {
   if (d.pendingRestore && !d.busy) out.push(alertBox("The restore didn’t finish, so data is incomplete. Check the logs, then restore again.", "error"));
   if (d.status === "unhealthy" && !d.busy) out.push(alertBox("Health check failing. Check the logs.", "error"));
   if (d.status === "not provisioned" && !d.busy) out.push(alertBox("The container is missing. Use Actions → Start to retry, or delete it.", "warn"));
+  const rs = d.replication;
+  if (d.replicaOf && !d.busy && !d.pendingRestore && (rs?.state === "broken" || rs?.state === "connecting")) {
+    out.push(alertBox(`${rs.state === "broken" ? "Not replicating" : "Not receiving changes"} from ${d.replicaOf}.${rs.detail ? ` ${rs.detail}` : ""}`, rs.state === "broken" ? "error" : "warn"));
+  }
   if (d.applied) {
     const reboot = can("operator") ? btn([icon("reboot"), "Reboot now"], () => confirmReboot(d), "small") : null;
     if (reboot) reboot.disabled = d.busy || !isLive(d);
@@ -319,18 +331,18 @@ export async function instanceView(name, tab = "connectivity") {
       return;
     }
     if (gone) { gone = false; headSig = bannerSig = ""; body.replaceChildren(alerts, summarySlot, tablist, panelEl); current = null; }
-    const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel, state.me?.role]);
+    const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel, d.replicaOf, d.replicas, state.me?.role]);
     if (sig !== headSig) {
       headSig = sig;
       const locked = d.busy || d.pendingRestore;
       head.replaceChildren(
-        h("div", null, h("p", { class: "kicker" }, d.engineLabel), h("h1", null, d.name, " ", status(d))),
+        h("div", null, h("p", { class: "kicker" }, d.engineLabel, d.replicaOf ? [" · Read replica of ", h("a", { href: `#/databases/${d.replicaOf}` }, d.replicaOf)] : null), h("h1", null, d.name, " ", status(d))),
         can("operator") ? h("div", { class: "page-actions" },
           h("a", { class: `btn${locked ? " disabled" : ""}`, href: locked ? null : `#/databases/${d.name}/modify`, "aria-disabled": locked ? "true" : null }, icon("edit"), "Modify"),
           menu("Actions", databaseActions(d), { cls: "primary" }))
           : h("span", { class: "chip neutral", title: "Viewers can look but not change." }, icon("eye"), "Read only"));
     }
-    const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters]);
+    const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters, d.replication?.state, d.replication?.detail]);
     if (bsig !== bannerSig) { bannerSig = bsig; alerts.replaceChildren(...banners(d)); }
     summarySlot.replaceChildren(summary(d));
     if (!current) { setTab(currentKey || tab); return; }

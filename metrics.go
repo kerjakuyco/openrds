@@ -288,8 +288,8 @@ func (h *history) series(project string, span time.Duration, now time.Time) []po
 // Engine readings averaged over a chart bucket. Readings the engine did not
 // answer are left out rather than counted as zero.
 type dbAverage struct {
-	sum            dbPoint
-	n, active, hit int
+	sum                 dbPoint
+	n, active, hit, lag int
 }
 
 func (a *dbAverage) add(p *dbPoint) {
@@ -307,6 +307,10 @@ func (a *dbAverage) add(p *dbPoint) {
 	if p.Hit != nil {
 		a.hit++
 		a.sum.Hit = ptrAdd(a.sum.Hit, *p.Hit)
+	}
+	if p.Lag != nil {
+		a.lag++
+		a.sum.Lag = ptrAdd(a.sum.Lag, *p.Lag)
 	}
 }
 
@@ -331,6 +335,10 @@ func (a *dbAverage) point() *dbPoint {
 	if a.hit > 0 {
 		v := *a.sum.Hit / float64(a.hit)
 		p.Hit = &v
+	}
+	if a.lag > 0 {
+		v := *a.sum.Lag / float64(a.lag)
+		p.Lag = &v
 	}
 	return p
 }
@@ -431,7 +439,15 @@ func (m *manager) sample(ctx context.Context, now time.Time) {
 		}
 		// Engine readings are best effort: a starting or overloaded database
 		// still gets its container reading.
-		db, _ := m.sampleEngine(ctx, byProject[project], id)
+		r := byProject[project]
+		db, _ := m.sampleEngine(ctx, r, id)
+		if r.ReplicaOf != "" && !r.PendingRestore {
+			st := m.replicationStatus(ctx, r, id)
+			m.noteReplication(r.Name, st)
+			if db != nil {
+				db.lag = st.Lag
+			}
+		}
 		m.history.add(project, id, s, db)
 	}
 	m.history.report(err)

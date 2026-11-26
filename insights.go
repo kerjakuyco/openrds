@@ -30,6 +30,7 @@ type dbSample struct {
 	ops                     uint64 // transactions (PostgreSQL), statements (MySQL) or commands (Valkey)
 	hits, misses            uint64 // reads served from memory, and reads that missed it
 	activeKnown             bool   // Valkey has no equivalent of running statements
+	lag                     *float64
 }
 
 // What a chart shows from the engine: rates cover the time since the previous reading.
@@ -39,6 +40,7 @@ type dbPoint struct {
 	MaxConns int      `json:"maxConns,omitempty"`
 	Ops      float64  `json:"ops"`           // per second
 	Hit      *float64 `json:"hit,omitempty"` // percent of reads served from memory, when there were reads
+	Lag      *float64 `json:"lag,omitempty"` // read replicas: seconds behind the source
 }
 
 const (
@@ -62,7 +64,7 @@ const mysqlSampleSQL = `SHOW GLOBAL STATUS WHERE Variable_name IN
   ('Threads_connected', 'Questions', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads');
 SELECT 'max_connections', @@max_connections;
 SELECT 'active', COUNT(*) FROM information_schema.PROCESSLIST
-  WHERE COMMAND NOT IN ('Sleep', 'Daemon', 'Binlog Dump') AND ID <> CONNECTION_ID();
+  WHERE COMMAND NOT IN ('Sleep', 'Daemon', 'Binlog Dump') AND USER <> 'system user' AND ID <> CONNECTION_ID();
 `
 
 // Run the engine's client in a container with input on stdin, so passwords
@@ -150,7 +152,7 @@ func (m *manager) sampleEngine(ctx context.Context, r record, container string) 
 
 // The chart values between two readings of the same container.
 func engineRates(prev, cur *dbSample) *dbPoint {
-	p := &dbPoint{Conns: float64(cur.conns), MaxConns: cur.maxConns}
+	p := &dbPoint{Conns: float64(cur.conns), MaxConns: cur.maxConns, Lag: cur.lag}
 	if cur.activeKnown {
 		a := float64(max(cur.active, 0))
 		p.Active = &a
@@ -211,9 +213,13 @@ const insightRows = 25
 
 // pg_stat_statements needs its library at server start, which OpenRDS
 // loads by default, and the extension in the database, created here.
-const pgInsightsSQL = `SELECT /* openrds */ current_setting('shared_preload_libraries') LIKE '%pg_stat_statements%' AS loaded \gset
-\if :loaded
+const pgInsightsSQL = `SELECT /* openrds */ current_setting('shared_preload_libraries') LIKE '%pg_stat_statements%' AS loaded, pg_is_in_recovery() AS standby \gset
+\if :standby
+SELECT /* openrds */ :'loaded'::boolean AND EXISTS (SELECT FROM pg_extension WHERE extname = 'pg_stat_statements') AS loaded \gset
+\elif :loaded
 CREATE /* openrds */ EXTENSION IF NOT EXISTS pg_stat_statements;
+\endif
+\if :loaded
 SELECT /* openrds */ coalesce(array_to_json(array_agg(t)), '[]') FROM (
   SELECT left(query, 2000) AS query, calls, round(total_exec_time::numeric, 3) AS "totalMs",
          round(mean_exec_time::numeric, 3) AS "meanMs", rows
@@ -240,7 +246,7 @@ FROM (SELECT * FROM performance_schema.events_statements_summary_by_digest
     AND DIGEST_TEXT NOT LIKE 'SELECT @@_version_comment_ LIMIT%' ORDER BY SUM_TIMER_WAIT DESC LIMIT 25) d;
 SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('id', CAST(ID AS CHAR), 'user', USER, 'state', COMMAND, 'wait', STATE,
   'seconds', TIME, 'query', LEFT(INFO, 2000))), JSON_ARRAY())
-FROM information_schema.PROCESSLIST WHERE COMMAND NOT IN ('Sleep', 'Daemon', 'Binlog Dump') AND ID <> CONNECTION_ID();
+FROM information_schema.PROCESSLIST WHERE COMMAND NOT IN ('Sleep', 'Daemon', 'Binlog Dump') AND USER <> 'system user' AND ID <> CONNECTION_ID();
 `
 
 func (m *manager) runningContainer(ctx context.Context, r record) (string, error) {

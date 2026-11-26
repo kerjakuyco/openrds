@@ -102,27 +102,34 @@ type record struct {
 	// While an upgrade restores data, the new container has no host port and
 	// another network name, so clients cannot reach a half-filled database.
 	staging bool
+	// Read replicas: the source a replica follows, and the password replicas
+	// connect with (a source's own; a replica sees its source's).
+	ReplicaOf           string `json:"replicaOf,omitempty"`
+	ReplicationPassword string `json:"replicationPassword,omitempty"`
+	ServerID            int    `json:"serverId,omitempty"` // MySQL replicas, and databases promoted from one
+	sourceTLS           bool   // a Valkey replica connects with TLS when its source requires it
 }
 
 type manager struct {
-	dir        string
-	templates  string
-	docker     dockerRunner
-	engine     statsReader
-	mu         sync.Mutex
-	busy       map[string]bool
-	attempts   map[string]time.Time // last automated-backup window tried, by project
-	activityMu sync.Mutex
-	backupMu   sync.Mutex
-	quotaCache quotaCache
-	history    history
-	offsite    offsiteState
-	tlsMu      sync.Mutex
-	ca         *authority
-	gateway    string // image for public-access gateways, once found
-	space      func(path string) (free, total uint64, ok bool)
-	alerts     alertState
-	pitr       pitrState
+	dir         string
+	templates   string
+	docker      dockerRunner
+	engine      statsReader
+	mu          sync.Mutex
+	busy        map[string]bool
+	attempts    map[string]time.Time // last automated-backup window tried, by project
+	activityMu  sync.Mutex
+	backupMu    sync.Mutex
+	quotaCache  quotaCache
+	history     history
+	offsite     offsiteState
+	tlsMu       sync.Mutex
+	ca          *authority
+	gateway     string // image for public-access gateways, once found
+	space       func(path string) (free, total uint64, ok bool)
+	alerts      alertState
+	pitr        pitrState
+	replication replicationState
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
@@ -191,6 +198,12 @@ func (m *manager) record(name string) (record, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return r, fail(404, "Database instance not found.")
 	}
+	if err == nil && r.ReplicaOf != "" {
+		var src record
+		if readJSON(m.recordPath(r.ReplicaOf), &src) == nil {
+			r.follow(src)
+		}
+	}
 	return r, err
 }
 
@@ -213,6 +226,16 @@ func (m *manager) records() ([]record, error) {
 			return nil, err
 		}
 		records = append(records, r)
+	}
+	for i, r := range records {
+		if r.ReplicaOf == "" {
+			continue
+		}
+		for _, src := range records {
+			if src.Name == r.ReplicaOf {
+				records[i].follow(src)
+			}
+		}
 	}
 	return records, nil
 }

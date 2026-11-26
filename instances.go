@@ -16,22 +16,25 @@ import (
 
 type instanceView struct {
 	instanceSpec
-	EngineLabel    string            `json:"engineLabel"`
-	Status         string            `json:"status"`
-	Busy           bool              `json:"busy"`
-	Created        time.Time         `json:"createdAt"`
-	PendingRestore bool              `json:"pendingRestore"`
-	User           string            `json:"user"`
-	Database       string            `json:"database"`
-	Applied        *runtimeConfig    `json:"applied,omitempty"` // in use until a restart applies pending changes
-	Tuned          map[string]string `json:"tuned,omitempty"`   // memory settings sized to the memory limit
-	Users          []dbUserView      `json:"users"`
-	TLSReady       bool              `json:"tlsReady"` // the container has certificates and managed credentials
-	LatestBackup   *time.Time        `json:"latestBackupAt,omitempty"`
-	NextBackup     *time.Time        `json:"nextBackupAt,omitempty"`
-	Live           *point            `json:"live,omitempty"`
-	PoolerStatus   string            `json:"poolerStatus,omitempty"`
-	Recovery       *recoveryWindow   `json:"recovery,omitempty"` // point-in-time recovery window
+	EngineLabel    string             `json:"engineLabel"`
+	Status         string             `json:"status"`
+	Busy           bool               `json:"busy"`
+	Created        time.Time          `json:"createdAt"`
+	PendingRestore bool               `json:"pendingRestore"`
+	User           string             `json:"user"`
+	Database       string             `json:"database"`
+	Applied        *runtimeConfig     `json:"applied,omitempty"` // in use until a restart applies pending changes
+	Tuned          map[string]string  `json:"tuned,omitempty"`   // memory settings sized to the memory limit
+	Users          []dbUserView       `json:"users"`
+	TLSReady       bool               `json:"tlsReady"` // the container has certificates and managed credentials
+	LatestBackup   *time.Time         `json:"latestBackupAt,omitempty"`
+	NextBackup     *time.Time         `json:"nextBackupAt,omitempty"`
+	Live           *point             `json:"live,omitempty"`
+	PoolerStatus   string             `json:"poolerStatus,omitempty"`
+	Recovery       *recoveryWindow    `json:"recovery,omitempty"` // point-in-time recovery window
+	ReplicaOf      string             `json:"replicaOf,omitempty"`
+	Replicas       []string           `json:"replicas,omitempty"`
+	Replication    *replicationStatus `json:"replication,omitempty"` // a replica's, as last read
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -98,6 +101,22 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 			v.PoolerStatus = poolers[r.Project]
 			if v.PoolerStatus == "" {
 				v.PoolerStatus = "not running"
+			}
+		}
+		for _, rep := range replicasOf(all, r.Name) {
+			v.Replicas = append(v.Replicas, rep.Name)
+		}
+		if r.ReplicaOf != "" {
+			v.ReplicaOf = r.ReplicaOf
+			st, ok := m.cachedReplication(r.Name)
+			switch {
+			case r.PendingRestore:
+				st, ok = replicationStatus{State: "broken", Detail: "The replica was never completed. Delete it and try again."}, true
+			case state != "running":
+				st, ok = replicationStatus{State: "stopped"}, true
+			}
+			if ok {
+				v.Replication = &st
 			}
 		}
 		result = append(result, v)
@@ -269,8 +288,25 @@ func (m *manager) start(ctx context.Context, r *record) error {
 			return err
 		}
 	}
+	if r.ReplicaOf != "" {
+		// Join the source's network before the server starts, so it connects at once.
+		if err := m.compose(ctx, *r, nil, nil, "up", "--no-start", "db"); err != nil {
+			return err
+		}
+		if err := m.linkReplica(ctx, *r); err != nil {
+			return err
+		}
+	}
 	if err := m.up(ctx, *r); err != nil {
 		return err
+	}
+	if r.ReplicaOf == "" && r.ReplicationPassword != "" {
+		switch r.Engine {
+		case "postgres":
+			m.dropStaleSlots(ctx, *r)
+		case "valkey":
+			m.refollow(ctx, *r)
+		}
 	}
 	if r.Applied != nil || r.Layout != currentLayout {
 		r.Applied, r.Layout = nil, currentLayout
@@ -359,6 +395,11 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 	if r.DeletionProtection {
 		return fail(409, "Deletion protection is on for this database. Modify the database to turn it off, then delete it.")
 	}
+	if reps, err := m.replicasOf(name); err != nil {
+		return err
+	} else if len(reps) > 0 {
+		return fail(409, fmt.Sprintf("%s has read replicas: %s. Promote or delete them first.", name, replicaNames(reps)))
+	}
 	if finalBackup {
 		if r.PendingRestore {
 			return fail(409, "This instance has an incomplete restore, so it has no data to back up. Delete it without a final snapshot.")
@@ -384,6 +425,15 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 	if r.DiskGiB > 0 {
 		if err := m.detachDisk(ctx, r); err != nil {
 			return fail(502, "The database was removed, but its disk image is still attached. Retry deletion. "+err.Error())
+		}
+	}
+	if r.ReplicaOf != "" {
+		m.forgetReplication(r)
+		if src, err := m.record(r.ReplicaOf); err == nil && r.Engine == "postgres" {
+			if err := m.dropSlot(ctx, src, slotName(r)); err != nil {
+				// Dropped when the source next starts, or limited by max_slot_wal_keep_size meanwhile.
+				fmt.Fprintf(os.Stderr, "removing the replication slot of %s from %s: %v\n", r.Name, src.Name, err)
+			}
 		}
 	}
 	m.history.forget(r.Project)
@@ -515,6 +565,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	}
 	normalizePooler(&next.instanceSpec, all)
 	if err := checkSpec(next.instanceSpec); err != nil {
+		return result, err
+	}
+	if err := checkReplication(all, next); err != nil {
 		return result, err
 	}
 	if err := checkPorts(all, next.instanceSpec); err != nil {
@@ -715,7 +768,7 @@ func (m *manager) logs(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	text := string(out.data)
-	secrets := []string{r.Password, r.RootPassword}
+	secrets := []string{r.Password, r.RootPassword, r.ReplicationPassword}
 	for _, u := range r.Users {
 		secrets = append(secrets, u.Password)
 	}

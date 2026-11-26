@@ -187,6 +187,7 @@ func (m *manager) maintain(ctx context.Context) {
 		go m.syncOffsite() // copies new backups and retries failed ones
 		go m.watchHealth(ctx)
 		go m.collectAllWAL(ctx)
+		go m.watchReplication(ctx)
 		m.watchDisk(ctx)
 		select {
 		case <-ctx.Done():
