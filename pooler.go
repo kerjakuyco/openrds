@@ -178,9 +178,18 @@ func (m *manager) applyPooler(ctx context.Context, previous, next record, databa
 // Write the users file into the running pooler and reload it, so a new
 // password works through the pooler at once and pooled clients stay
 // connected. A recreated pooler gets the same file from Compose.
+//
+// PgBouncer rereads the file only when its modification time or size
+// changed, and two password changes in one second leave both the same, so
+// the time moves forward by at least a second each write.
 func (m *manager) reloadPoolerUsers(ctx context.Context, r record) error {
-	return m.compose(ctx, r, strings.NewReader(poolerUsers(r)), nil, "exec", "-T", "pooler", "sh", "-ec",
-		`cat > /run/openrds/userlist.txt && kill -HUP 1`)
+	return m.compose(ctx, r, strings.NewReader(poolerUsers(r)), nil, "exec", "-T", "pooler", "sh", "-ec", `f=/run/openrds/userlist.txt
+before=$(stat -c %Y "$f")
+cat > "$f"
+now=$(date +%s)
+[ "$now" -gt "$before" ] || now=$((before + 1))
+touch -d "@$now" "$f"
+kill -HUP 1`)
 }
 
 func samePooler(a, b *poolerSpec) bool {
