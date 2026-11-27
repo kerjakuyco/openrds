@@ -82,6 +82,10 @@ async function run() {
     await page.waitForURL(new RegExp(`#/databases/${name}$`), { timeout: 60000 });
     await page.locator("h1 .status").filter({ hasText: "Running" }).waitFor({ timeout: 360000 });
     await page.getByText("0.5 vCPU · 256 MiB").first().waitFor();
+    // The overview shows health at a glance; connection strings are one tab away.
+    await page.getByRole("heading", { name: "Recent events" }).waitFor();
+    await page.locator(".tile").first().waitFor();
+    await page.getByRole("tab", { name: "Connect", exact: true }).click();
 
     // Connection guide: one string to copy; show the password, then open the code examples.
     const conn = page.locator(".conn-string pre");
@@ -102,7 +106,7 @@ async function run() {
 
     // Database users: create a read-only user and see its password once,
     // change the owner password, then delete the user.
-    await page.getByRole("tab", { name: "Database users" }).click();
+    await page.getByRole("tab", { name: "Users", exact: true }).click();
     await page.getByRole("button", { name: "Create user" }).click();
     let dialog = page.getByRole("dialog");
     await dialog.getByLabel("Username").fill("reporting");
@@ -125,7 +129,7 @@ async function run() {
     await reporting.waitFor({ state: "detached" });
 
     // Network access: open a public port for one address, then close it.
-    await page.getByRole("tab", { name: "Connectivity & security" }).click();
+    await page.getByRole("tab", { name: "Connect", exact: true }).click();
     const network = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Connectivity & security" }) });
     await network.getByText("Off", { exact: true }).waitFor();
     await network.getByRole("button", { name: "Edit network" }).click();
@@ -147,7 +151,8 @@ async function run() {
     await network.getByText("Off", { exact: true }).waitFor({ timeout: 60000 });
     assert.ok(await page.getByRole("link", { name: "CA certificate" }).getAttribute("href") === "/api/tls/ca.pem");
 
-    // Read replica: created from the Connectivity tab, followed, then promoted.
+    // Read replica: created from the Overview, followed, then promoted.
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
     const replicaPanel = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: /^Read replicas/ }) });
     await replicaPanel.getByText("No read replicas").waitFor();
     await replicaPanel.getByRole("button", { name: "Create read replica" }).click();
@@ -160,7 +165,7 @@ async function run() {
     await page.locator(".kicker").filter({ hasText: `Read replica of ${name}` }).waitFor();
     const replication = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Replication", exact: true }) });
     await replication.getByText("Replicating").waitFor({ timeout: 60000 });
-    await page.getByRole("tab", { name: "Database users" }).click();
+    await page.getByRole("tab", { name: "Users", exact: true }).click();
     await page.getByText("A read replica has the users and passwords of its source", { exact: false }).waitFor();
     assert.ok(await page.getByRole("button", { name: "Create user" }).isDisabled(), "users are managed on the source");
     await page.getByRole("tab", { name: "Monitoring" }).click();
@@ -173,7 +178,7 @@ async function run() {
     await page.getByText(`${replicaName} is now a standalone database.`).waitFor({ timeout: 120000 });
     await page.locator(".kicker").filter({ hasText: "Read replica" }).waitFor({ state: "detached" });
     await api(`instances/${replicaName}`, "DELETE");
-    await page.goto(`${base}/#/databases/${name}/connectivity`);
+    await page.goto(`${base}/#/databases/${name}/overview`);
     await replicaPanel.getByText("No read replicas").waitFor({ timeout: 30000 });
 
     // Monitoring renders the container's four charts, the engine's three, and their table view.
@@ -191,9 +196,9 @@ async function run() {
     await page.locator("table").filter({ hasText: "Total time" }).or(page.getByText("No statements yet")).first().waitFor({ timeout: 30000 });
 
     // Logs, configuration and storage
-    await page.getByRole("tab", { name: "Logs & events" }).click();
+    await page.getByRole("tab", { name: "Logs", exact: true }).click();
     await page.locator("pre.logs").filter({ hasText: "ready to accept connections" }).waitFor();
-    await page.getByRole("tab", { name: "Configuration" }).click();
+    await page.getByRole("tab", { name: "Settings", exact: true }).click();
     const row = page.locator("tr").filter({ hasText: "max_connections" });
     await row.getByText("120", { exact: true }).waitFor();
     await row.getByText("Applied").waitFor();
@@ -215,7 +220,7 @@ async function run() {
     await pitrRow.getByText("On", { exact: true }).waitFor({ timeout: 120000 });
 
     // Snapshot from the maintenance tab
-    await page.getByRole("tab", { name: "Maintenance & backups" }).click();
+    await page.getByRole("tab", { name: "Backups", exact: true }).click();
     await page.getByRole("button", { name: "Restore to point in time" }).click({ timeout: 180000 });
     await page.getByRole("dialog").getByText("Any second from", { exact: false }).waitFor();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
@@ -243,6 +248,13 @@ async function run() {
     // Inventory search
     await page.locator('nav#nav [data-nav="databases"]').click();
     await page.getByRole("heading", { name: "Databases", level: 1 }).waitFor();
+    // Selecting a row previews it beside the list, with quick actions.
+    await page.locator(`#fleet-list tr[data-name="${name}"] td.c-status`).click();
+    const preview = page.getByRole("complementary", { name: `${name} preview` });
+    await preview.getByRole("link", { name: "Open" }).waitFor();
+    await preview.locator(".trend").first().waitFor();
+    await page.keyboard.press("Escape");
+    await preview.waitFor({ state: "detached" });
     await page.keyboard.press("/");
     assert.equal(await page.evaluate(() => document.activeElement.id), "search");
     await page.locator("#search").fill("env=ci");
@@ -330,7 +342,7 @@ async function run() {
     await guest.locator(".dash-hero h1").waitFor();
     assert.equal(await guest.locator("#nav-create").isVisible(), false, "viewers cannot create databases");
     assert.equal(await guest.locator('nav#nav [data-nav="users"]').isVisible(), false, "viewers cannot manage users");
-    await guest.goto(`${base}/#/databases/${name}`);
+    await guest.goto(`${base}/#/databases/${name}/connectivity`);
     await guest.getByText("Read only").first().waitFor();
     await guest.getByText("Viewers can’t see passwords", { exact: false }).waitFor();
     await other.close();
@@ -352,7 +364,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

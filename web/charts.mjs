@@ -212,3 +212,30 @@ export function timeChart({ title, subtitle = "", series, format, axisFormat = f
   observer.observe(plot);
   return chart;
 }
+
+// A small trend line of recent readings for previews and summary tiles. Gaps
+// (readings the engine did not answer) break the line instead of dropping to 0.
+export function sparkline(values, { max = null, label = "", cls = "" } = {}) {
+  const W = 120, H = 34;
+  const svg = s("svg", { class: `spark ${cls}`.trim(), viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": label || null, "aria-hidden": label ? null : "true" });
+  const known = values.filter(Number.isFinite);
+  if (known.length < 2) {
+    svg.append(s("line", { class: "spark-base", x1: 0, x2: W, y1: H - 1, y2: H - 1 }));
+    return svg;
+  }
+  const top = max ?? (Math.max(...known) * 1.2 || 1);
+  const x = (i) => (i / (values.length - 1)) * W;
+  const y = (v) => H - 2 - Math.min(1, Math.max(0, v / top)) * (H - 4);
+  let line = "", area = "", run = [];
+  const flush = () => {
+    if (run.length > 1) {
+      line += run.map(([i, v], k) => `${k ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+      area += `M${x(run[0][0]).toFixed(1)},${H}` + run.map(([i, v]) => `L${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("") + `L${x(run.at(-1)[0]).toFixed(1)},${H}Z`;
+    }
+    run = [];
+  };
+  values.forEach((v, i) => Number.isFinite(v) ? run.push([i, v]) : flush());
+  flush();
+  svg.append(s("path", { class: "spark-area", d: area }), s("path", { class: "spark-line", d: line }));
+  return svg;
+}

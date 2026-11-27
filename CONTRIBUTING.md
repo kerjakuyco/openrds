@@ -56,6 +56,7 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | `metrics.go`, `insights.go`, `activity.go` | Monitoring history, engine readings and Performance insights, and the event log |
 | `notify.go` | Notifications: health and disk checks, and messages to Slack, Discord, Telegram, webhooks and email |
 | `web/` | The console: HTML, CSS and JavaScript modules |
+| `web/fonts/` | Source Sans 3 and IBM Plex Mono (Latin subsets), self-hosted, with their SIL Open Font License texts |
 | `scripts/` | End-to-end checks against a real Docker installation |
 | `docs/` | Install guide, user guide and API reference |
 
@@ -86,6 +87,7 @@ NODE_PATH=/tmp/openrds-ui/node_modules node scripts/ui-smoke.cjs
 
 - **Dependencies.** Keep the server on the Go standard library, and the console as plain HTML, CSS and JavaScript modules.
 - **Content Security Policy.** The console runs under a strict policy: no inline scripts or styles and no `innerHTML`. Build elements with the `h()` helper in `web/lib.mjs`.
+- **Fonts.** The console serves its own fonts, since the policy allows nothing from other origins. Use only fonts under a free licence such as the SIL Open Font License, and keep the licence text next to the files in `web/fonts/`.
 - **Secrets.** Never return secrets in inventory responses, never log them, and keep passwords off command lines (send them on stdin).
 - **Tests.** Add or update tests with your change. Go tests live next to the code (`*_test.go`); end-to-end behavior belongs in `scripts/`.
 - **Wording.** Write user-facing text in short, plain sentences. Put longer explanations in a help toggle or the docs, not on the page.

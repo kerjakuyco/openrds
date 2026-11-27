@@ -1,19 +1,21 @@
 // One database: summary, actions and tabs, like a managed-database console.
 import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, infoPanel, scheduleLabel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
+import { endpointChip, engineBadge } from "./databases.mjs";
 import { state, subscribe, instance, engine, loadEngines, sync, go, track, can } from "./store.mjs";
 import { connectGuide } from "./connect.mjs";
-import { timeChart, chartGroup } from "./charts.mjs";
-import { databaseActions, takeSnapshot, confirmReboot } from "./actions.mjs";
+import { timeChart, chartGroup, sparkline } from "./charts.mjs";
+import { databaseActions, takeSnapshot, confirmReboot, start } from "./actions.mjs";
 import { backupTable } from "./backups.mjs";
 import { tagEditor } from "./forms.mjs";
 import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
 import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
 import { poolerPanel } from "./pooler.mjs";
 import { settingsPanel, editParameters, editBackups, restoreToTime } from "./settings.mjs";
-import { replicationPanel, lagLabel } from "./replicas.mjs";
+import { replicationPanel, lagLabel, replicationChip } from "./replicas.mjs";
 
-const TABS = [["connectivity", "Connectivity & security"], ["users", "Database users"], ["monitoring", "Monitoring"], ["insights", "Performance"], ["logs", "Logs & events"],
-  ["configuration", "Configuration"], ["backups", "Maintenance & backups"], ["tags", "Tags"]];
+const TABS = [["overview", "Overview"], ["connectivity", "Connect"], ["users", "Users"], ["monitoring", "Monitoring"], ["insights", "Performance"],
+  ["backups", "Backups"], ["configuration", "Settings"], ["logs", "Logs"]];
+const ALIASES = { tags: "configuration" }; // older links
 let chartRange = "1h";
 
 const pendingChanges = (d) => {
@@ -30,10 +32,11 @@ const pendingChanges = (d) => {
 function connectivityTab(d) {
   const eng = engine(d.engine);
   const all = state.instances || [];
+  const [notice, ...network] = connectivityPanel(d, all);
   const el = h("div", { class: "stack-gap" },
-    ...connectivityPanel(d, all),
+    notice,
     connectGuide(d, eng, { canReveal: can("operator") }).el,
-    replicationPanel(d),
+    ...network,
     poolerPanel(d),
     firewallPanel(d, all));
   return { el };
@@ -168,10 +171,7 @@ function configurationTab(d) {
       { key: "d", label: "Default", value: r => h("code", { class: "muted" }, d.tuned?.[r.k] || describe(r.k)?.default || "(empty)") },
       { key: "s", label: "Status", value: r => r.pending ? h("span", { class: "status info" }, icon("pending"), "Pending restart") : h("span", { class: "status good" }, icon("ok"), "Applied") },
     ] }) : empty("sliders", "Engine defaults", "No custom settings.")),
-    infoPanel("Details", [
-      ["Instance", [["DB identifier", d.name], ["Engine", d.engineLabel], ["Created", when(d.createdAt)]]],
-      ["Database", [[d.engine === "valkey" ? "Database number" : "Database name", h("code", null, eng.database)], ["Owner user", h("code", null, eng.user)], ["Database users", String(1 + (d.users || []).length)]]],
-    ]));
+    tagsTab(d).el);
   return { el };
 }
 
@@ -233,10 +233,129 @@ function tagsTab(d) {
   return { el };
 }
 
-const BUILD = { connectivity: connectivityTab, users: usersTab, monitoring: monitoringTab, insights: insightsTab, logs: logsTab, configuration: configurationTab, backups: backupsTab, tags: tagsTab };
+// ---------- overview: health at a glance, how to connect, replication, backups, recent events
+
+function healthTile(label, now, values, { max = null, hint = "", tone = "" } = {}) {
+  return h("div", { class: `tile ${tone}`.trim() },
+    h("div", { class: "tile-head" }, h("span", { class: "tile-label" }, label), hint ? h("small", null, hint) : null),
+    h("strong", { class: "tile-now" }, now),
+    sparkline(values, { max, label: `${label}, last hour` }));
+}
+
+function connectCard(d) {
+  const eng = engine(d.engine);
+  const rows = [
+    ["From this server", endpointChip(d)],
+    ["From containers", h("span", { class: "row tight" }, endpointChip(d, { network: true }), h("small", null, `port ${{ postgres: 5432, mysql: 3306, valkey: 6379 }[d.engine]}`))],
+    d.pooler ? ["Through the pooler", h("code", null, `127.0.0.1:${d.pooler.port}`)] : null,
+    d.publicAccess ? ["From the internet", h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`)] : null,
+    ["User · database", h("code", null, `${eng.user} · ${eng.database}`)],
+  ].filter(Boolean);
+  return panel("Connect", { description: d.requireTLS ? "TLS required." : "TLS optional.",
+    actions: [h("a", { class: "btn small", href: `#/databases/${d.name}/connectivity` }, icon("link"), "Connection strings")] },
+  h("dl", { class: "rows" }, rows.map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, v)))));
+}
+
+function backupsCard(d) {
+  const on = d.backupRetentionDays > 0;
+  const rows = [
+    ["Automated", on ? `${plural(d.backupRetentionDays, "day")} · ${scheduleLabel(d.backupWindow, d.backupIntervalHours)}` : h("span", { class: "status warn" }, icon("alert"), "Off")],
+    ["Latest", d.latestBackupAt ? h("span", { title: when(d.latestBackupAt) }, ago(d.latestBackupAt)) : h("span", { class: "muted" }, "None yet")],
+    on ? ["Next", d.nextBackupAt ? h("span", { title: when(d.nextBackupAt) }, ago(d.nextBackupAt)) : "—"] : null,
+    d.engine === "postgres" && !d.replicaOf ? ["Point in time", !d.pitr ? h("span", { class: "muted" }, "Off") : d.recovery?.earliest ? `Any second since ${ago(d.recovery.earliest)}` : h("span", { class: "muted" }, "Starting")] : null,
+    ["Protection", d.deletionProtection ? h("span", { class: "with-icon" }, icon("shield"), "Deletion protection on") : h("span", { class: "muted" }, "Can be deleted")],
+  ].filter(Boolean);
+  const actions = [h("a", { class: "btn small ghost", href: `#/databases/${d.name}/backups` }, "All backups")];
+  if (can("operator")) {
+    const snap = btn([icon("camera"), "Snapshot"], () => takeSnapshot(d), "small");
+    snap.disabled = d.busy || !isRunning(d);
+    actions.unshift(on ? snap : editButton(d, [icon("plus"), "Turn on"], () => editBackups(d)));
+    if (!on) actions.splice(1, 0, snap);
+  }
+  return panel("Backups", { actions }, h("dl", { class: "rows" }, rows.map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, v)))));
+}
+
+function eventsCard(name) {
+  const list = h("ul", { class: "activity" });
+  const render = () => {
+    const mine = (state.activity || []).filter(e => e.name === name);
+    const items = mine.filter((e, i) => e.result !== "started" || !mine.slice(0, i).some(x => x.action === e.action)).slice(0, 5);
+    list.replaceChildren(...(items.length ? items.map(e => h("li", { class: e.result },
+      icon(e.result === "completed" ? "ok" : e.result === "failed" ? "error" : "pending"),
+      h("div", null, h("strong", null, e.action), h("small", { title: when(e.at) }, `${ago(e.at)}${e.detail ? ` · ${e.detail}` : ""}`)))) : [h("li", { class: "none" }, h("span"), h("small", null, "No events yet."))]));
+  };
+  render();
+  return { el: panel("Recent events", { actions: [h("a", { class: "btn small ghost", href: `#/databases/${name}/logs` }, "All events")] }, h("div", { class: "flush" }, list)), update: render };
+}
+
+function detailsCard(d) {
+  const eng = engine(d.engine);
+  return panel("Details", {}, h("dl", { class: "rows" }, [
+    ["Engine", d.engineLabel],
+    ["Created", h("span", { title: when(d.createdAt) }, when(d.createdAt))],
+    [d.engine === "valkey" ? "Database number" : "Database", h("code", null, eng.database)],
+    ["Users", d.replicaOf ? `As on ${d.replicaOf}` : plural(1 + (d.users || []).length, "user")],
+    ["Parameters", Object.keys(d.parameters || {}).length ? plural(Object.keys(d.parameters).length, "custom setting") : "Engine defaults"],
+    ["Tags", Object.keys(d.tags || {}).length ? h("span", { class: "tag-chips" }, Object.entries(d.tags).map(([k, v]) => h("span", { class: "tag-chip" }, v ? `${k}: ${v}` : k))) : h("span", { class: "muted" }, "None")],
+  ].map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, v)))));
+}
+
+function overviewTab(d) {
+  const hostCPUs = state.host?.cpus || 1;
+  const base = d.cpus || hostCPUs;
+  const limit = d.memoryMiB * 1048576;
+  const showLag = d.replicaOf && d.engine !== "valkey";
+  const terms = ENGINE_TERMS[d.engine];
+  const tiles = h("div", { class: "health", "aria-label": "Last hour" });
+  const note = h("p", { class: "muted small health-note" });
+  function draw(points, live) {
+    const db = live?.db;
+    const amount = (n) => n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString();
+    tiles.replaceChildren(
+      healthTile("CPU", live ? percent(live.cpu / base) : "—", points.map(p => p.cpu / base), { max: 100, hint: d.cpus ? `of ${d.cpus} vCPU` : "of the host" }),
+      healthTile("Memory", live ? bytes(live.memory) : "—", points.map(p => p.memory), { max: limit || null, hint: d.memoryMiB ? `of ${mib(d.memoryMiB)}` : "no limit" }),
+      healthTile("Connections", db ? String(Math.round(db.conns)) : "—", points.map(p => p.db ? p.db.conns : NaN), { hint: db?.maxConns ? `of ${db.maxConns.toLocaleString()}` : "" }),
+      showLag
+        ? healthTile("Replica lag", lagLabel(d.replication?.lagSeconds), points.map(p => p.db?.lag ?? NaN), { hint: `behind ${d.replicaOf}`, tone: d.replication?.lagSeconds > 60 ? "warn" : "" })
+        : healthTile(`${terms.ops}/s`, db ? amount(db.ops) : "—", points.map(p => p.db ? p.db.ops : NaN)));
+  }
+  draw([], d.live);
+  let timer = 0;
+  async function load() {
+    if (!isLive(d)) { note.textContent = "Start the database to see live readings."; return; }
+    try {
+      const v = await api(`instances/${d.name}/history?range=1h`);
+      const pts = v.available ? v.points || [] : [];
+      draw(pts, pts.at(-1) || d.live);
+      note.textContent = v.available ? `Last hour · every ${v.interval}s · updated ${clock(Date.now())}` : v.message;
+    } catch (err) { note.textContent = err.message; }
+  }
+  load();
+  timer = setInterval(() => { if (!document.hidden) load(); }, 30000);
+  const events = eventsCard(d.name);
+  const el = h("div", { class: "overview" },
+    h("section", { class: "health-wrap" }, tiles, note),
+    h("div", { class: "overview-grid" },
+      h("div", { class: "stack-gap" }, connectCard(d), replicationPanel(d), poolerSummary(d)),
+      h("div", { class: "stack-gap" }, backupsCard(d), events.el, detailsCard(d))));
+  return { el, update: events.update, destroy: () => clearInterval(timer) };
+}
+
+function poolerSummary(d) {
+  if (d.engine !== "postgres" || !d.pooler) return null;
+  return panel("Connection pooling", { description: `${d.pooler.mode === "session" ? "Session" : "Transaction"} mode · ${plural(d.pooler.poolSize, "server connection")} per user`,
+    actions: [h("a", { class: "btn small ghost", href: `#/databases/${d.name}/connectivity` }, "Settings")] },
+  h("dl", { class: "rows" }, h("div", null, h("dt", null, "Status"), h("dd", null, d.poolerStatus === "running" ? h("span", { class: "status good" }, icon("ok"), "Running") : h("span", { class: "status warn" }, icon("alert"), d.poolerStatus || "Unknown"))),
+    h("div", null, h("dt", null, "Endpoint"), h("dd", null, h("code", null, `127.0.0.1:${d.pooler.port}`)))));
+}
+
+const BUILD = { overview: overviewTab, connectivity: connectivityTab, users: usersTab, monitoring: monitoringTab, insights: insightsTab, logs: logsTab, configuration: configurationTab, backups: backupsTab };
 // What each tab shows from the inventory. A tab is rebuilt only when this
 // changes, so a revealed URI, a log scroll position or a chart range survives a refresh.
 const SIGNATURE = {
+  overview: d => JSON.stringify([d.status, d.busy, d.pendingRestore, d.port, d.cpus, d.memoryMiB, d.requireTLS, d.publicAccess, d.publicPort, d.publicHost, d.pooler, d.poolerStatus,
+    d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt, d.pitr, d.recovery, d.deletionProtection, d.users, d.parameters, d.tags,
+    d.replicaOf, d.replication?.state, d.replication?.lagSeconds, (d.replicas || []).map(n => [n, instance(n)?.replication?.state, instance(n)?.replication?.lagSeconds, instance(n)?.port]), state.host?.cpus, state.me?.role]),
   connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, d.pooler, d.poolerStatus,
     d.replicaOf, (d.replicas || []).map(n => [n, instance(n)?.replication?.state, instance(n)?.replication?.lagSeconds, instance(n)?.port]), state.me?.role]),
   users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, d.replicaOf, state.me?.role]),
@@ -244,23 +363,20 @@ const SIGNATURE = {
   insights: d => JSON.stringify([d.status, d.pendingRestore, state.me?.role]),
   logs: () => "",
   configuration: d => JSON.stringify([d.version, d.pitr, d.replicaOf, d.replicas, d.status, d.busy, d.pendingRestore, d.cpus, d.memoryMiB, d.diskGiB, d.port, d.parameters, d.applied, d.deletionProtection,
-    d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, state.me?.role]),
+    d.requireTLS, d.tlsReady, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.users, d.tags, state.me?.role]),
   backups: d => JSON.stringify([d.busy, d.status, d.deletionProtection, d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt, d.pitr, d.recovery]),
-  tags: d => JSON.stringify(d.tags || {}),
 };
 
-function summary(d) {
-  const base = d.cpus || state.host?.cpus || 1;
-  const live = d.live;
-  const cpu = live ? live.cpu / base : null;
-  const memShare = live && d.memoryMiB ? live.memory / (d.memoryMiB * 1048576) * 100 : null;
-  return infoPanel("Summary", [
-    [null, [["DB identifier", d.name], ["Engine", d.engineLabel]]],
-    [null, [["Status", status(d)], ["Access", h("span", { class: "with-icon" }, icon(d.publicAccess ? "globe" : "lock"), d.publicAccess ? `Public · port ${d.publicPort}` : "Private", d.requireTLS ? " · TLS" : "")]]],
-    [null, [["Size", sizeLabel(d)], ["CPU", live ? h("span", { class: "with-meter" }, percent(cpu), meter(cpu, 100, `CPU ${percent(cpu)} of ${d.cpus ? "the limit" : "the host"}`)) : "—"]]],
-    [null, [["Memory", live ? h("span", { class: "with-meter" }, `${bytes(live.memory)}${d.memoryMiB ? ` of ${mib(d.memoryMiB)}` : ""}`, memShare !== null && meter(memShare, 100, `Memory ${percent(memShare)} of the limit`)) : "—"],
-      ["Automated backups", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} retention` : h("span", { class: "status warn" }, icon("alert"), "Off")]]],
-  ], { cls: "summary-panel" });
+function factsStrip(d) {
+  const fact = (label, value) => h("div", { class: "fact" }, h("span", { class: "fact-label" }, label), h("span", { class: "fact-value" }, value));
+  return h("div", { class: "facts-strip" },
+    fact("Endpoint", endpointChip(d)),
+    fact("Size", sizeLabel(d)),
+    fact("Storage", d.diskGiB ? `${d.diskGiB} GiB` : "Uncapped"),
+    fact("Access", h("span", { class: "with-icon" }, icon(d.publicAccess ? "globe" : "lock"), d.publicAccess ? `Public :${d.publicPort}` : "Private", d.requireTLS ? " · TLS" : "")),
+    fact("Backups", d.backupRetentionDays ? plural(d.backupRetentionDays, "day") : h("span", { class: "status warn" }, icon("alert"), "Off")),
+    d.replicaOf ? fact("Source", h("a", { href: `#/databases/${d.replicaOf}` }, d.replicaOf))
+      : (d.replicas || []).length ? fact("Replicas", plural(d.replicas.length, "replica")) : null);
 }
 
 function banners(d) {
@@ -281,12 +397,11 @@ function banners(d) {
   return out;
 }
 
-export async function instanceView(name, tab = "connectivity") {
+export async function instanceView(name, tab = "overview") {
   await loadEngines();
   if (!state.instances) await sync();
   const head = h("div", { class: "page-head" });
   const alerts = h("div", { class: "stack-gap" });
-  const summarySlot = h("div");
   const tabButtons = TABS.map(([key, label]) => h("button", { type: "button", role: "tab", id: `tab-${key}`, "aria-controls": "tab-panel", onclick: () => go(`#/databases/${name}/${key}`) }, label));
   const tablist = h("div", { class: "tabs", role: "tablist", "aria-label": "Database sections" }, tabButtons);
   tablist.addEventListener("keydown", (e) => {
@@ -298,12 +413,13 @@ export async function instanceView(name, tab = "connectivity") {
     go(`#/databases/${name}/${TABS[next][0]}`);
   });
   const panelEl = h("div", { id: "tab-panel", role: "tabpanel", class: "tab-panel", tabindex: "-1" });
-  const body = h("div", null, alerts, summarySlot, tablist, panelEl);
+  const body = h("div", null, alerts, tablist, panelEl);
   const el = h("div", { class: "instance-page" }, head, body);
   let current = null, currentKey = "", currentSig = "", headSig = "", bannerSig = "", gone = false;
 
   function setTab(key) {
-    if (!BUILD[key]) key = "connectivity";
+    key = ALIASES[key] || key;
+    if (!BUILD[key]) key = "overview";
     const d = instance(name);
     tabButtons.forEach((b, i) => {
       const on = TABS[i][0] === key;
@@ -330,21 +446,29 @@ export async function instanceView(name, tab = "connectivity") {
       }
       return;
     }
-    if (gone) { gone = false; headSig = bannerSig = ""; body.replaceChildren(alerts, summarySlot, tablist, panelEl); current = null; }
-    const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel, d.replicaOf, d.replicas, state.me?.role]);
+    if (gone) { gone = false; headSig = bannerSig = ""; body.replaceChildren(alerts, tablist, panelEl); current = null; }
+    const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel, d.replicaOf, d.replicas, d.port, d.cpus, d.memoryMiB, d.diskGiB,
+      d.publicAccess, d.publicPort, d.requireTLS, d.backupRetentionDays, d.tlsReady, state.me?.role]);
     if (sig !== headSig) {
       headSig = sig;
       const locked = d.busy || d.pendingRestore;
+      const stopped = !isLive(d) && !d.busy;
+      const lead = can("operator") && stopped && d.status !== "not provisioned"
+        ? btn([icon("play"), "Start"], () => start(d), "primary")
+        : h("a", { class: `btn${isRunning(d) ? " primary" : ""}`, href: `#/databases/${d.name}/connectivity` }, icon("link"), "Connect");
       head.replaceChildren(
-        h("div", null, h("p", { class: "kicker" }, d.engineLabel, d.replicaOf ? [" · Read replica of ", h("a", { href: `#/databases/${d.replicaOf}` }, d.replicaOf)] : null), h("h1", null, d.name, " ", status(d))),
-        can("operator") ? h("div", { class: "page-actions" },
+        h("div", { class: "title-block" }, engineBadge(d, "xl"),
+          h("div", { class: "stack" },
+            h("p", { class: "kicker" }, d.engineLabel, d.replicaOf ? [" · Read replica of ", h("a", { href: `#/databases/${d.replicaOf}` }, d.replicaOf)] : null),
+            h("h1", null, d.name, " ", status(d)))),
+        can("operator") ? h("div", { class: "page-actions" }, lead,
           h("a", { class: `btn${locked ? " disabled" : ""}`, href: locked ? null : `#/databases/${d.name}/modify`, "aria-disabled": locked ? "true" : null }, icon("edit"), "Modify"),
-          menu("Actions", databaseActions(d), { cls: "primary" }))
-          : h("span", { class: "chip neutral", title: "Viewers can look but not change." }, icon("eye"), "Read only"));
+          menu("Actions", databaseActions(d)))
+          : h("div", { class: "page-actions" }, lead, h("span", { class: "chip neutral", title: "Viewers can look but not change." }, icon("eye"), "Read only")),
+        factsStrip(d));
     }
     const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters, d.replication?.state, d.replication?.detail]);
     if (bsig !== bannerSig) { bannerSig = bsig; alerts.replaceChildren(...banners(d)); }
-    summarySlot.replaceChildren(summary(d));
     if (!current) { setTab(currentKey || tab); return; }
     if (SIGNATURE[currentKey](d) !== currentSig) setTab(currentKey);
     else current.update?.(d);
@@ -356,7 +480,7 @@ export async function instanceView(name, tab = "connectivity") {
     el, title: name, nav: "databases", crumbs: [["Databases", "#/databases"], [name]],
     route(nextName, nextTab) {
       if (nextName !== name) return false;
-      setTab(nextTab || "connectivity");
+      setTab(nextTab || "overview");
       return true;
     },
     destroy() { stop(); current?.destroy?.(); },

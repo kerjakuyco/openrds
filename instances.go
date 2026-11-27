@@ -652,7 +652,7 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 			if saveErr := m.save(back); saveErr == nil {
 				m.applyPooler(ctx, next, back, running)
 			}
-			return result, fail(502, "Connection pooling did not change: "+describe(err))
+			return result, fail(502, "Connection pooling did not change: "+err.Error())
 		}
 	}
 	if next.BackupRetentionDays != r.BackupRetentionDays {

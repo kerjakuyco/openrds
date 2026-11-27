@@ -3,3 +3,8 @@ Copyright 2026 Fatur Jr and OpenRDS contributors
 
 This product is licensed under the Apache License, Version 2.0.
 See the LICENSE file for the full license text.
+
+The console includes these fonts, each under the SIL Open Font License,
+Version 1.1, with the license text in web/fonts/:
+- Source Sans 3, by Adobe (web/fonts/source-sans-3.woff2)
+- IBM Plex Mono, by IBM (web/fonts/ibm-plex-mono-*.woff2)
