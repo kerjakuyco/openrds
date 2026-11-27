@@ -146,6 +146,7 @@ type manager struct {
 	pitr        pitrState
 	replication replicationState
 	servers     serverState
+	moving      map[string]moveStep // moves running now, by database
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {

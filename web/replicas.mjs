@@ -4,18 +4,18 @@ import { state, instance, track, can } from "./store.mjs";
 import { SIZES, field, select } from "./forms.mjs";
 import { servers, multiServer, serverOf } from "./servers.mjs";
 
-// How a replica on server reaches d, as the console decides it, or why it can't.
+// How a copy on another server reaches d, or why it can't, in a few words.
 export function routeTo(d, serverId) {
   const from = serverOf(d), to = servers().find(s => s.id === serverId);
-  if (!to || to.id === (d.server || "local")) return { route: "", text: "On the same server, over its Docker network." };
-  if (from?.privateAddress && to.privateAddress) return { route: "private", text: `Over the private network, to ${from.privateAddress}:${d.port}. ${d.name} lets in only ${to.name}.` };
+  if (!to || to.id === (d.server || "local")) return { route: "", label: "Same server" };
+  if (from?.privateAddress && to.privateAddress) return { route: "private", label: "Private network", detail: `${from.privateAddress}:${d.port}` };
   const host = d.publicHost || from?.publicAddress;
-  if (!d.publicAccess) return { error: `${from?.name || "Its server"} and ${to.name} share no private network. Give both a private address on the Servers page, or turn on public access for ${d.name}.` };
-  if (!host) return { error: `Set the public address of ${from?.name || "its server"} on the Servers page.` };
-  if (!to.publicAddress) return { error: `Set the public address of ${to.name} on the Servers page, so ${d.name} can let it in.` };
-  return { route: "public", text: `Over the internet, through public access at ${host}:${d.publicPort}. ${d.name} lets in only ${to.name}. Require TLS on ${d.name}.` };
+  if (!d.publicAccess) return { error: "No private network between them. Add private addresses on Servers, or turn on public access." };
+  if (!host) return { error: `Set ${from?.name || "its server"}’s public address on Servers.` };
+  if (!to.publicAddress) return { error: `Set ${to.name}’s public address on Servers.` };
+  return { route: "public", label: "Internet", detail: `${host}:${d.publicPort}` };
 }
-export const ROUTE_LABEL = { private: "Private network", public: "Internet, through public access" };
+export const ROUTE_LABEL = { private: "Private network", public: "Internet" };
 
 const MAX_REPLICAS = 5;
 
@@ -55,7 +55,7 @@ export function createReplica(d) {
   const showRoute = () => {
     const r = routeTo(d, where.value);
     routeNote.className = r.error ? "hint warn-text" : "hint";
-    routeNote.textContent = r.error || r.text;
+    routeNote.textContent = r.error || (r.route ? `Follows over the ${r.label.toLowerCase()} (${r.detail}). Only that server gets in.` : "Follows over the server’s own Docker network.");
   };
   where.addEventListener("change", showRoute);
   showRoute();
@@ -74,7 +74,7 @@ export function createReplica(d) {
     body: [
       h("p", { class: "muted" }, `A read-only copy of ${d.name} that follows its changes within seconds. Send reads to it to take load off ${d.name}.`),
       h("div", { class: "form-grid" }, field("Replica DB identifier", name), field("Host port", port)),
-      multiServer() ? h("div", null, field("Server", where, { hint: "A replica on another server keeps a copy if this one’s server is lost." }), routeNote) : null,
+      multiServer() ? h("div", null, field("Server", where, { hint: "On another server, it keeps your data safe if this server is lost." }), routeNote) : null,
       field("Instance size", size, { hint: d.engine === "valkey" ? "Keep at least the source’s memory: Valkey holds all data in memory." : "Smaller is fine for light read traffic." }),
       h("ul", { class: "plain-list" },
         h("li", null, h("strong", null, "Same users. "), `It has the users and passwords of ${d.name}. Manage them there.`),

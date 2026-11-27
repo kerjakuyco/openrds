@@ -2,6 +2,8 @@
 import { h, api, modal, alertBox, isLive, isRunning, nextId } from "./lib.mjs";
 import { track, go } from "./store.mjs";
 import { createReplica, confirmPromote, replicaBlocker } from "./replicas.mjs";
+import { moveDatabase, moveBlocker } from "./move.mjs";
+import { multiServer } from "./servers.mjs";
 
 const post = (path) => api(path, { method: "POST" });
 
@@ -76,6 +78,7 @@ export function databaseActions(d) {
     d.replicaOf
       ? { label: "Promote to standalone", icon: "arrow", disabled: d.busy || !isRunning(d), reason: d.busy ? "Another operation is running" : isRunning(d) ? "" : "The replica must be running", run: () => confirmPromote(d) }
       : { label: "Create read replica", icon: "copy", disabled: Boolean(replicaBlocker(d)), reason: replicaBlocker(d), run: () => createReplica(d) },
+    multiServer() && { label: "Move to another server", icon: "host", disabled: Boolean(moveBlocker(d)), reason: moveBlocker(d), run: () => moveDatabase(d) },
     { label: "Modify", icon: "edit", disabled: d.busy || d.pendingRestore, run: () => go(`#/databases/${d.name}/modify`) },
     "-",
     { label: "Delete", icon: "trash", danger: true, disabled: d.busy, run: () => confirmDelete(d) },

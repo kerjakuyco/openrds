@@ -169,9 +169,13 @@ export function modal({ title, kicker = "", body = [], confirm = "Confirm", tone
     if (submit.disabled) return;
     submit.disabled = true; note.hidden = true;
     const label = submit.textContent; submit.textContent = "Working…";
-    try { await run?.(form); dlg.close(); }
+    // run returns false to keep the dialog open, as for the next step of a wizard.
+    try { if (await run?.(form) !== false) dlg.close(); }
     catch (err) { setAlert(note, err.message); }
-    finally { submit.textContent = label; submit.disabled = Boolean(gate) && gate.value.trim() !== typed; }
+    finally {
+      if (submit.textContent === "Working…") submit.textContent = label;
+      submit.disabled = Boolean(gate) && gate.value.trim() !== typed;
+    }
   });
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
@@ -250,7 +254,7 @@ export function menu(label, items, { cls = "", align = "end", labelIcon = null, 
 // ---------- status
 
 export function statusOf(d) {
-  if (d.busy) return { label: d.status === "not provisioned" ? "Creating" : "In progress", tone: "info", icon: "spinner" };
+  if (d.busy) return { label: d.move ? "Moving" : d.status === "not provisioned" ? "Creating" : "In progress", tone: "info", icon: "spinner" };
   if (d.pendingRestore) return { label: "Restore incomplete", tone: "critical", icon: "error" };
   switch (d.status) {
     case "running": return { label: "Running", tone: "good", icon: "ok" };

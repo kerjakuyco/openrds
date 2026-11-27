@@ -430,6 +430,7 @@ func handler(m *manager, a auth) http.Handler {
 	pitrRoutes(add, m)
 	replicaRoutes(add, m)
 	serverRoutes(add, m)
+	moveRoutes(add, m)
 	add("GET /api/storage/backups", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		list, err := m.remoteBackups(r.Context())
 		if err == nil {

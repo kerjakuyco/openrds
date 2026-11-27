@@ -264,11 +264,17 @@ async function run() {
     // Servers: the console's own, and how to add another.
     await page.locator('nav#nav [data-nav="servers"]').click();
     await page.getByRole("heading", { name: "Servers", exact: true }).waitFor();
-    await page.getByRole("cell", { name: /^This server/ }).first().waitFor();
-    await page.getByText("Reachable", { exact: true }).first().waitFor();
+    const thisServer = page.getByRole("article", { name: "This server" });
+    await thisServer.getByText("Online", { exact: true }).waitFor();
+    await thisServer.getByText(name, { exact: true }).waitFor();
+    await page.getByText("Why add servers?").waitFor();
     await page.locator("#add-server").click();
-    await page.getByRole("dialog").getByText("usermod -aG docker openrds", { exact: false }).waitFor();
-    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+    const wizard = page.getByRole("dialog");
+    await wizard.getByText("usermod -aG docker openrds", { exact: false }).waitFor();
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await wizard.getByLabel("SSH address").waitFor();
+    await wizard.getByRole("button", { name: "Back" }).click();
+    await wizard.getByRole("button", { name: "Cancel" }).click();
 
     // Automated backups: one row per database, changed in place.
     await page.locator('nav#nav [data-nav="automated"]').click();

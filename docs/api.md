@@ -34,6 +34,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | POST | `/instances/{name}/disk` — body: `{"diskGiB": 30}`; stopped capped instance only |
 | POST | `/instances/{name}/replicas` — operator: `{"name","port"}`, optionally `cpus`, `memoryMiB` and `diskGiB` (by default the source's) and `server` (by default the source's), creates a read replica and returns `201 {"name"}` once it follows the source. A replica on another server has `sourceRoute` `private` or `public` |
 | POST | `/instances/{name}/promote` — operator: make a replica a standalone database that accepts writes |
+| POST | `/instances/{name}/move` — operator: `{"server","port"}` (`port` defaults to its own) moves the database to another server with seconds of write downtime, keeping its name and settings; returns `204` once it runs there |
 | GET | `/instances/{name}/replication` — a replica's `state` (`replicating`, `syncing`, `connecting`, `broken`, `stopped` or `unknown`), `lagSeconds`, `detail` and `at`, read now |
 | POST | `/instances/{name}/restore-to-time` — operator: `{"name","port","targetTime"}` creates a new database as the source was at `targetTime` (RFC 3339), within the source's `recovery` window |
 | POST | `/instances/{name}/upgrade` — body: `{"version": "19"}`, a newer listed version: upgrades in place keeping the endpoint, after a snapshot (`note` says why it was taken); the previous version comes back if it fails |

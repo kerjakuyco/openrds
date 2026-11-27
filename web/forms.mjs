@@ -2,7 +2,7 @@
 // with a summary that shows what the request will do to the host.
 import { h, icon, btn, api, alertBox, setAlert, mib, nextId, windowLabel, scheduleLabel, plural, bytes, keyValues, isLive, modal, toast, help } from "./lib.mjs";
 import { state, loadEngines, engine, instance, track, sync, go } from "./store.mjs";
-import { servers, multiServer } from "./servers.mjs";
+import { servers, multiServer, roomOf } from "./servers.mjs";
 
 const SIZES = [
   { value: "micro", title: "Micro", cpus: 0.5, memoryMiB: 512 },
@@ -322,12 +322,12 @@ function databaseForm({ mode, eng, initial, source }) {
   port.addEventListener("input", () => { v.port = Number(port.value); fields.port.setError(""); changed(); });
   fields.port = field("Host port", port, { explain: "Any free port from 1024 to 65535.", hint: "Private to its server." });
   if (mode !== "modify" && multiServer()) {
-    const where = h("select", { id: nextId("server") }, placeable.map(s => h("option", { value: s.id, selected: s.id === v.server },
-      `${s.name}${s.info ? ` · ${s.info.cpus} vCPU · ${bytes(s.info.memoryBytes)}` : ""}${s.suggested ? " · most room" : ""}`)));
-    where.addEventListener("change", () => { v.server = where.value; host = hostOf(); fields.port.setError(""); changed(); });
-    fields.server = field("Server", where, { explain: "The machine it runs on. It stays there: to move it later, restore a snapshot onto another server.",
-      hint: "Its port, disk limit and memory count against this server." });
-    sections.push(section(++n, "Connectivity", null, fields.server, fields.port));
+    // Where it runs, as cards: free memory first, the roomiest marked.
+    const where = choiceCards("server", placeable.map(s => ({ value: s.id, title: s.name,
+      detail: s.info ? `${bytes(roomOf(s))} free · ${s.info.cpus} vCPU${s.suggested ? " · most room" : ""}` : s.local ? "This server" : "" })),
+    v.server, (id) => { v.server = id; host = hostOf(); fields.port.setError(""); changed(); }, { label: "Server", cls: "cols-3" });
+    sections.push(section(++n, "Server", "Where it runs. You can move it later.", where));
+    sections.push(section(++n, "Connectivity", null, fields.port));
   } else {
     sections.push(section(++n, "Connectivity", null, fields.port));
   }

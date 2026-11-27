@@ -13,6 +13,7 @@ import { poolerPanel } from "./pooler.mjs";
 import { settingsPanel, editParameters, editBackups, restoreToTime, PITR_ENGINES } from "./settings.mjs";
 import { replicationPanel, lagLabel, replicationChip } from "./replicas.mjs";
 import { multiServer, serverLabel, serverOf } from "./servers.mjs";
+import { moveDatabase, moveBlocker, moveProgress } from "./move.mjs";
 
 const TABS = [["overview", "Overview"], ["connectivity", "Connect"], ["users", "Users"], ["monitoring", "Monitoring"], ["insights", "Performance"],
   ["backups", "Backups"], ["configuration", "Settings"], ["logs", "Logs"]];
@@ -374,7 +375,8 @@ const SIGNATURE = {
 function factsStrip(d) {
   const fact = (label, value) => h("div", { class: "fact" }, h("span", { class: "fact-label" }, label), h("span", { class: "fact-value" }, value));
   return h("div", { class: "facts-strip" },
-    multiServer() ? fact("Server", h("a", { href: "#/servers", class: "with-icon" }, icon("host"), serverLabel(d))) : null,
+    multiServer() ? fact("Server", h("span", { class: "row tight" }, h("a", { href: "#/servers", class: "with-icon" }, icon("host"), serverLabel(d)),
+      can("operator") && !moveBlocker(d) ? h("button", { type: "button", class: "link-btn", onclick: () => moveDatabase(d) }, "Move") : null)) : null,
     fact("Endpoint", endpointChip(d)),
     fact("Size", sizeLabel(d)),
     fact("Storage", d.diskGiB ? `${d.diskGiB} GiB` : "Uncapped"),
@@ -386,7 +388,8 @@ function factsStrip(d) {
 
 function banners(d) {
   const out = [];
-  if (d.busy) out.push(alertBox("An operation is running. Please wait.", "info"));
+  if (d.move) out.push(moveProgress(d));
+  else if (d.busy) out.push(alertBox("An operation is running. Please wait.", "info"));
   if (d.pendingRestore && !d.busy) out.push(alertBox("The restore didn’t finish, so data is incomplete. Check the logs, then restore again.", "error"));
   if (d.status === "unhealthy" && !d.busy) out.push(alertBox("Health check failing. Check the logs.", "error"));
   if (d.status === "not provisioned" && !d.busy) out.push(alertBox("The container is missing. Use Actions → Start to retry, or delete it.", "warn"));
@@ -454,7 +457,7 @@ export async function instanceView(name, tab = "overview") {
     }
     if (gone) { gone = false; headSig = bannerSig = ""; body.replaceChildren(alerts, tablist, panelEl); current = null; }
     const sig = JSON.stringify([d.status, d.busy, d.pendingRestore, d.deletionProtection, d.applied, d.engineLabel, d.replicaOf, d.replicas, d.port, d.cpus, d.memoryMiB, d.diskGiB,
-      d.publicAccess, d.publicPort, d.requireTLS, d.backupRetentionDays, d.tlsReady, state.me?.role]);
+      d.publicAccess, d.publicPort, d.requireTLS, d.backupRetentionDays, d.tlsReady, state.me?.role, d.serverName, d.move?.step, (state.servers || []).length]);
     if (sig !== headSig) {
       headSig = sig;
       const locked = d.busy || d.pendingRestore;
@@ -473,7 +476,7 @@ export async function instanceView(name, tab = "overview") {
           : h("div", { class: "page-actions" }, lead, h("span", { class: "chip neutral", title: "Viewers can look but not change." }, icon("eye"), "Read only")),
         factsStrip(d));
     }
-    const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters, d.replication?.state, d.replication?.detail]);
+    const bsig = JSON.stringify([d.busy, d.pendingRestore, d.status, d.applied, d.cpus, d.memoryMiB, d.parameters, d.replication?.state, d.replication?.detail, d.move, d.serverName]);
     if (bsig !== bannerSig) { bannerSig = bsig; alerts.replaceChildren(...banners(d)); }
     if (!current) { setTab(currentKey || tab); return; }
     if (SIGNATURE[currentKey](d) !== currentSig) setTab(currentKey);

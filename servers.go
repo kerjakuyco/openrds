@@ -468,6 +468,18 @@ func (m *manager) addServer(ctx context.Context, req serverRequest) (s server, e
 	if err := m.syncImages(ctx, s.ID); err != nil {
 		log.Printf("copying helper images to %s: %v", s.Name, err)
 	}
+	// Addresses nobody gave are found, here and on the console's server, so
+	// private access and replicas between them work without looking them up.
+	if filled := m.fillAddresses(ctx, s); filled != s {
+		if err := m.saveServer(filled); err == nil {
+			s = filled
+		}
+	}
+	if local, _ := m.server(localServer); local.PrivateAddress == "" {
+		if filled := m.fillAddresses(ctx, local); filled.PrivateAddress != "" {
+			m.saveServer(filled)
+		}
+	}
 	return s, nil
 }
 
@@ -558,6 +570,66 @@ func (m *manager) removeServer(ctx context.Context, id string) error {
 	}
 	m.noteServer(ctx, s.Name, "Remove server", "")
 	return nil
+}
+
+// ---------- finding a server's addresses
+
+// A private IPv4 address, in the ranges private access allows by default.
+func privateIPv4(text string) bool {
+	a, err := netip.ParseAddr(text)
+	if err != nil || !a.Is4() {
+		return false
+	}
+	for _, r := range privateRanges {
+		if netip.MustParsePrefix(r).Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// The private IPv4 addresses a server's own interfaces have, read with the
+// disk helper image on the host network, without Docker's own bridges.
+func (m *manager) detectPrivate(ctx context.Context, id string) []string {
+	var out bytes.Buffer
+	if m.dockerFor(id).run(ctx, nil, nil, &out, "run", "--rm", "--network", "host", "--entrypoint", "ip", diskHelperImage(), "-4", "-o", "addr", "show") != nil {
+		return nil
+	}
+	var found []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		f := strings.Fields(line) // 2: eth0 inet 10.0.0.5/24 brd ...
+		if len(f) < 4 || f[2] != "inet" {
+			continue
+		}
+		ip, _, _ := strings.Cut(f[3], "/")
+		name := f[1]
+		if name == "lo" || name == "docker0" || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "veth") || !privateIPv4(ip) {
+			continue
+		}
+		found = append(found, ip)
+	}
+	return found
+}
+
+// Fill in the addresses a server lacks: the SSH host when it is a private
+// address, otherwise one its interfaces have; and the SSH host as its public
+// address when that is not private.
+func (m *manager) fillAddresses(ctx context.Context, s server) server {
+	host := ""
+	if t, err := parseSSH(s.Address); err == nil {
+		host = t.host
+	}
+	if s.PrivateAddress == "" {
+		if privateIPv4(host) {
+			s.PrivateAddress = host
+		} else if found := m.detectPrivate(ctx, s.ID); len(found) > 0 {
+			s.PrivateAddress = found[0]
+		}
+	}
+	if a, err := netip.ParseAddr(host); s.PublicAddress == "" && host != "" && !privateIPv4(host) && (err != nil || !a.IsLoopback()) {
+		s.PublicAddress = host
+	}
+	return s
 }
 
 // ---------- helper images
@@ -779,6 +851,10 @@ func (v *serverView) fill(ctx context.Context, m *manager) {
 	defer cancel()
 	var out bytes.Buffer
 	err := m.dockerFor(v.ID).run(check, nil, nil, &out, "info", "--format", infoFormat)
+	if ctx.Err() != nil {
+		v.Reachable = !m.recentlyDown(v.ID) // the page went away: no news about the server
+		return
+	}
 	m.noteReachable(v.ID, err)
 	if err != nil {
 		v.Problem = strings.TrimPrefix(err.Error(), "docker: ")
@@ -917,6 +993,16 @@ func serverRoutes(add func(string, int, endpoint), m *manager) {
 			sendJSON(w, 201, s)
 		}
 		return err
+	})
+	add("POST /api/servers/{id}/detect", roleAdmin, func(w http.ResponseWriter, r *http.Request) error {
+		s, ok := m.server(r.PathValue("id"))
+		if !ok {
+			return fail(404, "Server not found.")
+		}
+		found := m.detectPrivate(r.Context(), s.ID)
+		suggested := m.fillAddresses(r.Context(), server{ID: s.ID, Address: s.Address})
+		sendJSON(w, 200, map[string]any{"private": found, "privateAddress": suggested.PrivateAddress, "publicAddress": suggested.PublicAddress})
+		return nil
 	})
 	add("PUT /api/servers/{id}", roleAdmin, func(w http.ResponseWriter, r *http.Request) error {
 		var req serverRequest

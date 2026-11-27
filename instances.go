@@ -37,6 +37,7 @@ type instanceView struct {
 	Replication    *replicationStatus `json:"replication,omitempty"` // a replica's, as last read
 	SourceRoute    string             `json:"sourceRoute,omitempty"` // a replica on another server: private or public
 	ServerName     string             `json:"serverName"`
+	Move           *moveStep          `json:"move,omitempty"`        // a move running now
 	PrivateHost    string             `json:"privateHost,omitempty"` // with private access on
 }
 
@@ -86,6 +87,9 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		}
 		v.BackupIntervalHours = int(backupInterval(r.BackupIntervalHours) / time.Hour)
 		v.Version = r.version()
+		if step, ok := m.moving[r.Name]; ok {
+			v.Move = &step
+		}
 		if srv, ok := m.server(r.Server); ok {
 			v.ServerName = srv.Name
 			if r.PrivateAccess {

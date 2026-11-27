@@ -53,6 +53,7 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | `binlog.go` | Point-in-time recovery for MySQL: binary log collection, base backups with their position, replay to a time |
 | `replicas.go`, `web/replicas.mjs` | Read replicas for every engine: creation, the source's network, replication status and lag alerts, promotion |
 | `servers.go`, `engines/private-gateway.yaml`, `web/servers.mjs` | Servers: Docker over SSH with pinned host keys, helper images, reachability alerts, metrics over SSH, private access |
+| `move.go` | Moving a database to another server: a replica there, a short write pause, promotion, and taking over the name |
 | `scripts/test-server/` | A second server for the end-to-end checks: Docker-in-Docker with SSH |
 | `backups.go`, `schedule.go`, `offsite.go`, `diskspace_*.go` | Snapshots, automated backups, copies to S3-compatible storage, and the free-space reserve backups keep |
 | `quota.go`, `disk-helper.sh` | Data volume limits |
@@ -82,7 +83,7 @@ npm install --prefix /tmp/openrds-ui playwright-core
 NODE_PATH=/tmp/openrds-ui/node_modules node scripts/ui-smoke.cjs
 ```
 
-`scripts/smoke.py` exercises PostgreSQL, MySQL and Valkey against real Docker: accounts and roles; database users, password changes, required TLS and the firewall gateway; parameters, a deferred change applied by reboot, metric history, backups, deletion protection and a final snapshot restored into a new database; a snapshot of each engine's oldest version restored into its latest; MySQL point-in-time recovery; backup storage against a signature-checking S3 gateway, including an import and restore after losing the local copy; and a second server reached over SSH (a privileged Docker-in-Docker container), with a database there on its private address, a snapshot restored onto this server, and the server going away and coming back.
+`scripts/smoke.py` exercises PostgreSQL, MySQL and Valkey against real Docker: accounts and roles; database users, password changes, required TLS and the firewall gateway; parameters, a deferred change applied by reboot, metric history, backups, deletion protection and a final snapshot restored into a new database; a snapshot of each engine's oldest version restored into its latest; MySQL point-in-time recovery; backup storage against a signature-checking S3 gateway, including an import and restore after losing the local copy; and a second server reached over SSH (a privileged Docker-in-Docker container), with a database there on its private address, a snapshot restored onto this server, a read replica on a second test server, a move between them, and a server going away and coming back.
 
 `scripts/ui-smoke.cjs` drives Chrome on desktop and mobile: first-run setup, creating a database from the dashboard, every tab, settings changed in place, a snapshot, modify and reboot, backup storage, the restore form, events and themes, and a viewer who accepts an invitation in a second browser. It needs a fresh installation, because it creates the first administrator account.
 

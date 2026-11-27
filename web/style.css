@@ -1197,16 +1197,68 @@ dl.rows .row.tight { gap: 8px }
 
 /* ---------- servers */
 .nav-count.warn { color: var(--warn) }
-.server-mark { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 9px; color: var(--accent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)) }
 .server-line { display: inline-flex; align-items: center; gap: 5px; color: var(--muted) }
 .server-line .icon { width: 13px; height: 13px }
-.server-capacity { min-width: 150px; gap: 4px }
-.server-capacity .meter { width: 100%; max-width: 180px }
-.steps { margin: 0 0 4px; padding-left: 20px; display: grid; gap: 12px; line-height: 1.5 }
-.steps .code-wrap { margin-top: 8px }
-.host-keys:empty { display: none }
-.host-keys { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2, transparent) }
-.fingerprints { list-style: none; padding: 0 }
+.srv-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); align-items: stretch }
+.srv-card { display: grid; gap: 14px; align-content: start; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0 }
+.srv-card.down { border-color: color-mix(in srgb, var(--critical) 45%, var(--line)); box-shadow: inset 3px 0 0 var(--critical), var(--shadow) }
+.srv-head { display: flex; align-items: center; gap: 12px; min-width: 0 }
+.srv-head .stack { min-width: 0; flex: 1 }
+.srv-head h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; margin: 0; overflow-wrap: anywhere }
+.srv-head small { color: var(--muted); font-family: var(--mono); font-size: 11.5px }
+.srv-head-end { display: flex; align-items: center; gap: 6px; flex-shrink: 0 }
+.srv-icon { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 11px; color: var(--accent); background: var(--accent-soft) }
+.srv-card.down .srv-icon { color: var(--critical); background: var(--critical-bg) }
+.srv-memory { display: grid; gap: 7px }
+.srv-memory-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted) }
+.srv-memory-head strong { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums }
+.srv-memory .meter { width: 100% }
+.srv-rows { display: grid; gap: 6px; margin: 0 }
+.srv-rows > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 28px }
+.srv-rows dt { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted) }
+.srv-rows dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+.srv-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line) }
+.srv-dbs { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0 }
+.srv-dbs a.tag-chip { text-decoration: none }
+.srv-add { place-items: center; place-content: center; text-align: center; gap: 6px; min-height: 220px; border: 1.5px dashed var(--line-strong); background: transparent; box-shadow: none; cursor: pointer; color: var(--ink); font: inherit; transition: border-color .15s var(--ease), background .15s var(--ease) }
+.srv-add:hover, .srv-add:focus-visible { border-color: var(--accent); background: var(--accent-soft) }
+.srv-add small { color: var(--muted) }
+.srv-add-icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; color: var(--on-accent); background: var(--accent); margin-bottom: 4px }
+.srv-intro { padding: 18px 20px }
+.srv-intro h2 { font-size: 16px; margin: 0 0 12px }
+.srv-reasons { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)) }
+.srv-reasons li { display: flex; gap: 10px; align-items: flex-start; line-height: 1.45 }
+.srv-reasons .icon { color: var(--accent); flex: none; margin-top: 2px }
+
+/* the add-server wizard */
+.wizard { display: grid; gap: 18px }
+.wizard-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; flex-wrap: wrap; counter-reset: step }
+.wizard-steps li { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-weight: 600; font-size: 13px }
+.wizard-steps li.current { color: var(--accent-ink); background: var(--accent-soft) }
+.wizard-steps li.done { color: var(--good) }
+.wizard-num { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--surface); border: 1px solid var(--line-strong); font-family: var(--mono); font-size: 11px }
+.wizard-steps li.current .wizard-num { background: var(--accent); border-color: var(--accent); color: var(--on-accent) }
+.wizard-steps li.done .wizard-num { background: var(--good-bg); border-color: transparent; color: var(--good) }
+.wizard-num .icon { width: 13px; height: 13px }
+.wizard-page { display: grid; gap: 12px }
+.wizard-page p { margin: 0; line-height: 1.5 }
+.wizard-back:has(button[hidden]) { display: none }
+.fingerprints { list-style: none; margin: 0; padding: 12px 14px; display: grid; gap: 6px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line) }
 .fingerprints code { font-size: 12.5px; word-break: break-all }
-.servers-hint { border-top: 1px solid var(--line) }
+
+/* moving a database */
+.move-targets { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)) }
+.move-target-head { display: flex; align-items: center; justify-content: space-between; gap: 8px }
+.move-address { display: grid; gap: 6px; margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line) }
+.move-address > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap }
+.move-address dt { color: var(--muted); font-size: 13px }
+.move-address dd { margin: 0 }
+.move-plan { margin: 4px 0 0; padding-left: 20px; display: grid; gap: 6px; line-height: 1.5 }
+.move-progress .stack { gap: 8px }
+.move-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px 16px; flex-wrap: wrap }
+.move-steps li { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 600; font-size: 13px }
+.move-steps li.done { color: var(--good) }
+.move-steps li.current { color: var(--ink) }
+.move-steps .icon { width: 14px; height: 14px }
+.move-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; margin: 0 3px }
 .hint.warn-text { color: var(--warn) }

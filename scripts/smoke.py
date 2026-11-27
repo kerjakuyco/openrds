@@ -727,15 +727,23 @@ def exercise_servers():
         api(f"instances/{far}/promote", "POST")
         assert not next(i for i in api("instances") if i["name"] == far).get("replicaOf")
 
-        cli("docker", "pause", test)
+        # Move the database to the second server: same name and port, data intact, old copy gone.
+        api(f"instances/{name}/move", "POST", {"server": other_id})
+        moved = next(i for i in api("instances") if i["name"] == name)
+        assert moved["server"] == other_id and moved["port"] == port and moved["status"] == "running", moved
+        assert cli("docker", "run", "--rm", "--network", network, "--env", "PGPASSWORD", "postgres:17-alpine", "psql", "-XAt", "-h", other_ip, "-p", str(port),
+                   "-U", c["user"], "-d", c["database"], "-c", "SELECT count(*) FROM smoke", env={**os.environ, "PGPASSWORD": c["password"]}) == "2"
+        assert cli("docker", "exec", test, "sh", "-c", "docker ps -aq | wc -l").strip() == "0", "the old copy and its gateway are removed"
+
+        cli("docker", "pause", other)
         wait_for("the database to show its server is unreachable", lambda: next(i for i in api("instances") if i["name"] == name)["status"] == "unreachable", 180)
         wait_for("the unreachable event", lambda: any(e.get("kind") == "server" and e["action"] == "Server unreachable" for e in api("activity")), 150)
-        cli("docker", "unpause", test)
+        cli("docker", "unpause", other)
         wait_for("the database to come back", lambda: next(i for i in api("instances") if i["name"] == name)["status"] == "running", 180)
-        refused(f"servers/{server_id}", "DELETE", 409)
-        print("servers: added over SSH with their host keys, a database there on the private address with TLS, metrics, a snapshot restored here, a read replica on another server over the private network and its promotion, unreachable and back passed", flush=True)
+        refused(f"servers/{other_id}", "DELETE", 409)
+        print("servers: added over SSH with their host keys, a database there on the private address with TLS, metrics, a snapshot restored here, a read replica on another server over the private network and its promotion, a move to the other server, unreachable and back passed", flush=True)
     finally:
-        subprocess.run(["docker", "unpause", test], capture_output=True)
+        subprocess.run(["docker", "unpause", test, other], capture_output=True)
         for db in sorted(api("instances"), key=lambda i: not i.get("replicaOf")):
             if db["name"] in (far, name, restored):
                 api(f"instances/{db['name']}", "DELETE")

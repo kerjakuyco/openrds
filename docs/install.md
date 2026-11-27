@@ -146,11 +146,11 @@ Only the addresses you list can connect; everything else is refused. Docker bypa
 
 OpenRDS can run databases on other servers too, managed from this console over SSH. On the **Servers** page, click **Add server** and follow the dialog:
 
-1. On the new server, install Docker Engine 28 or newer, then run the command the dialog shows. It creates an `openrds` user that accepts the console's SSH key.
-2. Enter a name and the SSH address, such as `openrds@10.0.0.5`. Click **Check host key**, and compare the fingerprint with the one `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints on the server.
-3. If your servers share a private network, enter the new server's private address, so apps on your other servers can reach its databases privately.
+1. **Prepare.** On the new server, install Docker Engine 28 or newer, then run the command the dialog shows. It creates an `openrds` user that accepts the console's SSH key.
+2. **Connect.** Enter a name and the SSH address, such as `openrds@10.0.0.5`.
+3. **Verify.** Compare the fingerprint with the one `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints on the server, and tick **They match**.
 
-When you create a database, choose which server it runs on.
+OpenRDS finds the servers' private and public addresses itself. When you create a database, choose which server it runs on; to move one later, click **Move** next to its server.
 
 ## Keep OpenRDS up to date
 

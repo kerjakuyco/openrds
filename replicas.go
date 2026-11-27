@@ -366,31 +366,37 @@ type replicaRequest struct {
 // Create a read replica of source. The source stays available; it is held
 // for other operations while its data is copied, so the copy and the users
 // the replica starts with match.
-func (m *manager) createReplica(ctx context.Context, source string, req replicaRequest) (err error) {
+func (m *manager) createReplica(ctx context.Context, source string, req replicaRequest) error {
 	src, releaseSource, err := m.begin(source, nil, false)
 	if err != nil {
 		return err
 	}
 	defer releaseSource()
+	_, err = m.replicate(ctx, src, req)
+	return err
+}
+
+// Create a replica of src, which the caller holds, and return it.
+func (m *manager) replicate(ctx context.Context, src record, req replicaRequest) (r record, err error) {
 	all, err := m.records()
 	if err != nil {
-		return err
+		return r, err
 	}
 	states, err := m.states(ctx)
 	if err != nil {
-		return fail(503, "Cannot read database status: "+err.Error())
+		return r, fail(503, "Cannot read database status: "+err.Error())
 	}
 	switch reps := replicasOf(all, src.Name); {
 	case src.ReplicaOf != "":
-		return fail(409, fmt.Sprintf("%s is a read replica. Create replicas of its source, %s.", src.Name, src.ReplicaOf))
+		return r, fail(409, fmt.Sprintf("%s is a read replica. Create replicas of its source, %s.", src.Name, src.ReplicaOf))
 	case src.PendingRestore:
-		return fail(409, "This instance has an incomplete restore.")
+		return r, fail(409, "This instance has an incomplete restore.")
 	case states[src.Project] != "running":
-		return fail(409, fmt.Sprintf("Start %s and wait until it is healthy: the replica copies its data while it runs.", src.Name))
+		return r, fail(409, fmt.Sprintf("Start %s and wait until it is healthy: the replica copies its data while it runs.", src.Name))
 	case src.Layout < currentLayout:
-		return fail(409, fmt.Sprintf("Reboot %s once first. It was started by an earlier version of OpenRDS.", src.Name))
+		return r, fail(409, fmt.Sprintf("Reboot %s once first. It was started by an earlier version of OpenRDS.", src.Name))
 	case len(reps) >= maxReplicas:
-		return fail(409, fmt.Sprintf("%s already has %d read replicas, the most it can have.", src.Name, maxReplicas))
+		return r, fail(409, fmt.Sprintf("%s already has %d read replicas, the most it can have.", src.Name, maxReplicas))
 	}
 	spec := instanceSpec{Name: req.Name, Engine: src.Engine, Version: src.version(), Server: src.Server, Port: req.Port, CPUs: src.CPUs, MemoryMiB: src.MemoryMiB,
 		DiskGiB: src.DiskGiB, Parameters: maps.Clone(src.Parameters), RequireTLS: src.RequireTLS, BackupWindow: src.BackupWindow, Tags: maps.Clone(src.Tags)}
@@ -411,37 +417,37 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 	}
 	address, route, err := m.replicaRoute(src, spec.Server)
 	if err != nil {
-		return err
+		return r, err
 	}
 	if route != "" {
 		// The replica checks the source's certificate against the address it dials.
 		host, _, _ := net.SplitHostPort(address)
 		names, err := m.servedNames(ctx, src)
 		if err != nil {
-			return fail(502, fmt.Sprintf("Could not read the certificate %s uses: %s", src.Name, err))
+			return r, fail(502, fmt.Sprintf("Could not read the certificate %s uses: %s", src.Name, err))
 		}
 		if !slices.Contains(names, host) {
-			return fail(409, fmt.Sprintf("Reboot %s once first, so its certificate names %s, the address the replica connects to.", src.Name, host))
+			return r, fail(409, fmt.Sprintf("Reboot %s once first, so its certificate names %s, the address the replica connects to.", src.Name, host))
 		}
 	}
 	if src.DiskGiB > 0 && spec.DiskGiB > 0 && spec.DiskGiB < src.DiskGiB {
-		return fail(400, fmt.Sprintf("Give the replica at least the %d GiB of storage %s has: it holds the same data.", src.DiskGiB, src.Name))
+		return r, fail(400, fmt.Sprintf("Give the replica at least the %d GiB of storage %s has: it holds the same data.", src.DiskGiB, src.Name))
 	}
 	if err := checkStandby(src, record{instanceSpec: spec}); err != nil {
-		return err
+		return r, err
 	}
 	if err := m.checkDiskRequest(ctx, spec.Server, spec.DiskGiB); err != nil {
-		return err
+		return r, err
 	}
 	if src.ReplicationPassword == "" {
 		src.ReplicationPassword = randomHex(16) // MySQL allows 32 characters
 		if err := m.save(src); err != nil {
-			return err
+			return r, err
 		}
 	}
 	r, release, err := m.begin(spec.Name, &spec, true)
 	if err != nil {
-		return err
+		return r, err
 	}
 	defer release()
 	r.ReplicaOf, r.SourceAddress, r.SourceRoute = src.Name, address, route
@@ -450,24 +456,24 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 		r.ServerID = serverID()
 	}
 	if err := writeJSON(m.recordPath(r.Name), r); err != nil {
-		return err
+		return r, err
 	}
 	finish := m.trackDetail(ctx, r.Name, "Create read replica", "of "+src.Name)
 	defer func() { finish(err) }()
 	if err := m.prepareSource(ctx, src, r); err != nil {
 		os.Remove(m.recordPath(r.Name)) // nothing else exists yet
-		return fail(502, fmt.Sprintf("The replica was not created: %s could not be prepared for replication. %s", src.Name, redact(err, src.ReplicationPassword)))
+		return r, fail(502, fmt.Sprintf("The replica was not created: %s could not be prepared for replication. %s", src.Name, redact(err, src.ReplicationPassword)))
 	}
 	if route != "" {
 		if err := m.applySourceAccess(ctx, src); err != nil {
 			os.Remove(m.recordPath(r.Name))
 			m.applySourceAccess(context.WithoutCancel(ctx), src)
-			return fail(502, fmt.Sprintf("The replica was not created: %s could not let in replication from its server. %s", src.Name, err))
+			return r, fail(502, fmt.Sprintf("The replica was not created: %s could not let in replication from its server. %s", src.Name, err))
 		}
 	}
 	if r.DiskGiB > 0 {
 		if err := m.attachDisk(ctx, r); err != nil {
-			return fail(502, "The replica was not created: its disk could not be prepared. "+err.Error())
+			return r, fail(502, "The replica was not created: its disk could not be prepared. "+err.Error())
 		}
 	}
 	switch r.Engine {
@@ -479,11 +485,11 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 		err = m.start(ctx, &r) // Valkey copies the data itself once it connects
 	}
 	if err != nil {
-		return fail(502, "The replica did not finish and is marked incomplete; delete it and try again. "+redact(err, r.ReplicationPassword).Error())
+		return r, fail(502, "The replica did not finish and is marked incomplete; delete it and try again. "+redact(err, r.ReplicationPassword).Error())
 	}
 	r.PendingRestore = false
 	if err := writeJSON(m.recordPath(r.Name), r); err != nil {
-		return err
+		return r, err
 	}
 	st := m.awaitReplication(ctx, r)
 	if st.State != "replicating" && st.State != "syncing" {
@@ -491,9 +497,9 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 		if detail == "" {
 			detail = "Its logs show why."
 		}
-		return fail(502, fmt.Sprintf("%s is running but does not receive changes from %s yet (%s). %s", r.Name, src.Name, st.State, detail))
+		return r, fail(502, fmt.Sprintf("%s is running but does not receive changes from %s yet (%s). %s", r.Name, src.Name, st.State, detail))
 	}
-	return nil
+	return r, nil
 }
 
 // Let replicas connect: a replication user (PostgreSQL also gets a slot for
@@ -810,11 +816,18 @@ func (m *manager) promote(ctx context.Context, name string) (err error) {
 	if states[r.Project] != "running" {
 		return fail(409, fmt.Sprintf("Start %s and wait until it is healthy: promotion runs in the database.", r.Name))
 	}
-	source := r.ReplicaOf
-	finish := m.trackDetail(ctx, name, "Promote read replica", "was a replica of "+source)
+	finish := m.trackDetail(ctx, name, "Promote read replica", "was a replica of "+r.ReplicaOf)
 	defer func() { finish(err) }()
+	_, err = m.promoteRecord(ctx, r)
+	return err
+}
+
+// Promote a replica the caller holds, and return it as saved.
+func (m *manager) promoteRecord(ctx context.Context, r record) (record, error) {
+	source := r.ReplicaOf
 	next := r
 	next.ReplicaOf, next.ReplicationPassword, next.sourceTLS, next.SourceAddress, next.SourceRoute = "", "", false, "", ""
+	var err error
 	switch r.Engine {
 	case "postgres":
 		err = m.admin(ctx, r, pgPromoteSQL)
@@ -830,10 +843,10 @@ func (m *manager) promote(ctx context.Context, name string) (err error) {
 		}
 	}
 	if err != nil {
-		return fail(502, fmt.Sprintf("Promotion did not finish; %s is still a read replica of %s. %s", r.Name, source, err))
+		return r, fail(502, fmt.Sprintf("Promotion did not finish; %s is still a read replica of %s. %s", r.Name, source, err))
 	}
 	if err := m.save(next); err != nil {
-		return err
+		return r, err
 	}
 	if src, err := m.record(source); err == nil {
 		if r.SourceRoute == "" {
@@ -848,7 +861,7 @@ func (m *manager) promote(ctx context.Context, name string) (err error) {
 		}
 	}
 	m.forgetReplication(r)
-	return nil
+	return next, nil
 }
 
 // PostgreSQL leaves recovery at once, then forgets its source.

@@ -340,3 +340,53 @@ func TestANewDatabaseGoesToItsServer(t *testing.T) {
 		t.Fatalf("views: %+v", views)
 	}
 }
+
+func TestAServersAddressesAreFound(t *testing.T) {
+	m := testManager(t, func(_ context.Context, env []string, _ io.Reader, out io.Writer, args ...string) error {
+		if slices.Contains(args, "--network") && slices.Contains(args, "ip") {
+			fmt.Fprint(out, `1: lo    inet 127.0.0.1/8 scope host lo
+2: eth0    inet 203.0.113.10/24 brd 203.0.113.255 scope global eth0
+3: eth1    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth1
+4: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
+5: br-1a2b    inet 172.18.0.1/16 scope global br-1a2b
+6: tailscale0    inet 100.101.102.103/32 scope global tailscale0
+`)
+		}
+		return nil
+	})
+	addTestServer(t, m, "s0000000a", "openrds@203.0.113.10", "")
+	if got := m.detectPrivate(t.Context(), "s0000000a"); !slices.Equal(got, []string{"10.0.0.5", "100.101.102.103"}) {
+		t.Fatalf("private addresses, without loopback, Docker bridges or public ones: %v", got)
+	}
+	for _, c := range []struct {
+		address, private, public string
+	}{
+		{"openrds@203.0.113.10", "10.0.0.5", "203.0.113.10"}, // a public SSH host is the public address
+		{"openrds@10.0.0.7", "10.0.0.7", ""},                 // a private SSH host is the private address
+		{"openrds@db2.example.com:2222", "10.0.0.5", "db2.example.com"},
+		{"openrds@127.0.0.1:22022", "10.0.0.5", ""}, // a tunnel is neither
+	} {
+		s := m.fillAddresses(t.Context(), server{ID: "s0000000a", Address: c.address})
+		if s.PrivateAddress != c.private || s.PublicAddress != c.public {
+			t.Errorf("%s: %q %q", c.address, s.PrivateAddress, s.PublicAddress)
+		}
+	}
+	kept := m.fillAddresses(t.Context(), server{ID: "s0000000a", Address: "openrds@203.0.113.10", PrivateAddress: "192.168.1.4", PublicAddress: "x.example.com"})
+	if kept.PrivateAddress != "192.168.1.4" || kept.PublicAddress != "x.example.com" {
+		t.Fatal("addresses people gave are kept")
+	}
+}
+
+func TestALeavingPageSaysNothingAboutServers(t *testing.T) {
+	f := newFleet()
+	m := testManager(t, f.run)
+	addTestServer(t, m, "s0000000a", "openrds@10.0.0.9", "")
+	f.down["ssh://openrds@10.0.0.9:22"] = true // what a cancelled call looks like
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	m.serverViews(ctx)
+	m.statesFor(ctx, "io.openrds.database=true")
+	if m.recentlyDown("s0000000a") || m.unreachable()["s0000000a"] {
+		t.Fatal("a request the browser cancelled does not mark a server unreachable")
+	}
+}

@@ -37,7 +37,7 @@ Each database runs in its own container with its own volume, network and generat
 - **Databases in a minute.** PostgreSQL, MySQL and Valkey, from stable to latest versions, with size presets, CPU and memory limits you can change later, optional disk caps, engine parameters and tags. Memory settings such as `shared_buffers` and `innodb_buffer_pool_size` follow each database's memory limit.
 - **Backups you can rely on.** Automated backups from daily to hourly with a retention period, point-in-time recovery to any second for PostgreSQL and MySQL, manual snapshots, a final snapshot on delete, and restores into a new database. Copies go to any S3-compatible storage (Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO) and can be imported on a new server after losing the old one.
 - **Connection pooling.** PgBouncer in front of PostgreSQL, like RDS Proxy, so hundreds of clients share a few server connections. Turn it on without restarting the database.
-- **Many servers, one console.** Add servers over SSH and choose where each database runs. Reach databases from your other servers over a private network with an allowlist, see each server's capacity, and get alerted when one becomes unreachable.
+- **Many servers, one console.** Add servers over SSH and choose where each database runs. Move a database to another server in one step with seconds of write downtime, reach databases from your other servers over a private network with an allowlist, see each server's capacity, and get alerted when one becomes unreachable.
 - **Read replicas.** Read-only copies of PostgreSQL, MySQL and Valkey databases that follow their source within seconds, each with its own port and size, on the same server or another one. Send reads to them, watch their lag, and promote one to a standalone database, for example when a server is lost.
 - **Secure by default.** Databases listen only on the server itself. Add read-only or read-write database users, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
 - **A console that answers at a glance.** The database list shows live load, copyable endpoints and replicas under their source, and previews any database beside the list with its last hour of CPU, memory and connections and quick actions. Each database opens on an overview of its health, how to connect, replication, backups and recent events.
@@ -142,7 +142,7 @@ flowchart LR
 
 OpenRDS grows toward the managed-database experience, one release at a time. Ideas we want to build next:
 
-- Moving a database to another server in one step, and automatic failover
+- Automatic failover to a replica on another server
 
 Have a different idea? [Request a feature](https://github.com/kerjakuyco/openrds/issues/new?template=feature_request.yml) or upvote an existing one.
 
