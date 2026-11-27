@@ -4,6 +4,9 @@ import { h, icon, btn, api, toast, modal, panel, alertBox, mib, plural, bytes, s
 import { state, engine, sync, can, track } from "./store.mjs";
 import { SIZES, RETENTION, LENGTHS, parseWindow, formatWindow, hhmm, field, choiceCards, select, sizeName, parameterEditor, frequencyField } from "./forms.mjs";
 
+// The engines that restore to any second: PostgreSQL replays WAL, MySQL its binary logs.
+export const PITR_ENGINES = ["postgres", "mysql"];
+
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Why settings cannot change right now, if they cannot.
@@ -183,19 +186,26 @@ function tlsSwitch(d, why) {
   return input;
 }
 
-// Point-in-time recovery starts with the server, so it asks when to restart.
+// PostgreSQL archives WAL from its start, so turning point-in-time recovery
+// on asks when to restart. MySQL writes its binary log anyway.
 function pitrSwitch(d, why) {
   const input = h("input", { type: "checkbox", class: "switch", role: "switch", checked: Boolean(d.pitr), disabled: Boolean(why) || !d.backupRetentionDays, "aria-label": "Point-in-time recovery" });
   if (!d.backupRetentionDays) input.title = "Turn on automated backups first.";
   input.addEventListener("change", () => {
     const on = input.checked;
-    const apply = applyChoice(d);
+    const mysql = d.engine === "mysql";
+    const apply = mysql ? { el: null, now: () => false } : applyChoice(d);
+    const days = plural(d.backupRetentionDays, "day");
     let saved = false;
     const dlg = modal({
       title: on ? "Turn on point-in-time recovery?" : "Turn off point-in-time recovery?", kicker: d.name, confirm: on ? "Turn on" : "Turn off", tone: on ? "primary" : "danger",
-      body: [h("p", { class: "muted" }, on
-        ? `PostgreSQL archives its WAL at least once a minute, and automated backups become physical base backups. You can then restore to any second of the last ${plural(d.backupRetentionDays, "day")}. The first base backup is taken right after the restart.`
-        : "WAL stops being archived. Existing base backups and WAL stay until the retention period ends."), apply.el],
+      body: [h("p", { class: "muted" }, mysql
+        ? on
+          ? `OpenRDS copies MySQL’s binary logs at least once a minute, and automated backups record their position in them. You can then restore to any second of the last ${days}. No restart is needed: the first base backup starts right away.`
+          : "Binary logs stop being copied. Existing base backups and logs stay until the retention period ends."
+        : on
+          ? `PostgreSQL archives its WAL at least once a minute, and automated backups become physical base backups. You can then restore to any second of the last ${days}. The first base backup is taken right after the restart.`
+          : "WAL stops being archived. Existing base backups and WAL stay until the retention period ends."), apply.el],
       run: async () => { await submit(d, { pitr: on, applyImmediately: apply.now() }, "point-in-time recovery setting"); saved = true; },
     });
     dlg.addEventListener("close", () => { if (!saved) input.checked = !on; });
@@ -221,7 +231,7 @@ export function restoreToTime(d) {
       h("p", { class: "muted" }, `A new database is created as ${d.name} was at that second. ${d.name} keeps running unchanged.`),
       field("Restore to (UTC)", at, { hint: `Any second from ${utc(w.earliest)} to ${utc(w.latest)}.` }),
       h("div", { class: "form-grid" }, field("New DB identifier", name), field("Host port", port)),
-      h("p", { class: "muted" }, "It gets the source’s size, storage, parameters and TLS setting, and its own owner password. Database users from the source are turned off; create them again."),
+      h("p", { class: "muted" }, `It gets the source’s size, storage, parameters and TLS setting, and its own owner password. Database users from the source ${d.engine === "mysql" ? "aren’t copied" : "are turned off"}; create them again.`),
     ],
     run: async () => {
       if (!at.value) throw new Error("Choose the time to restore to.");
@@ -309,6 +319,6 @@ export function settingsPanel(d) {
       row("Automated backups", "On a schedule, in a quiet window.", d.backupRetentionDays ? `${plural(d.backupRetentionDays, "day")} · ${scheduleLabel(d.backupWindow, d.backupIntervalHours)}` : h("span", { class: "status warn" }, icon("alert"), "Off"),
         change("Change", editBackups)),
       row("Require TLS", d.tlsReady ? "Refuse unencrypted connections." : "Reboot once to turn this on.", d.requireTLS ? "On" : "Off", tlsSwitch(d, why || (!d.tlsReady ? "Reboot first." : ""))),
-      d.engine === "postgres" && !d.replicaOf ? row("Point-in-time recovery", d.backupRetentionDays ? "Restore to any second of the retention period." : "Needs automated backups.", d.pitr ? "On" : "Off", pitrSwitch(d, why)) : null,
+      PITR_ENGINES.includes(d.engine) && !d.replicaOf ? row("Point-in-time recovery", d.backupRetentionDays ? "Restore to any second of the retention period." : "Needs automated backups.", d.pitr ? "On" : "Off", pitrSwitch(d, why)) : null,
       row("Deletion protection", "Blocks deleting the database.", d.deletionProtection ? "On" : "Off", protectionSwitch(d, why))));
 }

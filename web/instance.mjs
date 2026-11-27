@@ -10,7 +10,7 @@ import { tagEditor } from "./forms.mjs";
 import { connectivityPanel, firewallPanel, usersTab } from "./security.mjs";
 import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
 import { poolerPanel } from "./pooler.mjs";
-import { settingsPanel, editParameters, editBackups, restoreToTime } from "./settings.mjs";
+import { settingsPanel, editParameters, editBackups, restoreToTime, PITR_ENGINES } from "./settings.mjs";
 import { replicationPanel, lagLabel, replicationChip } from "./replicas.mjs";
 
 const TABS = [["overview", "Overview"], ["connectivity", "Connect"], ["users", "Users"], ["monitoring", "Monitoring"], ["insights", "Performance"],
@@ -206,7 +206,7 @@ function backupsTab(d) {
         ["Retention period", on ? plural(d.backupRetentionDays, "day") : "—"], ["Schedule", on ? scheduleLabel(d.backupWindow, d.backupIntervalHours) : "—"]]],
       ["Recovery points", [["Latest backup", d.latestBackupAt ? `${when(d.latestBackupAt)} (${ago(d.latestBackupAt)})` : "None yet"],
         ["Next automated backup", d.nextBackupAt ? `${when(d.nextBackupAt)} (${ago(d.nextBackupAt)})` : "—"],
-        ...(d.engine === "postgres" ? [["Point-in-time recovery", !d.pitr ? "Off" : d.recovery?.earliest
+        ...(PITR_ENGINES.includes(d.engine) && !d.replicaOf ? [["Point-in-time recovery", !d.pitr ? "Off" : d.recovery?.earliest
           ? h("span", null, `${when(d.recovery.earliest)} – ${when(d.recovery.latest)}`) : h("span", { class: "muted" }, "Starting: the first base backup is on its way")]] : [])]],
       ["Protection", [["Deletion protection", h("span", { class: "row tight" }, d.deletionProtection ? "On" : "Off", can("operator") ? toggle : null)]]],
     ], { actions: can("operator") ? [editButton(d, [icon("edit"), "Change"], () => editBackups(d)), snap,
@@ -262,7 +262,7 @@ function backupsCard(d) {
     ["Automated", on ? `${plural(d.backupRetentionDays, "day")} · ${scheduleLabel(d.backupWindow, d.backupIntervalHours)}` : h("span", { class: "status warn" }, icon("alert"), "Off")],
     ["Latest", d.latestBackupAt ? h("span", { title: when(d.latestBackupAt) }, ago(d.latestBackupAt)) : h("span", { class: "muted" }, "None yet")],
     on ? ["Next", d.nextBackupAt ? h("span", { title: when(d.nextBackupAt) }, ago(d.nextBackupAt)) : "—"] : null,
-    d.engine === "postgres" && !d.replicaOf ? ["Point in time", !d.pitr ? h("span", { class: "muted" }, "Off") : d.recovery?.earliest ? `Any second since ${ago(d.recovery.earliest)}` : h("span", { class: "muted" }, "Starting")] : null,
+    PITR_ENGINES.includes(d.engine) && !d.replicaOf ? ["Point in time", !d.pitr ? h("span", { class: "muted" }, "Off") : d.recovery?.earliest ? `Any second since ${ago(d.recovery.earliest)}` : h("span", { class: "muted" }, "Starting")] : null,
     ["Protection", d.deletionProtection ? h("span", { class: "with-icon" }, icon("shield"), "Deletion protection on") : h("span", { class: "muted" }, "Can be deleted")],
   ].filter(Boolean);
   const actions = [h("a", { class: "btn small ghost", href: `#/databases/${d.name}/backups` }, "All backups")];

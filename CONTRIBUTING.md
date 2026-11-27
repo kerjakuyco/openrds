@@ -50,6 +50,7 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | `pooler.go`, `engines/pooler.yaml` | Connection pooling with PgBouncer for PostgreSQL |
 | `upgrade.go`, `engines/upgrade.yaml` | Engine version upgrades that keep the endpoint |
 | `pitr.go`, `engines/pitr.yaml` | Point-in-time recovery for PostgreSQL: WAL archiving and collection, base backups, restore to a time |
+| `binlog.go` | Point-in-time recovery for MySQL: binary log collection, base backups with their position, replay to a time |
 | `replicas.go`, `web/replicas.mjs` | Read replicas for every engine: creation, the source's network, replication status and lag alerts, promotion |
 | `backups.go`, `schedule.go`, `offsite.go`, `diskspace_*.go` | Snapshots, automated backups, copies to S3-compatible storage, and the free-space reserve backups keep |
 | `quota.go`, `disk-helper.sh` | Data volume limits |
@@ -79,7 +80,7 @@ npm install --prefix /tmp/openrds-ui playwright-core
 NODE_PATH=/tmp/openrds-ui/node_modules node scripts/ui-smoke.cjs
 ```
 
-`scripts/smoke.py` exercises PostgreSQL, MySQL and Valkey against real Docker: accounts and roles; database users, password changes, required TLS and the firewall gateway; parameters, a deferred change applied by reboot, metric history, backups, deletion protection and a final snapshot restored into a new database; a snapshot of each engine's oldest version restored into its latest; and backup storage against a signature-checking S3 gateway, including an import and restore after losing the local copy.
+`scripts/smoke.py` exercises PostgreSQL, MySQL and Valkey against real Docker: accounts and roles; database users, password changes, required TLS and the firewall gateway; parameters, a deferred change applied by reboot, metric history, backups, deletion protection and a final snapshot restored into a new database; a snapshot of each engine's oldest version restored into its latest; MySQL point-in-time recovery; and backup storage against a signature-checking S3 gateway, including an import and restore after losing the local copy.
 
 `scripts/ui-smoke.cjs` drives Chrome on desktop and mobile: first-run setup, creating a database from the dashboard, every tab, settings changed in place, a snapshot, modify and reboot, backup storage, the restore form, events and themes, and a viewer who accepts an invitation in a second browser. It needs a fresh installation, because it creates the first administrator account.
 

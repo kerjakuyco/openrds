@@ -5,7 +5,7 @@ package main
 // collects the segments into the backup library and backup storage, and
 // automated backups become physical base backups. Restoring to a time creates
 // a new database from the base backup before it and replays WAL up to that
-// second.
+// second. MySQL's binary logs take the same path; see binlog.go.
 
 import (
 	"archive/tar"
@@ -47,14 +47,16 @@ var walNamePattern = regexp.MustCompile(`^([0-9A-F]{24}(\.partial|\.[0-9A-F]{8}\
 type pitrState struct {
 	collecting sync.Mutex
 	mu         sync.Mutex
-	latest     map[string]time.Time // newest archived WAL by data key
-	failures   map[string]int       // consecutive failed collections by project
+	latest     map[string]time.Time  // newest archived WAL or binary log by data key
+	failures   map[string]int        // consecutive failed collections by project
+	flushed    map[string]binlogInfo // MySQL: the open binary log right after OpenRDS closed the one before
 }
 
-// Whether the running container archives WAL: its applied settings while a
-// change waits for a restart.
+// Whether the database's logs are collected: for PostgreSQL, whether the
+// running container archives WAL, so its applied settings while a change
+// waits for a restart. MySQL writes its binary log either way.
 func (r record) archiving() bool {
-	if r.Applied != nil {
+	if r.Engine != "mysql" && r.Applied != nil {
 		return r.Applied.PITR
 	}
 	return r.PITR
@@ -64,20 +66,29 @@ func checkPITR(s instanceSpec) error {
 	if !s.PITR {
 		return nil
 	}
-	if s.Engine != "postgres" {
-		return fail(400, "Point-in-time recovery is available for PostgreSQL.")
+	if s.Engine != "postgres" && s.Engine != "mysql" {
+		return fail(400, "Point-in-time recovery is available for PostgreSQL and MySQL.")
 	}
 	if s.BackupRetentionDays == 0 {
 		return fail(400, "Turn on automated backups first: point-in-time recovery reaches back as far as they are kept.")
 	}
+	if v, ok := s.Parameters["binlog_expire_logs_seconds"]; ok && s.Engine == "mysql" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n != 0 && n < 86400 {
+			return fail(400, "With point-in-time recovery on, keep binary logs for at least a day (binlog_expire_logs_seconds of 86400 or more, or 0), so none is removed before OpenRDS copies it.")
+		}
+	}
 	return nil
 }
+
+// A backup that point-in-time recovery replays logs onto: a PostgreSQL base
+// backup, or a MySQL dump that records its binary log position.
+func (b backup) pitrBase() bool { return b.Format == "physical" || b.BinlogFile != "" }
 
 // ---------- the WAL store: <library>/pitr/<data key>/<archived unix>_<name>.gz
 
 type walFile struct {
 	At     time.Time
-	Name   string // PostgreSQL's file name
+	Name   string // PostgreSQL's or MySQL's file name
 	Stored string // the library's file name, with the time it was archived
 }
 
@@ -90,7 +101,7 @@ func parseWAL(stored string) (walFile, bool) {
 	}
 	unix, name, ok := strings.Cut(base, "_")
 	n, err := strconv.ParseInt(unix, 10, 64)
-	if !ok || err != nil || !walNamePattern.MatchString(name) {
+	if !ok || err != nil || !walNamePattern.MatchString(name) && !binlogNamePattern.MatchString(name) {
 		return walFile{}, false
 	}
 	return walFile{At: time.Unix(n, 0).UTC(), Name: name, Stored: stored}, true
@@ -266,13 +277,21 @@ func (m *manager) collectAllWAL(ctx context.Context) {
 			continue
 		}
 		for {
-			n, err := m.collectWAL(ctx, r)
+			n, err := m.collectLogs(ctx, r)
 			m.collectionResult(ctx, r, err)
 			if err != nil || n < walBatch {
 				break
 			}
 		}
 	}
+}
+
+// Collect a database's closed logs: WAL for PostgreSQL, binary logs for MySQL.
+func (m *manager) collectLogs(ctx context.Context, r record) (int, error) {
+	if r.Engine == "mysql" {
+		return m.collectBinlogs(ctx, r)
+	}
+	return m.collectWAL(ctx, r)
 }
 
 func (m *manager) collectionResult(ctx context.Context, r record, err error) {
@@ -288,11 +307,15 @@ func (m *manager) collectionResult(ctx context.Context, r record, err error) {
 	}
 	after := m.pitr.failures[r.Project]
 	m.pitr.mu.Unlock()
+	action := "Collect WAL for point-in-time recovery"
+	if r.Engine == "mysql" {
+		action = "Collect binary logs for point-in-time recovery"
+	}
 	switch {
 	case after == 5:
-		m.note(ctx, r.Name, "Collect WAL for point-in-time recovery", "failed", strings.TrimPrefix(err.Error(), "docker: "))
+		m.note(ctx, r.Name, action, "failed", strings.TrimPrefix(err.Error(), "docker: "))
 	case before >= 5 && after == 0:
-		m.note(ctx, r.Name, "Collect WAL for point-in-time recovery", "completed", "Collecting again.")
+		m.note(ctx, r.Name, action, "completed", "Collecting again.")
 	}
 }
 
@@ -304,11 +327,11 @@ type recoveryWindow struct {
 }
 
 // From the end of the oldest base backup of the current data to the newest
-// archived WAL. Empty until the first base backup and segment exist.
+// archived log. Empty until the first base backup exists.
 func (m *manager) window(r record, backups []backup) recoveryWindow {
 	var w recoveryWindow
 	for _, b := range backups {
-		if b.Format == "physical" && b.Name == r.Name && b.DataKey == r.diskKey() && (w.Earliest == nil || b.Created.Before(*w.Earliest)) {
+		if b.pitrBase() && b.Name == r.Name && b.DataKey == r.diskKey() && (w.Earliest == nil || b.Created.Before(*w.Earliest)) {
 			t := b.Created
 			w.Earliest = &t
 		}
@@ -324,8 +347,8 @@ func (m *manager) window(r record, backups []backup) recoveryWindow {
 
 // ---------- pruning
 
-// Remove WAL that no base backup needs any more: older than the start of the
-// oldest physical backup of its data, or all of it when none is left.
+// Remove logs that no base backup needs any more: older than the start of
+// the oldest base backup of their data, or all of them when none is left.
 func (m *manager) pruneWAL(ctx context.Context, backups []backup) {
 	keys, err := os.ReadDir(filepath.Join(m.dir, "pitr"))
 	if err != nil {
@@ -337,7 +360,7 @@ func (m *manager) pruneWAL(ctx context.Context, backups []backup) {
 		}
 		var oldest *time.Time
 		for _, b := range backups {
-			if b.Format == "physical" && b.DataKey == k.Name() && (oldest == nil || b.Started.Before(*oldest)) {
+			if b.pitrBase() && b.DataKey == k.Name() && (oldest == nil || b.Started.Before(*oldest)) {
 				t := b.Started
 				oldest = &t
 			}
@@ -461,11 +484,10 @@ func (m *manager) removeRemoteWAL(dataKey string, files []walFile) {
 
 // ---------- restore to a time
 
-// The WAL a restore to target needs, from the library and, for files it
-// lacks, from backup storage: from the base backup's start to a little past
-// the target, plus timeline history.
-func (m *manager) walForRestore(ctx context.Context, b backup, target time.Time) ([]walFile, func(walFile) (io.ReadCloser, error), error) {
-	local, err := m.walFiles(b.DataKey)
+// Every log of a data key, in the library and, for files it lacks, in backup
+// storage, oldest first, with a way to read each and its stored size.
+func (m *manager) storedLogs(ctx context.Context, dataKey string) ([]walFile, func(walFile) (io.ReadCloser, int64, error), error) {
+	local, err := m.walFiles(dataKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -478,9 +500,9 @@ func (m *manager) walForRestore(ctx context.Context, b backup, target time.Time)
 	cfg, _ := m.loadOffsite()
 	if cfg.Enabled {
 		if c, err = newS3(cfg); err == nil {
-			objects, err := c.list(ctx, cfg.Prefix+"wal/"+b.DataKey+"/")
+			objects, err := c.list(ctx, cfg.Prefix+"wal/"+dataKey+"/")
 			if err != nil {
-				return nil, nil, fail(502, "Could not list WAL in backup storage: "+err.Error())
+				return nil, nil, fail(502, "Could not list logs in backup storage: "+err.Error())
 			}
 			for _, o := range objects {
 				if f, ok := parseWAL(o.Key[strings.LastIndex(o.Key, "/")+1:]); ok && !have[f.Stored] {
@@ -490,24 +512,48 @@ func (m *manager) walForRestore(ctx context.Context, b backup, target time.Time)
 		}
 	}
 	sortWAL(all)
+	open := func(f walFile) (io.ReadCloser, int64, error) {
+		if have[f.Stored] {
+			file, err := os.Open(filepath.Join(m.walDir(dataKey), f.Stored))
+			if err != nil {
+				return nil, 0, err
+			}
+			info, err := file.Stat()
+			if err != nil {
+				file.Close()
+				return nil, 0, err
+			}
+			return file, info.Size(), nil
+		}
+		if c == nil {
+			return nil, 0, errors.New("connect backup storage to read " + f.Name)
+		}
+		return c.get(ctx, walKey(cfg, dataKey, f.Stored))
+	}
+	return all, open, nil
+}
+
+// The WAL a restore to target needs: from the base backup's start to a
+// little past the target, plus timeline history.
+func (m *manager) walForRestore(ctx context.Context, b backup, target time.Time) ([]walFile, func(walFile) (io.ReadCloser, error), error) {
+	all, open, err := m.storedLogs(ctx, b.DataKey)
+	if err != nil {
+		return nil, nil, err
+	}
 	from, to := b.Started.Add(-2*time.Minute), target.Add(10*time.Minute)
 	var picked []walFile
 	for _, f := range all {
+		if !walNamePattern.MatchString(f.Name) {
+			continue
+		}
 		if strings.HasSuffix(f.Name, ".history") || !f.At.Before(from) && !f.At.After(to) {
 			picked = append(picked, f)
 		}
 	}
-	open := func(f walFile) (io.ReadCloser, error) {
-		if have[f.Stored] {
-			return os.Open(filepath.Join(m.walDir(b.DataKey), f.Stored))
-		}
-		if c == nil {
-			return nil, errors.New("connect backup storage to read WAL " + f.Name)
-		}
-		body, _, err := c.get(ctx, walKey(cfg, b.DataKey, f.Stored))
+	return picked, func(f walFile) (io.ReadCloser, error) {
+		body, _, err := open(f)
 		return body, err
-	}
-	return picked, open, nil
+	}, nil
 }
 
 // Stream WAL files as an uncompressed tar, for the new database to replay.
@@ -617,8 +663,8 @@ func (m *manager) restorePhysical(ctx context.Context, r *record, b backup, targ
 	return m.compose(ctx, *r, nil, nil, "exec", "-T", "db", "sh", "-ec", `rm -rf "$PGDATA/openrds_wal"`)
 }
 
-// The base backup a restore to target starts from: the newest physical
-// backup of the database's data that ended before the target.
+// The base backup a restore to target starts from: the newest base backup
+// of the database's data that ended before the target.
 func (m *manager) baseFor(r record, target time.Time) (backup, recoveryWindow, error) {
 	backups, err := m.backups()
 	if err != nil {
@@ -634,7 +680,7 @@ func (m *manager) baseFor(r record, target time.Time) (backup, recoveryWindow, e
 	var base *backup
 	for i := range backups { // newest first
 		b := backups[i]
-		if b.Format == "physical" && b.Name == r.Name && b.DataKey == r.diskKey() && !b.Created.After(target) {
+		if b.pitrBase() && b.Name == r.Name && b.DataKey == r.diskKey() && !b.Created.After(target) {
 			base = &b
 			break
 		}

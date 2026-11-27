@@ -57,7 +57,7 @@ type instanceSpec struct {
 	PublicHost          string            `json:"publicHost,omitempty"`
 	Firewall            []firewallRule    `json:"firewall,omitempty"`
 	Pooler              *poolerSpec       `json:"pooler,omitempty"` // PostgreSQL connection pooling
-	PITR                bool              `json:"pitr,omitempty"`   // PostgreSQL point-in-time recovery
+	PITR                bool              `json:"pitr,omitempty"`   // point-in-time recovery: PostgreSQL and MySQL
 }
 
 // The container settings that change only when Compose recreates the database.
@@ -70,8 +70,10 @@ type runtimeConfig struct {
 	PITR       bool              `json:"pitr,omitempty"`       // WAL archiving starts with the server
 }
 
+// MySQL writes its binary log either way, so only PostgreSQL restarts for
+// point-in-time recovery.
 func (s instanceSpec) runtime() runtimeConfig {
-	return runtimeConfig{s.CPUs, s.MemoryMiB, s.Parameters, s.RequireTLS, s.PublicHost, s.PITR}
+	return runtimeConfig{s.CPUs, s.MemoryMiB, s.Parameters, s.RequireTLS, s.PublicHost, s.PITR && s.Engine != "mysql"}
 }
 
 func (c runtimeConfig) equal(o runtimeConfig) bool {

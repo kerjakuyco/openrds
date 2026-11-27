@@ -106,10 +106,12 @@ func (m *manager) dueBackups(ctx context.Context, now time.Time) []string {
 			continue
 		}
 		opened, open := backupWindow(r.BackupWindow, r.BackupIntervalHours, now)
+		attempt := r.Project
 		if r.archiving() && !hasBase(backups, r) {
 			// Point-in-time recovery starts with a base backup, so take one now,
-			// trying once an hour if it fails.
-			opened, open = now.Truncate(time.Hour), true
+			// trying once an hour if it fails. New data, after an upgrade, gets
+			// its own first try.
+			opened, open, attempt = now.Truncate(time.Hour), true, baseAttempt(r)
 		} else if !open || !latest[r.Name].Before(opened) {
 			continue
 		}
@@ -123,8 +125,8 @@ func (m *manager) dueBackups(ctx context.Context, now time.Time) []string {
 			continue // stopped databases are not backed up; a starting one is retried
 		}
 		m.mu.Lock()
-		if !m.busy[r.Name] && !m.attempts[r.Project].Equal(opened) {
-			m.attempts[r.Project] = opened
+		if !m.busy[r.Name] && !m.attempts[attempt].Equal(opened) {
+			m.attempts[attempt] = opened
 			due = append(due, r.Name)
 		}
 		m.mu.Unlock()
@@ -132,9 +134,11 @@ func (m *manager) dueBackups(ctx context.Context, now time.Time) []string {
 	return due
 }
 
-// Whether the database's current data has a base backup to replay WAL onto.
+func baseAttempt(r record) string { return "base:" + r.diskKey() }
+
+// Whether the database's current data has a base backup to replay logs onto.
 func hasBase(backups []backup, r record) bool {
-	return slices.ContainsFunc(backups, func(b backup) bool { return b.Format == "physical" && b.DataKey == r.diskKey() })
+	return slices.ContainsFunc(backups, func(b backup) bool { return b.pitrBase() && b.DataKey == r.diskKey() })
 }
 
 func (m *manager) automatedBackup(ctx context.Context, name string) {
@@ -145,6 +149,7 @@ func (m *manager) automatedBackup(ctx context.Context, name string) {
 		if r, err := m.record(name); err == nil {
 			m.mu.Lock()
 			delete(m.attempts, r.Project) // another operation started first; try again next minute
+			delete(m.attempts, baseAttempt(r))
 			m.mu.Unlock()
 		}
 		return

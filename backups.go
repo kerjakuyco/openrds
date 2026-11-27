@@ -33,8 +33,11 @@ type backup struct {
 	// "physical" for a PostgreSQL base backup, the start of point-in-time
 	// recovery; empty for a logical dump.
 	Format  string    `json:"format,omitempty"`
-	DataKey string    `json:"dataKey,omitempty"` // whose WAL it replays
+	DataKey string    `json:"dataKey,omitempty"` // whose WAL or binary logs it replays
 	Started time.Time `json:"startedAt,omitzero"`
+	// A MySQL base backup: the binary log position it was taken at.
+	BinlogFile string `json:"binlogFile,omitempty"`
+	BinlogPos  int64  `json:"binlogPos,omitempty"`
 	// The source configuration, offered again when restoring.
 	CPUs       float64           `json:"cpus,omitempty"`
 	MemoryMiB  int               `json:"memoryMiB,omitempty"`
@@ -246,8 +249,9 @@ func (m *manager) makeBackup(ctx context.Context, name, kind string) (b backup, 
 	return m.snapshot(ctx, r, kind, false, "", kind == "automated" && r.archiving())
 }
 
-// Write one logical backup while the caller holds the instance.
-func (m *manager) snapshot(ctx context.Context, r record, kind string, final bool, note string, physical bool) (b backup, err error) {
+// Write one backup while the caller holds the instance: a base backup for
+// point-in-time recovery when base is set.
+func (m *manager) snapshot(ctx context.Context, r record, kind string, final bool, note string, base bool) (b backup, err error) {
 	if err := m.checkBackupSpace(m.expectedBackupBytes(r.Name)); err != nil {
 		return b, err
 	}
@@ -261,9 +265,13 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 		return b, err
 	}
 	eng := engines[r.Engine]
+	physical, positioned := base && r.Engine == "postgres", base && r.Engine == "mysql"
 	args := append([]string{"exec", "-T", "db"}, eng.dump...)
-	if physical {
+	switch {
+	case physical:
 		args = append([]string{"exec", "-T", "db"}, baseBackupCommand...)
+	case positioned:
+		args = []string{"exec", "-T", "db", "sh", "-ec", mysqlBaseDump}
 	}
 	var input io.Reader
 	if eng.dumpAuth {
@@ -277,7 +285,12 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 		z, _ = gzip.NewWriterLevel(guard, gzip.BestSpeed) // fast enough to keep up with the dump
 		out.w = z
 	}
-	err = m.compose(ctx, r, input, out, args...)
+	var dst io.Writer = out
+	head := &dumpHead{w: out}
+	if positioned {
+		dst = head
+	}
+	err = m.compose(ctx, r, input, dst, args...)
 	if err == nil && z != nil {
 		err = z.Close()
 	}
@@ -308,6 +321,13 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 	}
 	if physical {
 		b.Format, b.DataKey, b.Started = "physical", r.diskKey(), started
+	}
+	if positioned {
+		file, pos, ok := head.position()
+		if !ok {
+			return b, fail(502, "The backup did not record its binary log position.")
+		}
+		b.DataKey, b.Started, b.BinlogFile, b.BinlogPos = r.diskKey(), started, file, pos
 	}
 	if kind == "automated" {
 		expires := b.Created.AddDate(0, 0, r.BackupRetentionDays)

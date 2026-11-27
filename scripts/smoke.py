@@ -524,6 +524,7 @@ def exercise_storage():
     suffix = secrets.token_hex(4)
     name, restored, gateway, bucket = f"s3-{suffix}", f"s3-{suffix}-restore", f"smoke-s3-{suffix}", "openrds-smoke"
     pitr, rewound = f"pitr-{suffix}", f"pitr-{suffix}-at"
+    mpitr, mrewound = f"mpitr-{suffix}", f"mpitr-{suffix}-at"
     control = cli("docker", "compose", "ps", "-q", "openrds")
     network = cli("docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", control).split()[0]
     secret = secrets.token_hex(16)
@@ -590,19 +591,72 @@ def exercise_storage():
         api(f"storage/backups/{base['id']}/import", "POST")
         api(f"backups/{base['id']}/restore", "POST", {"name": rewound, "port": free_port(), "targetTime": target.isoformat()})
         assert read_value("postgres", rewound) == "42", "the value as it was at the target, before the update"
-        print("storage: signed copies, import after loss, restore, mirrored deletes and point-in-time recovery from storage passed", flush=True)
+
+        # The same for MySQL: the dump with its binary log position and the binary logs come back from storage.
+        api("instances", "POST", {"name": mpitr, "engine": "mysql", "port": free_port(), "memoryMiB": 1024, "backupRetentionDays": 1, "pitr": True})
+        base = wait_for("the first MySQL base backup", lambda: next((b for b in api("backups") if b["name"] == mpitr and b.get("binlogFile")), None), 180)
+        write_value("mysql", mpitr)
+        time.sleep(2)
+        target = datetime.datetime.now(datetime.timezone.utc)
+        time.sleep(2)
+        sql("mysql", mpitr, "UPDATE smoke SET id = 43")
+        key = base["dataKey"]
+        wait_for("binary logs past the target", lambda: next(i for i in api("instances") if i["name"] == mpitr)["recovery"].get("latest", "") > target.isoformat(), 180)
+        wait_for("the binary log copies", lambda: local() <= remote(), 180)
+        wait_for("the MySQL base backup copy", lambda: next(b for b in api("backups") if b["id"] == base["id"]).get("offsite", {}).get("status") == "copied")
+        api("storage", "DELETE")
+        api(f"backups/{base['id']}", "DELETE")
+        cli("docker", "compose", "exec", "-T", "openrds", "rm", "-rf", f"/var/lib/openrds/pitr/{key}")
+        api("storage", "PUT", settings)
+        api(f"storage/backups/{base['id']}/import", "POST")
+        api(f"backups/{base['id']}/restore", "POST", {"name": mrewound, "port": free_port(), "targetTime": target.isoformat()})
+        assert read_value("mysql", mrewound) == "42", "the MySQL value as it was at the target, before the update"
+        print("storage: signed copies, import after loss, restore, mirrored deletes and point-in-time recovery from storage for PostgreSQL and MySQL passed", flush=True)
     finally:
         try:
             api("storage", "DELETE")
         except RuntimeError:
             pass
         for db in api("instances"):
-            if db["name"] in (name, restored, pitr, rewound):
+            if db["name"] in (name, restored, pitr, rewound, mpitr, mrewound):
                 api(f"instances/{db['name']}", "DELETE")
         for b in api("backups"):
-            if b["name"] in (name, restored, pitr, rewound):
+            if b["name"] in (name, restored, pitr, rewound, mpitr, mrewound):
                 api(f"backups/{b['id']}", "DELETE")
         subprocess.run(["docker", "rm", "-f", gateway], capture_output=True)
+
+
+def exercise_mysql_pitr():
+    """MySQL point-in-time recovery: binary logs replayed to the second, without the source's users."""
+    name = "mpitr-" + secrets.token_hex(4)
+    restored = f"{name}-at"
+    try:
+        api("instances", "POST", {"name": name, "engine": "mysql", "port": free_port(), "memoryMiB": 1024, "backupRetentionDays": 1, "backupWindow": distant_window()})
+        result = api(f"instances/{name}/modify", "POST", {"pitr": True})
+        assert not result["restarted"] and not result["pendingRestart"], "MySQL needs no restart for it"
+        wait_for("the first base backup", lambda: next((b for b in api("backups") if b["name"] == name and b.get("binlogFile")), None), 180)
+        write_value("mysql", name)
+        sql("mysql", name, "CREATE EVENT smoke_tick ON SCHEDULE EVERY 1 HOUR DO SET @smoke = 1")
+        api(f"instances/{name}/users", "POST", {"name": "smokereader", "access": "read-only"})
+        time.sleep(2)
+        target = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        time.sleep(2)
+        sql("mysql", name, "UPDATE smoke SET id = 43")
+        wait_for("binary logs past the target", lambda: next(i for i in api("instances") if i["name"] == name)["recovery"].get("latest", "") > target.isoformat(), 180)
+        api(f"instances/{name}/restore-to-time", "POST", {"name": restored, "port": free_port(), "targetTime": target.isoformat()})
+        assert read_value("mysql", restored) == "42", "the value as it was at the target, before the update"
+        assert sql("mysql", restored, "SELECT STATUS FROM information_schema.EVENTS WHERE EVENT_NAME = 'smoke_tick'") == "ENABLED"
+        db = container_of(api(f"instances/{restored}/connection")["network"])
+        users = cli("docker", "exec", db, "sh", "-c", 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -N -B -e "SELECT user FROM mysql.user"').split()
+        assert "smokereader" not in users and "openrds" in users, users
+        print("mysql: point-in-time recovery to the second, events on, without the source's users passed", flush=True)
+    finally:
+        for db in api("instances"):
+            if db["name"] in (name, restored):
+                api(f"instances/{db['name']}", "DELETE")
+        for b in api("backups"):
+            if b["name"] in (name, restored):
+                api(f"backups/{b['id']}", "DELETE")
 
 
 def browser():
@@ -668,4 +722,5 @@ if __name__ == "__main__":
     for database_engine in ("postgres", "mysql", "valkey"):
         exercise(database_engine, quota == "supported")
     exercise_versions(quota == "supported")
+    exercise_mysql_pitr()
     exercise_storage()

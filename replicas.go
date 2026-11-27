@@ -178,12 +178,12 @@ func checkStandby(src, replica record) error {
 	return nil
 }
 
-// Replication rules for a modification: replicas do not archive WAL, and
+// Replication rules for a modification: replicas do not collect logs, and
 // PostgreSQL standbys keep some settings at least as high as their source.
 func checkReplication(all []record, next record) error {
 	if next.ReplicaOf != "" {
 		if next.PITR {
-			return fail(400, fmt.Sprintf("Read replicas don’t archive WAL. Point-in-time recovery for this data is on %s.", next.ReplicaOf))
+			return fail(400, fmt.Sprintf("Read replicas don’t have point-in-time recovery. Turn it on for %s, their source.", next.ReplicaOf))
 		}
 		for _, src := range all {
 			if src.Name == next.ReplicaOf {
@@ -734,16 +734,9 @@ func (m *manager) replicationStatus(ctx context.Context, r record, container str
 		}
 	case "mysql":
 		out, err := m.engineClient(ctx, container, mysqlStatusClient, "SHOW REPLICA STATUS;\n")
-		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-		if err != nil || len(lines) != 2 {
+		v, ok := replicaFields(out)
+		if err != nil || !ok {
 			return replicationStatus{State: "unknown", Detail: "The replica did not answer.", At: st.At}
-		}
-		names, values := strings.Split(lines[0], "\t"), strings.Split(lines[1], "\t")
-		v := map[string]string{}
-		for i, n := range names {
-			if i < len(values) {
-				v[n] = values[i]
-			}
 		}
 		problem := strings.TrimSpace(v["Last_SQL_Error"])
 		if problem == "" {

@@ -130,14 +130,14 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 	return m.provisionAt(ctx, spec, from, nil)
 }
 
-// Like provision, rolling a physical backup forward to target when given.
+// Like provision, rolling a base backup forward to target when given.
 func (m *manager) provisionAt(ctx context.Context, spec instanceSpec, from *backup, target *time.Time) (err error) {
 	if err := m.checkDiskRequest(ctx, spec.DiskGiB); err != nil {
 		return err // reject before reserving a name/port or touching an instance
 	}
 	physical := from != nil && from.Format == "physical"
-	if target != nil && !physical {
-		return fail(400, "Only physical backups, taken with point-in-time recovery on, restore to a time.")
+	if target != nil && (from == nil || !from.pitrBase()) {
+		return fail(400, "Only base backups, taken with point-in-time recovery on, restore to a time.")
 	}
 	var input io.Reader
 	if physical {
@@ -194,7 +194,12 @@ func (m *manager) provisionAt(ctx context.Context, spec instanceSpec, from *back
 		return fail(502, "Provisioning did not finish. The instance was kept for inspection. "+err.Error())
 	}
 	if from != nil {
-		if err := m.restoreInto(ctx, r, input); err != nil {
+		if target != nil {
+			err = m.restoreMySQLToTime(ctx, r, input, *from, *target)
+		} else {
+			err = m.restoreInto(ctx, r, input)
+		}
+		if err != nil {
 			return fail(502, "Restore did not finish. The new instance is marked incomplete; the backup is intact. "+err.Error())
 		}
 		r.PendingRestore = false

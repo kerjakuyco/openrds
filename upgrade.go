@@ -137,8 +137,8 @@ func (m *manager) upgrade(ctx context.Context, name, version string) (err error)
 		}
 		m.compose(ctx, r, nil, nil, append([]string{"stop", "--timeout", "30"}, services...)...)
 	}
-	if r.archiving() { // the WAL archived so far belongs to the old version's data
-		for n, err := m.collectWAL(ctx, r); err == nil && n == walBatch; n, err = m.collectWAL(ctx, r) {
+	if r.archiving() { // the logs so far belong to the old version's data
+		for n, err := m.collectLogs(ctx, r); err == nil && n == walBatch; n, err = m.collectLogs(ctx, r) {
 		}
 	}
 	snap, err := m.snapshot(ctx, r, "manual", false, fmt.Sprintf("Before the upgrade to %s %s", title, version), false)
