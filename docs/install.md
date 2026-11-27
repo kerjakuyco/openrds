@@ -88,7 +88,7 @@ Then click **Create database**. It's ready in about a minute; the first one take
 
 ## 6. Connect your application
 
-Open the database. **Connectivity & security** shows its connection string. Click **Copy**: it copies the full string, password included. Paste it into your app's settings, usually as `DATABASE_URL`.
+Open the database and choose **Connect**: the **Connect** tab shows its connection string. Click **Copy**: it copies the full string, password included. Paste it into your app's settings, usually as `DATABASE_URL`.
 
 ![The connection string for your app](images/connect.png)
 
@@ -100,7 +100,7 @@ Open the database. **Connectivity & security** shows its connection string. Clic
   ```
 
 - **Code examples and options** has snippets for Node.js, Python, Go, Prisma, Django, Laravel, Java and command-line tools.
-- **Database users:** to give each app its own login with only the access it needs, create users on the **Database users** tab.
+- **Database users:** to give each app its own login with only the access it needs, create users on the **Users** tab.
 
 ## 7. Protect your backups
 
@@ -134,8 +134,8 @@ Teammates open the link through their own SSH tunnel, like in step 3.
 
 By default, databases can't be reached from outside the server. If an app runs elsewhere, for example on a hosting platform, you can open one database to specific addresses:
 
-1. First turn on **Require TLS** on the database's **Configuration** tab, so traffic is encrypted.
-2. On **Connectivity & security**, click **Edit network**, turn on **Public access**, choose a port, and add the IP addresses allowed to connect.
+1. First turn on **Require TLS** on the database's **Settings** tab, so traffic is encrypted.
+2. On the **Connect** tab, under **Connectivity & security**, click **Edit network**, turn on **Public access**, choose a port, and add the IP addresses allowed to connect.
 3. If your provider has its own firewall, for example a cloud firewall or security group, allow that port there too.
 
 ![Network access with an allowlist](images/network.png)
@@ -174,7 +174,7 @@ cd ~/openrds && docker compose exec openrds openrds reset-password YOUR_USERNAME
 
 **The disk limit says "not enforceable here".** Disk limits need rootful Docker on Linux. Leave the field empty for a regular volume.
 
-**Something else went wrong.** Check the console's **Events** page, the database's **Logs & events** tab, or the server's log:
+**Something else went wrong.** Check the console's **Events** page, the database's **Logs** tab, or the server's log:
 
 ```sh
 cd ~/openrds && docker compose logs --tail 100 openrds

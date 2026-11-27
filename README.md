@@ -21,7 +21,10 @@ monitoring, TLS and an RDS-style console. No cloud bill.
 
 <br>
 
-![The OpenRDS dashboard: databases with live CPU and memory, recommendations and resources](docs/images/dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+  <img src="docs/images/dashboard.png" alt="The OpenRDS dashboard: databases with live CPU and memory, what needs attention, resources and recent activity">
+</picture>
 
 ## Why OpenRDS?
 
@@ -36,6 +39,7 @@ Each database runs in its own container with its own volume, network and generat
 - **Connection pooling.** PgBouncer in front of PostgreSQL, like RDS Proxy, so hundreds of clients share a few server connections. Turn it on without restarting the database.
 - **Read replicas.** Read-only copies of PostgreSQL, MySQL and Valkey databases that follow their source within seconds, each with its own port and size. Send reads to them, watch their lag, and promote one to a standalone database.
 - **Secure by default.** Databases listen only on the server itself. Add read-only or read-write database users, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
+- **A console that answers at a glance.** The database list shows live load, copyable endpoints and replicas under their source, and previews any database beside the list with its last hour of CPU, memory and connections and quick actions. Each database opens on an overview of its health, how to connect, replication, backups and recent events.
 - **Easy to operate.** Monitoring charts with connections, throughput and cache hit ratio, Performance insights with the top statements and what runs now, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix. Snapshots and restores of large databases finish even if your browser disconnects, and backups never fill the disk your databases need.
 - **Made for teams.** Accounts with admin, operator and viewer roles, invitations, password resets and an audit trail.
 - **Alerts where you work.** Slack, Discord, Telegram, webhook or email messages when a database turns unhealthy, crashes or runs out of memory, an operation fails, or disk space runs low.
@@ -55,11 +59,15 @@ A database keeps its version until you upgrade it: **Upgrade** moves it to a new
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/database.png" alt="A database page with its summary, connectivity and connection string"><p align="center"><b>Database details</b></p></td>
+    <td width="50%"><img src="docs/images/databases.png" alt="The database list with live load, nested read replicas and a preview of one database beside it"><p align="center"><b>Databases, with a preview</b></p></td>
+    <td width="50%"><img src="docs/images/database.png" alt="A database's overview: health for the last hour, connection details, read replicas, backups and recent events"><p align="center"><b>Database overview</b></p></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/monitoring.png" alt="Monitoring charts for CPU, memory, network, disk, connections, throughput and cache hit ratio"><p align="center"><b>Monitoring</b></p></td>
     <td width="50%"><img src="docs/images/backups.png" alt="Automated backups with each database's schedule"><p align="center"><b>Automated backups</b></p></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/network.png" alt="Network access with public access and an IP allowlist"><p align="center"><b>Public access and firewall</b></p></td>
+    <td width="50%"><img src="docs/images/network.png" alt="Connectivity and security with public access through an IP allowlist"><p align="center"><b>Public access and firewall</b></p></td>
     <td width="50%"><img src="docs/images/storage.png" alt="Backup storage connected to an S3-compatible bucket"><p align="center"><b>S3 backup storage</b></p></td>
   </tr>
 </table>
@@ -82,7 +90,7 @@ You need a Linux server with SSH access. The installer sets up Docker for you if
 
 3. **Create your account.** Visit **http://127.0.0.1:8080** and create the administrator account.
 4. **Create a database.** Pick PostgreSQL, MySQL or Valkey. It's ready in about a minute.
-5. **Connect.** Copy the connection string from **Connectivity & security** into your app.
+5. **Connect.** Choose **Connect** on the database and copy the connection string into your app.
 
 **New to servers?** Follow the **[step-by-step install guide with screenshots](docs/install.md)**. It also covers backups to S3, inviting your team, internet access and troubleshooting.
 
@@ -116,7 +124,8 @@ flowchart LR
 - **One control plane.** A single Go binary serves the console and the HTTP API, and drives Docker through the Docker CLI and Compose. Its state (accounts, database metadata, certificates, backups) lives in one Docker volume.
 - **Isolated databases.** Every database is its own Compose project, with its own network, data volume and random password. Ports are published on the server's loopback interface only.
 - **Opt-in internet access.** A small gateway container forwards connections from allowed addresses only, and logs every attempt.
-- **Backups off the server.** Backups are logical dumps stored on the server and, when you connect storage, copied to an S3-compatible bucket with signed requests.
+- **Backups off the server.** Backups are logical dumps, or for point-in-time recovery physical base backups with archived WAL, stored on the server and, when you connect storage, copied to an S3-compatible bucket with signed requests.
+- **Replicas next to their source.** A read replica is a database of its own that joins its source's private network, and streams or applies its changes there.
 
 ## Documentation
 
