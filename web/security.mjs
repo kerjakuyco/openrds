@@ -1,7 +1,7 @@
 // Who can reach a database and with which credentials: network access with a
 // firewall, encryption in transit, and database users.
 import { h, icon, btn, api, toast, modal, panel, infoPanel, keyValues, dataTable, alertBox, empty, when, ago, chip, codeBlock, nextId, help, menu, isLive, isRunning } from "./lib.mjs";
-import { engine, sync, can, go } from "./store.mjs";
+import { engine, sync, can, go, instance } from "./store.mjs";
 import { serverOf, multiServer } from "./servers.mjs";
 import { confirmReboot } from "./actions.mjs";
 import { connectAs } from "./connect.mjs";
@@ -263,6 +263,8 @@ export function connectivityPanel(d, all) {
       d.privateAccess || srv?.privateAddress ? ["Private access", d.privateAccess ? h("span", { class: "status info" }, icon("lock"), "On ", h("code", null, `${d.privateHost}:${d.port}`)) : "Off"] : null,
       ["Public access", d.publicAccess ? h("span", { class: "status info" }, icon("globe"), `On · port ${d.publicPort}`) : h("span", { class: "status good" }, icon("lock"), "Off")],
       ["Public endpoint", d.publicAccess ? h("code", null, `${d.publicHost || srv?.publicAddress || "<server address>"}:${d.publicPort}`) : "—"],
+      ...((d.replicas || []).map(n => instance(n)).filter(r => r?.sourceRoute).length ? [["Let in for replicas", h("span", { class: "stack" },
+        (d.replicas || []).map(n => instance(n)).filter(r => r?.sourceRoute).map(r => h("small", null, `${r.serverName} · ${r.name} · ${r.sourceRoute === "private" ? "private network" : "public access"}`)))]] : []),
       ["Allowed sources", d.publicAccess ? String(rules.length) : "—"],
     ]],
     ["Security", [

@@ -216,7 +216,10 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		return fmt.Errorf("writing the Compose override: %w", err)
 	}
 	base = append(base, "--file", path)
-	if r.PublicAccess || r.PrivateAccess {
+	// Replicas on other servers are let in beside the rules people set.
+	replicasPrivate, replicasPublic := m.replicaSources(r)
+	privateOn := (r.PrivateAccess || len(replicasPrivate) > 0) && srv.PrivateAddress != ""
+	if r.PublicAccess || privateOn {
 		image, err := m.gatewayImage(ctx)
 		if err != nil {
 			return err
@@ -225,17 +228,26 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 	}
 	if r.PublicAccess {
 		base = append(base, "--file", filepath.Join(m.templates, "gateway.yaml"))
-		env = append(env, "OPENRDS_GATEWAY_PUBLISH="+strconv.Itoa(r.PublicPort), "OPENRDS_GATEWAY_ALLOW="+allowList(r.Firewall))
+		env = append(env, "OPENRDS_GATEWAY_PUBLISH="+strconv.Itoa(r.PublicPort), "OPENRDS_GATEWAY_ALLOW="+joinAllow(allowList(r.Firewall), replicasPublic))
 	}
-	if r.PrivateAccess && srv.PrivateAddress != "" {
+	if privateOn {
+		rules := ""
+		if r.PrivateAccess {
+			rules = allowList(r.PrivateFirewall)
+		}
 		base = append(base, "--file", filepath.Join(m.templates, "private-gateway.yaml"))
-		env = append(env, "OPENRDS_PRIVATE_BIND="+srv.PrivateAddress, "OPENRDS_PRIVATE_ALLOW="+allowList(r.PrivateFirewall))
+		env = append(env, "OPENRDS_PRIVATE_BIND="+srv.PrivateAddress, "OPENRDS_PRIVATE_ALLOW="+joinAllow(rules, replicasPrivate))
 	}
 	return m.on(r).run(ctx, env, in, out, append(base, args...)...)
 }
 
 // The state of every database by Compose project. Databases on a server the
 // console can't reach are "unreachable".
+// An allowlist with more sources added.
+func joinAllow(rules string, more []string) string {
+	return strings.Join(slices.DeleteFunc(append([]string{rules}, more...), func(s string) bool { return s == "" }), ",")
+}
+
 func (m *manager) states(ctx context.Context) (map[string]string, error) {
 	states, err := m.statesFor(ctx, "io.openrds.database=true")
 	if err != nil {

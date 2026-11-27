@@ -8,21 +8,28 @@ package main
 // Replicas have their source's users and passwords. Promoting one makes it a
 // standalone, writable database.
 //
-// A replica reaches its source on the source's Docker network. OpenRDS
-// attaches the replica's container to that network itself, without aliases:
-// Compose would give it the service name "db" there, and the source's pooler
-// and gateway find the source by that name.
+// A replica on its source's server reaches the source on the source's Docker
+// network. OpenRDS attaches the replica's container to that network itself,
+// without aliases: Compose would give it the service name "db" there, and the
+// source's pooler and gateway find the source by that name. A replica on
+// another server connects over the private network when both servers have a
+// private address, otherwise over the internet through the source's public
+// access; the source's gateway lets in only the replica's server.
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"slices"
@@ -112,9 +119,20 @@ func slotKeep(r record) string {
 	return "16GB"
 }
 
+// Where a replica reaches its source: by the source's network name on the
+// same server, otherwise at the address its route gave it.
+func (r record) sourceEndpoint() (string, int) {
+	if host, port, err := net.SplitHostPort(r.SourceAddress); err == nil {
+		n, _ := strconv.Atoi(port)
+		return host, n
+	}
+	return "openrds-" + r.ReplicaOf, engines[r.Engine].port
+}
+
 func pgConninfo(r record) string {
-	return fmt.Sprintf("host=openrds-%s port=5432 user=%s password=%s sslmode=verify-full sslrootcert=%s application_name=%s",
-		r.ReplicaOf, replicationUser, r.ReplicationPassword, tlsCAFile, r.Name)
+	host, port := r.sourceEndpoint()
+	return fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=verify-full sslrootcert=%s application_name=%s",
+		host, port, replicationUser, r.ReplicationPassword, tlsCAFile, r.Name)
 }
 
 // A MySQL server ID other than 1, MySQL's default, which sources keep.
@@ -130,14 +148,15 @@ func valkeyReplicaConfig(r record) string {
 	if r.sourceTLS {
 		tls = "yes"
 	}
-	return fmt.Sprintf(`replicaof openrds-%s 6379
+	host, port := r.sourceEndpoint()
+	return fmt.Sprintf(`replicaof %s %d
 masteruser %s
 masterauth %s
 tls-cert-file %s
 tls-key-file %s
 tls-ca-cert-file %s
 tls-replication %s
-`, r.ReplicaOf, replicationUser, r.ReplicationPassword, tlsCertFile, tlsKeyFile, tlsCAFile, tls)
+`, host, port, replicationUser, r.ReplicationPassword, tlsCertFile, tlsKeyFile, tlsCAFile, tls)
 }
 
 // Remove passwords from an engine's error text: MySQL quotes the statement.
@@ -192,17 +211,153 @@ func checkReplication(all []record, next record) error {
 		}
 		return nil
 	}
+	var current record
+	for _, r := range all {
+		if r.Name == next.Name {
+			current = r
+		}
+	}
 	for _, r := range replicasOf(all, next.Name) {
 		if err := checkStandby(next, r); err != nil {
 			return err
+		}
+		switch {
+		case r.SourceRoute == routePrivate && next.Port != current.Port:
+			return fail(409, fmt.Sprintf("Read replica %s on another server connects to port %d. Promote or delete it before changing the port.", r.Name, current.Port))
+		case r.SourceRoute == routePublic && (!next.PublicAccess || next.PublicPort != current.PublicPort || next.PublicHost != current.PublicHost):
+			return fail(409, fmt.Sprintf("Read replica %s on another server connects through public access at %s. Promote or delete it before changing public access.", r.Name, r.SourceAddress))
 		}
 	}
 	return nil
 }
 
+const (
+	routePrivate = "private" // over the private network, to the source's private address
+	routePublic  = "public"  // over the internet, through the source's public access
+)
+
+// How a replica on another server reaches its source: over the private
+// network when both servers have a private address, otherwise through the
+// source's public access. A replica on the source's server needs no route.
+func (m *manager) replicaRoute(src record, server string) (address, route string, err error) {
+	if sameServer(src.Server, server) {
+		return "", "", nil
+	}
+	from, ok := m.server(src.Server)
+	to, ok2 := m.server(server)
+	if !ok || !ok2 {
+		return "", "", fail(400, "Choose a server from the Servers page.")
+	}
+	if from.PrivateAddress != "" && to.PrivateAddress != "" {
+		return net.JoinHostPort(from.PrivateAddress, strconv.Itoa(src.Port)), routePrivate, nil
+	}
+	host := cmp.Or(src.PublicHost, from.PublicAddress)
+	switch {
+	case !src.PublicAccess:
+		return "", "", fail(409, fmt.Sprintf("%s and %s share no private network. Give both a private address on the Servers page, or turn on public access for %s so the replica connects over the internet.", from.Name, to.Name, src.Name))
+	case host == "":
+		return "", "", fail(409, fmt.Sprintf("Set the public address of %s on the Servers page: the replica connects to it.", from.Name))
+	case to.PublicAddress == "":
+		return "", "", fail(409, fmt.Sprintf("Set the public address of %s on the Servers page: %s lets in replication from it.", to.Name, src.Name))
+	}
+	return net.JoinHostPort(host, strconv.Itoa(src.PublicPort)), routePublic, nil
+}
+
+// The sources a database's gateways let in for its replicas on other
+// servers, besides the rules people set.
+func (m *manager) replicaSources(r record) (private, public []string) {
+	if r.ReplicaOf != "" || r.ReplicationPassword == "" {
+		return nil, nil
+	}
+	all, err := m.records()
+	if err != nil {
+		return nil, nil
+	}
+	for _, rep := range replicasOf(all, r.Name) {
+		srv, ok := m.server(rep.Server)
+		if !ok {
+			continue
+		}
+		switch rep.SourceRoute {
+		case routePrivate:
+			if srv.PrivateAddress != "" {
+				private = append(private, srv.PrivateAddress+"/32")
+			}
+		case routePublic:
+			public = append(public, addressRanges(srv.PublicAddress)...)
+		}
+	}
+	return private, public
+}
+
+// A server's public address as ranges for an allowlist: an IP, or what a
+// DNS name resolves to.
+func addressRanges(address string) []string {
+	ips := []string{address}
+	if net.ParseIP(address) == nil {
+		resolved, err := net.LookupHost(address)
+		if err != nil {
+			log.Printf("resolving %s for replication: %v", address, err)
+		}
+		ips = resolved
+	}
+	var out []string
+	for _, ip := range ips {
+		if p, err := parseSource(ip); err == nil {
+			out = append(out, p.String())
+		}
+	}
+	return out
+}
+
+// Whether a database's private gateway runs: for private access, or for its
+// replicas on other servers.
+func (m *manager) servesPrivately(r record) bool {
+	srv, ok := m.server(r.Server)
+	if !ok || srv.PrivateAddress == "" {
+		return false
+	}
+	private, _ := m.replicaSources(r)
+	return r.PrivateAccess || len(private) > 0
+}
+
+// Open or close the source's gateways for its replicas on other servers.
+func (m *manager) applySourceAccess(ctx context.Context, src record) error {
+	states, err := m.states(ctx)
+	if err != nil {
+		return err
+	}
+	live := live(states[src.Project])
+	if err := m.applyPrivateGateway(ctx, src, src, live); err != nil {
+		return err
+	}
+	if src.PublicAccess && live {
+		return m.compose(ctx, src, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "60", "gateway")
+	}
+	return nil
+}
+
+// The names a running database's certificate covers, read from its container.
+func (m *manager) servedNames(ctx context.Context, r record) ([]string, error) {
+	var out bytes.Buffer
+	if err := m.compose(ctx, r, nil, &out, "exec", "-T", "db", "cat", tlsCertFile); err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(out.Bytes())
+	if block == nil {
+		return nil, errors.New("no certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return certHosts(cert), nil
+}
+
 type replicaRequest struct {
 	Name      string   `json:"name"`
 	Port      int      `json:"port"`
+	Server    string   `json:"server"` // the source's when empty
 	CPUs      *float64 `json:"cpus"`
 	MemoryMiB *int     `json:"memoryMiB"`
 	DiskGiB   *int     `json:"diskGiB"`
@@ -248,6 +403,27 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 	if req.DiskGiB != nil {
 		spec.DiskGiB = *req.DiskGiB
 	}
+	if req.Server != "" {
+		spec.Server = req.Server
+		if spec.Server == localServer {
+			spec.Server = ""
+		}
+	}
+	address, route, err := m.replicaRoute(src, spec.Server)
+	if err != nil {
+		return err
+	}
+	if route != "" {
+		// The replica checks the source's certificate against the address it dials.
+		host, _, _ := net.SplitHostPort(address)
+		names, err := m.servedNames(ctx, src)
+		if err != nil {
+			return fail(502, fmt.Sprintf("Could not read the certificate %s uses: %s", src.Name, err))
+		}
+		if !slices.Contains(names, host) {
+			return fail(409, fmt.Sprintf("Reboot %s once first, so its certificate names %s, the address the replica connects to.", src.Name, host))
+		}
+	}
 	if src.DiskGiB > 0 && spec.DiskGiB > 0 && spec.DiskGiB < src.DiskGiB {
 		return fail(400, fmt.Sprintf("Give the replica at least the %d GiB of storage %s has: it holds the same data.", src.DiskGiB, src.Name))
 	}
@@ -268,7 +444,7 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 		return err
 	}
 	defer release()
-	r.ReplicaOf = src.Name
+	r.ReplicaOf, r.SourceAddress, r.SourceRoute = src.Name, address, route
 	r.follow(src)
 	if r.Engine == "mysql" {
 		r.ServerID = serverID()
@@ -281,6 +457,13 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 	if err := m.prepareSource(ctx, src, r); err != nil {
 		os.Remove(m.recordPath(r.Name)) // nothing else exists yet
 		return fail(502, fmt.Sprintf("The replica was not created: %s could not be prepared for replication. %s", src.Name, redact(err, src.ReplicationPassword)))
+	}
+	if route != "" {
+		if err := m.applySourceAccess(ctx, src); err != nil {
+			os.Remove(m.recordPath(r.Name))
+			m.applySourceAccess(context.WithoutCancel(ctx), src)
+			return fail(502, fmt.Sprintf("The replica was not created: %s could not let in replication from its server. %s", src.Name, err))
+		}
 	}
 	if r.DiskGiB > 0 {
 		if err := m.attachDisk(ctx, r); err != nil {
@@ -405,9 +588,10 @@ func (m *manager) seedMySQL(ctx context.Context, src record, r *record) error {
 		setup.WriteString(grantScript(*r, u))
 	}
 	// The host comes first: naming it resets the position, which the dump sets.
-	fmt.Fprintf(&setup, `CHANGE REPLICATION SOURCE TO SOURCE_HOST = 'openrds-%s', SOURCE_PORT = 3306, SOURCE_USER = '%s', SOURCE_PASSWORD = '%s',
+	host, port := r.sourceEndpoint()
+	fmt.Fprintf(&setup, `CHANGE REPLICATION SOURCE TO SOURCE_HOST = '%s', SOURCE_PORT = %d, SOURCE_USER = '%s', SOURCE_PASSWORD = '%s',
   SOURCE_SSL = 1, SOURCE_SSL_CA = '%s', SOURCE_SSL_VERIFY_SERVER_CERT = 1, SOURCE_CONNECT_RETRY = 10, SOURCE_RETRY_COUNT = 31536000;
-`, src.Name, replicationUser, r.ReplicationPassword, tlsCAFile)
+`, host, port, replicationUser, r.ReplicationPassword, tlsCAFile)
 	if err := m.admin(ctx, *r, setup.String()); err != nil {
 		return redact(err, r.ReplicationPassword)
 	}
@@ -630,7 +814,7 @@ func (m *manager) promote(ctx context.Context, name string) (err error) {
 	finish := m.trackDetail(ctx, name, "Promote read replica", "was a replica of "+source)
 	defer func() { finish(err) }()
 	next := r
-	next.ReplicaOf, next.ReplicationPassword, next.sourceTLS = "", "", false
+	next.ReplicaOf, next.ReplicationPassword, next.sourceTLS, next.SourceAddress, next.SourceRoute = "", "", false, "", ""
 	switch r.Engine {
 	case "postgres":
 		err = m.admin(ctx, r, pgPromoteSQL)
@@ -651,9 +835,13 @@ func (m *manager) promote(ctx context.Context, name string) (err error) {
 	if err := m.save(next); err != nil {
 		return err
 	}
-	m.unlinkReplica(ctx, next, source)
-	if r.Engine == "postgres" {
-		if src, err := m.record(source); err == nil {
+	if src, err := m.record(source); err == nil {
+		if r.SourceRoute == "" {
+			m.unlinkReplica(ctx, next, source)
+		} else if err := m.applySourceAccess(ctx, src); err != nil {
+			log.Printf("closing %s to the server of %s: %v", source, r.Name, err)
+		}
+		if r.Engine == "postgres" {
 			if err := m.dropSlot(ctx, src, slotName(r)); err != nil {
 				log.Printf("removing the replication slot of %s from %s: %v", r.Name, source, err)
 			}

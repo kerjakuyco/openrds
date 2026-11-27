@@ -499,6 +499,23 @@ func (m *manager) updateServer(ctx context.Context, id string, req serverRequest
 			}
 		}
 	}
+	old, _ := m.server(id)
+	for _, rep := range all {
+		if rep.SourceRoute == "" {
+			continue
+		}
+		var src record
+		for _, r := range all {
+			if r.Name == rep.ReplicaOf {
+				src = r
+			}
+		}
+		uses := rep.SourceRoute == routePrivate && s.PrivateAddress != old.PrivateAddress && (sameServer(rep.Server, id) || sameServer(src.Server, id)) ||
+			rep.SourceRoute == routePublic && s.PublicAddress != old.PublicAddress && (sameServer(rep.Server, id) || sameServer(src.Server, id) && src.PublicHost == "")
+		if uses {
+			return s, fail(409, fmt.Sprintf("Read replica %s replicates from %s over this address. Promote or delete it before changing the address.", rep.Name, rep.ReplicaOf))
+		}
+	}
 	if err := m.saveServer(s); err != nil {
 		return s, err
 	}

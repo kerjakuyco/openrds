@@ -38,7 +38,7 @@ Each database runs in its own container with its own volume, network and generat
 - **Backups you can rely on.** Automated backups from daily to hourly with a retention period, point-in-time recovery to any second for PostgreSQL and MySQL, manual snapshots, a final snapshot on delete, and restores into a new database. Copies go to any S3-compatible storage (Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO) and can be imported on a new server after losing the old one.
 - **Connection pooling.** PgBouncer in front of PostgreSQL, like RDS Proxy, so hundreds of clients share a few server connections. Turn it on without restarting the database.
 - **Many servers, one console.** Add servers over SSH and choose where each database runs. Reach databases from your other servers over a private network with an allowlist, see each server's capacity, and get alerted when one becomes unreachable.
-- **Read replicas.** Read-only copies of PostgreSQL, MySQL and Valkey databases that follow their source within seconds, each with its own port and size. Send reads to them, watch their lag, and promote one to a standalone database.
+- **Read replicas.** Read-only copies of PostgreSQL, MySQL and Valkey databases that follow their source within seconds, each with its own port and size, on the same server or another one. Send reads to them, watch their lag, and promote one to a standalone database, for example when a server is lost.
 - **Secure by default.** Databases listen only on the server itself. Add read-only or read-write database users, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
 - **A console that answers at a glance.** The database list shows live load, copyable endpoints and replicas under their source, and previews any database beside the list with its last hour of CPU, memory and connections and quick actions. Each database opens on an overview of its health, how to connect, replication, backups and recent events.
 - **Easy to operate.** Monitoring charts with connections, throughput and cache hit ratio, Performance insights with the top statements and what runs now, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix. Snapshots and restores of large databases finish even if your browser disconnects, and backups never fill the disk your databases need.
@@ -126,7 +126,7 @@ flowchart LR
 - **Isolated databases.** Every database is its own Compose project, with its own network, data volume and random password. Ports are published on the server's loopback interface only.
 - **Opt-in internet access.** A small gateway container forwards connections from allowed addresses only, and logs every attempt.
 - **Backups off the server.** Backups are logical dumps; for point-in-time recovery, PostgreSQL's are physical base backups with archived WAL, and MySQL's record their position in the binary logs OpenRDS copies every minute. They are stored on the server and, when you connect storage, copied to an S3-compatible bucket with signed requests.
-- **Replicas next to their source.** A read replica is a database of its own that joins its source's private network, and streams or applies its changes there.
+- **Replicas anywhere.** A read replica is a database of its own. Next to its source it joins the source's Docker network; on another server it connects over the private network, or the internet through public access, and the source lets in only that server. Replication always uses TLS with the certificate checked.
 
 ## Documentation
 
@@ -142,7 +142,6 @@ flowchart LR
 
 OpenRDS grows toward the managed-database experience, one release at a time. Ideas we want to build next:
 
-- Read replicas on another server
 - Moving a database to another server in one step, and automatic failover
 
 Have a different idea? [Request a feature](https://github.com/kerjakuyco/openrds/issues/new?template=feature_request.yml) or upvote an existing one.

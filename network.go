@@ -190,15 +190,30 @@ func (m *manager) preparePrivate(s *instanceSpec) error {
 	return nil
 }
 
-// Start, update or remove the private gateway to match the record.
+// Start, update or remove the private gateway to match the record and its
+// replicas on other servers.
 func (m *manager) applyPrivateGateway(ctx context.Context, previous, next record, databaseLive bool) error {
-	if next.PrivateAccess && databaseLive {
+	if m.servesPrivately(next) {
+		if !databaseLive {
+			return nil
+		}
 		return m.compose(ctx, next, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "60", "private-gateway")
 	}
-	if previous.PrivateAccess {
-		return m.compose(ctx, previous, nil, nil, "rm", "--stop", "--force", "private-gateway")
+	return m.removeService(ctx, next, "private-gateway")
+}
+
+// Remove a service's container directly, for one its Compose files no longer include.
+func (m *manager) removeService(ctx context.Context, r record, service string) error {
+	var out bytes.Buffer
+	if err := m.on(r).run(ctx, nil, nil, &out, "ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project="+r.Project,
+		"--filter", "label=com.docker.compose.service="+service); err != nil {
+		return err
 	}
-	return nil
+	ids := strings.Fields(out.String())
+	if len(ids) == 0 {
+		return nil
+	}
+	return m.on(r).run(ctx, nil, nil, io.Discard, append([]string{"rm", "--force"}, ids...)...)
 }
 
 // Start, update or remove the gateway to match the record. Compose

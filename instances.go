@@ -35,6 +35,7 @@ type instanceView struct {
 	ReplicaOf      string             `json:"replicaOf,omitempty"`
 	Replicas       []string           `json:"replicas,omitempty"`
 	Replication    *replicationStatus `json:"replication,omitempty"` // a replica's, as last read
+	SourceRoute    string             `json:"sourceRoute,omitempty"` // a replica on another server: private or public
 	ServerName     string             `json:"serverName"`
 	PrivateHost    string             `json:"privateHost,omitempty"` // with private access on
 }
@@ -115,7 +116,7 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 			v.Replicas = append(v.Replicas, rep.Name)
 		}
 		if r.ReplicaOf != "" {
-			v.ReplicaOf = r.ReplicaOf
+			v.ReplicaOf, v.SourceRoute = r.ReplicaOf, r.SourceRoute
 			st, ok := m.cachedReplication(r.Name)
 			switch {
 			case r.PendingRestore:
@@ -311,7 +312,7 @@ func (m *manager) start(ctx context.Context, r *record) error {
 			return err
 		}
 	}
-	if r.ReplicaOf != "" {
+	if r.ReplicaOf != "" && r.SourceRoute == "" {
 		// Join the source's network before the server starts, so it connects at once.
 		if err := m.compose(ctx, *r, nil, nil, "up", "--no-start", "db"); err != nil {
 			return err
@@ -342,7 +343,7 @@ func (m *manager) start(ctx context.Context, r *record) error {
 			return fmt.Errorf("the database is running, but its public port did not open: %w", err)
 		}
 	}
-	if r.PrivateAccess {
+	if m.servesPrivately(*r) {
 		if err := m.applyPrivateGateway(ctx, *r, *r, true); err != nil {
 			return fmt.Errorf("the database is running, but its private address did not open: %w", err)
 		}
@@ -361,7 +362,7 @@ func (m *manager) stop(ctx context.Context, r record) error {
 	if r.PublicAccess {
 		services = append(services, "gateway")
 	}
-	if r.PrivateAccess {
+	if m.servesPrivately(r) {
 		services = append(services, "private-gateway")
 	}
 	if r.Pooler.on() {
@@ -473,7 +474,17 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 	if err := os.Remove(m.overridePath(r)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Remove(m.recordPath(name))
+	if err := os.Remove(m.recordPath(name)); err != nil {
+		return err
+	}
+	if r.SourceRoute != "" { // close the source to this replica's server
+		if src, err := m.record(r.ReplicaOf); err == nil {
+			if err := m.applySourceAccess(ctx, src); err != nil {
+				fmt.Fprintf(os.Stderr, "closing %s to the server of %s: %v\n", src.Name, r.Name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // A partial update. Omitted fields keep their value; tags and parameters are

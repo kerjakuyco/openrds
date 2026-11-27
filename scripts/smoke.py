@@ -662,30 +662,36 @@ def exercise_mysql_pitr():
 def exercise_servers():
     """A second server reached as Docker over SSH: a Docker-in-Docker container with sshd."""
     suffix = secrets.token_hex(4)
-    test, name = f"smoke-server-{suffix}", f"remote-{suffix}"
-    restored = f"{name}-here"
+    test, other, name = f"smoke-server-{suffix}", f"smoke-server-{suffix}-b", f"remote-{suffix}"
+    restored, far = f"{name}-here", f"{name}-far"
     control = cli("docker", "compose", "ps", "-q", "openrds")
     network = cli("docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", control).split()[0]
     cli("docker", "build", "-q", "-t", "openrds-test-server:smoke", "scripts/test-server")
-    cli("docker", "run", "-d", "--privileged", "--name", test, "--network", network, "openrds-test-server:smoke")
-    server_id = None
-    try:
-        wait_for("the test server's Docker", lambda: subprocess.run(["docker", "exec", test, "docker", "version"], capture_output=True).returncode == 0, 90)
-        image = "postgres:18-alpine"  # from this host, not a registry
-        if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0:
-            cli("docker", "pull", "-q", image)
-        subprocess.run(f"docker save {image} | docker exec -i {test} docker load -q", shell=True, check=True, capture_output=True)
-        key = api("servers/key")
-        subprocess.run(["docker", "exec", "-i", test, "sh", "-c", "cat >> /home/openrds/.ssh/authorized_keys && chown openrds /home/openrds/.ssh/authorized_keys && chmod 600 /home/openrds/.ssh/authorized_keys"],
+    for container in (test, other):
+        cli("docker", "run", "-d", "--privileged", "--name", container, "--network", network, "openrds-test-server:smoke")
+    server_id = other_id = None
+    image = "postgres:18-alpine"  # from this host, not a registry
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0:
+        cli("docker", "pull", "-q", image)
+    key = api("servers/key")
+
+    def add(container, label):
+        wait_for("the test server's Docker", lambda: subprocess.run(["docker", "exec", container, "docker", "version"], capture_output=True).returncode == 0, 90)
+        subprocess.run(f"docker save {image} | docker exec -i {container} docker load -q", shell=True, check=True, capture_output=True)
+        subprocess.run(["docker", "exec", "-i", container, "sh", "-c", "cat >> /home/openrds/.ssh/authorized_keys && chown openrds /home/openrds/.ssh/authorized_keys && chmod 600 /home/openrds/.ssh/authorized_keys"],
                        input=key["publicKey"] + "\n", text=True, check=True)
-        address = f"openrds@{test}"
+        address = f"openrds@{container}"
         scan = api("servers/scan", "POST", {"address": address})
-        real = cli("docker", "exec", test, "ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub").split()[1]
+        real = cli("docker", "exec", container, "ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub").split()[1]
         assert any(real in f for f in scan["fingerprints"]), (real, scan)
-        private = cli("docker", "inspect", "-f", "{{(index .NetworkSettings.Networks \"" + network + "\").IPAddress}}", test)
-        server_id = api("servers", "POST", {"name": f"smoke-{suffix}", "address": address, "hostKeys": scan["hostKeys"], "privateAddress": private})["id"]
-        view = next(s for s in api("servers") if s["id"] == server_id)
+        ip = cli("docker", "inspect", "-f", "{{(index .NetworkSettings.Networks \"" + network + "\").IPAddress}}", container)
+        sid = api("servers", "POST", {"name": label, "address": address, "hostKeys": scan["hostKeys"], "privateAddress": ip})["id"]
+        view = next(s for s in api("servers") if s["id"] == sid)
         assert view["reachable"] and view["info"]["cpus"] > 0, view
+        return sid, ip
+    try:
+        server_id, private = add(test, f"smoke-{suffix}")
+        other_id, other_ip = add(other, f"smoke-{suffix}-b")
 
         port = free_port()
         api("instances", "POST", {"name": name, "engine": "postgres", "port": port, "memoryMiB": 256, "server": server_id, "privateAccess": True})
@@ -703,24 +709,43 @@ def exercise_servers():
         api(f"backups/{backup['id']}/restore", "POST", {"name": restored, "port": free_port()})
         assert read_value("postgres", restored) == "42", "a snapshot taken there restores here"
 
+        # A read replica on the second server follows over the private network.
+        rport = free_port()
+        api(f"instances/{name}/replicas", "POST", {"name": far, "port": rport, "server": other_id})
+        api(f"instances/{far}/modify", "POST", {"privateAccess": True})
+        replica = next(i for i in api("instances") if i["name"] == far)
+        assert replica["server"] == other_id and replica["sourceRoute"] == "private" and replica["replication"]["state"] == "replicating", replica
+        psql("INSERT INTO smoke VALUES (43)")
+
+        def on_replica():
+            try:
+                return cli("docker", "run", "--rm", "--network", network, "--env", "PGPASSWORD", "postgres:17-alpine", "psql", "-XAt", "-h", other_ip, "-p", str(rport),
+                           "-U", c["user"], "-d", c["database"], "-c", "SELECT count(*) FROM smoke", env={**os.environ, "PGPASSWORD": c["password"]}) == "2"
+            except subprocess.CalledProcessError:
+                return False
+        wait_for("the replica on the second server to follow", on_replica, 60)
+        api(f"instances/{far}/promote", "POST")
+        assert not next(i for i in api("instances") if i["name"] == far).get("replicaOf")
+
         cli("docker", "pause", test)
         wait_for("the database to show its server is unreachable", lambda: next(i for i in api("instances") if i["name"] == name)["status"] == "unreachable", 180)
         wait_for("the unreachable event", lambda: any(e.get("kind") == "server" and e["action"] == "Server unreachable" for e in api("activity")), 150)
         cli("docker", "unpause", test)
         wait_for("the database to come back", lambda: next(i for i in api("instances") if i["name"] == name)["status"] == "running", 180)
         refused(f"servers/{server_id}", "DELETE", 409)
-        print("servers: added over SSH with its host key, a database there on the private address with TLS, metrics, a snapshot restored here, unreachable and back passed", flush=True)
+        print("servers: added over SSH with their host keys, a database there on the private address with TLS, metrics, a snapshot restored here, a read replica on another server over the private network and its promotion, unreachable and back passed", flush=True)
     finally:
         subprocess.run(["docker", "unpause", test], capture_output=True)
-        for db in api("instances"):
-            if db["name"] in (name, restored):
+        for db in sorted(api("instances"), key=lambda i: not i.get("replicaOf")):
+            if db["name"] in (far, name, restored):
                 api(f"instances/{db['name']}", "DELETE")
         for b in api("backups"):
-            if b["name"] in (name, restored):
+            if b["name"] in (far, name, restored):
                 api(f"backups/{b['id']}", "DELETE")
-        if server_id:
-            api(f"servers/{server_id}", "DELETE")
-        subprocess.run(["docker", "rm", "-f", "--volumes", test], capture_output=True)
+        for sid in (server_id, other_id):
+            if sid:
+                api(f"servers/{sid}", "DELETE")
+        subprocess.run(["docker", "rm", "-f", "--volumes", test, other], capture_output=True)
 
 
 def browser():

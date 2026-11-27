@@ -20,6 +20,7 @@ type replicaDocker struct {
 	inputs  map[string]string // stdin by command line
 	answer  string            // what docker exec engine clients print
 	answers map[string]string // or this, for input that contains the key
+	served  string            // the certificate a database's container presents
 }
 
 func newReplicaDocker() *replicaDocker {
@@ -78,6 +79,8 @@ func (d *replicaDocker) run(ctx context.Context, env []string, in io.Reader, out
 				switch {
 				case slices.Contains(args, "pg_basebackup"):
 					io.WriteString(out, "base backup")
+				case slices.Contains(args, tlsCertFile):
+					io.WriteString(out, d.served)
 				case strings.Contains(args[len(args)-1], "SELECT @@log_bin"), strings.HasSuffix(args[len(args)-1], "-N -B"):
 					io.WriteString(out, "1\n")
 				}
@@ -446,4 +449,145 @@ func (m *manager) forgetCache(name string) {
 	m.replication.mu.Lock()
 	delete(m.replication.status, name)
 	m.replication.mu.Unlock()
+}
+
+func TestAReplicaOnAnotherServerTakesARoute(t *testing.T) {
+	m := testManager(t, newFakeDocker().run)
+	addTestServer(t, m, "s0000000a", "openrds@10.0.0.1", "10.0.0.1")
+	addTestServer(t, m, "s0000000b", "openrds@10.0.0.2", "10.0.0.2")
+	addTestServer(t, m, "s0000000c", "openrds@203.0.113.3", "")
+	src := record{instanceSpec: instanceSpec{Name: "orders", Engine: "postgres", Port: 15432, Server: "s0000000a"}}
+	if addr, route, err := m.replicaRoute(src, "s0000000a"); err != nil || addr != "" || route != "" {
+		t.Fatalf("on its source's server, a replica uses the Docker network: %q %q %v", addr, route, err)
+	}
+	if addr, route, err := m.replicaRoute(src, "s0000000b"); err != nil || addr != "10.0.0.1:15432" || route != routePrivate {
+		t.Fatalf("both servers have private addresses: %q %q %v", addr, route, err)
+	}
+	if _, _, err := m.replicaRoute(src, "s0000000c"); status(err) != 409 || !strings.Contains(err.Error(), "turn on public access") {
+		t.Fatalf("no shared private network and no public access: %v", err)
+	}
+	src.PublicAccess, src.PublicPort = true, 25432
+	if _, _, err := m.replicaRoute(src, "s0000000c"); status(err) != 409 || !strings.Contains(err.Error(), "public address of db-s0000000a") {
+		t.Fatalf("the source's server needs a public address: %v", err)
+	}
+	a, _ := m.server("s0000000a")
+	a.PublicAddress = "198.51.100.1"
+	m.saveServer(a)
+	if _, _, err := m.replicaRoute(src, "s0000000c"); status(err) != 409 || !strings.Contains(err.Error(), "public address of db-s0000000c") {
+		t.Fatalf("the replica's server needs a public address the source lets in: %v", err)
+	}
+	c, _ := m.server("s0000000c")
+	c.PublicAddress = "203.0.113.3"
+	m.saveServer(c)
+	if addr, route, err := m.replicaRoute(src, "s0000000c"); err != nil || addr != "198.51.100.1:25432" || route != routePublic {
+		t.Fatalf("over the internet through public access: %q %q %v", addr, route, err)
+	}
+
+	// The source's gateways let those servers in, beside people's rules.
+	src.ReplicationPassword = "secret"
+	writeJSON(m.recordPath("orders"), src)
+	for _, rep := range []record{
+		{instanceSpec: instanceSpec{Name: "near", Engine: "postgres", Port: 15433, Server: "s0000000a"}, ReplicaOf: "orders"},
+		{instanceSpec: instanceSpec{Name: "private", Engine: "postgres", Port: 15433, Server: "s0000000b"}, ReplicaOf: "orders", SourceAddress: "10.0.0.1:15432", SourceRoute: routePrivate},
+		{instanceSpec: instanceSpec{Name: "public", Engine: "postgres", Port: 15433, Server: "s0000000c"}, ReplicaOf: "orders", SourceAddress: "198.51.100.1:25432", SourceRoute: routePublic},
+	} {
+		writeJSON(m.recordPath(rep.Name), rep)
+	}
+	private, public := m.replicaSources(src)
+	if !slices.Equal(private, []string{"10.0.0.2/32"}) || !slices.Equal(public, []string{"203.0.113.3/32"}) {
+		t.Fatalf("let in: %v %v", private, public)
+	}
+	if !m.servesPrivately(src) {
+		t.Fatal("the private gateway runs for replicas even without private access")
+	}
+	var env []string
+	m.docker = runFunc(func(_ context.Context, e []string, _ io.Reader, _ io.Writer, _ ...string) error { env = e; return nil })
+	t.Setenv("OPENRDS_GATEWAY_IMAGE", "openrds-openrds:latest")
+	src.Firewall = []firewallRule{{CIDR: "192.0.2.0/24"}}
+	if err := m.compose(t.Context(), src, nil, nil, "up"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(env, "OPENRDS_PRIVATE_ALLOW=10.0.0.2/32") || !slices.Contains(env, "OPENRDS_GATEWAY_ALLOW=192.0.2.0/24,203.0.113.3/32") {
+		t.Fatalf("env: %v", env)
+	}
+
+	// What replicas depend on stays put.
+	all, _ := m.records()
+	moved := src
+	moved.Port = 15440
+	if err := checkReplication(all, moved); status(err) != 409 || !strings.Contains(err.Error(), "private") {
+		t.Fatalf("the port a private replica dials: %v", err)
+	}
+	closed := src
+	closed.PublicAccess = false
+	if err := checkReplication(all, closed); status(err) != 409 || !strings.Contains(err.Error(), "public") {
+		t.Fatalf("the public access a replica uses: %v", err)
+	}
+	if _, err := m.updateServer(t.Context(), "s0000000b", serverRequest{Name: "db-s0000000b", PrivateAddress: "10.0.0.9"}); status(err) != 409 {
+		t.Fatal("the address a replica's source lets in")
+	}
+	if _, err := m.updateServer(t.Context(), "s0000000a", serverRequest{Name: "db-s0000000a", PrivateAddress: "10.0.0.1", PublicAddress: "198.51.100.9"}); status(err) != 409 {
+		t.Fatal("the public address a replica dials")
+	}
+
+	// Replicas dial the address of their route.
+	rep, _ := m.record("private")
+	if host, port := rep.sourceEndpoint(); host != "10.0.0.1" || port != 15432 || !strings.Contains(pgConninfo(rep), "host=10.0.0.1 port=15432") {
+		t.Fatalf("endpoint %s:%d", host, port)
+	}
+	near, _ := m.record("near")
+	if !strings.Contains(pgConninfo(near), "host=openrds-orders port=5432") {
+		t.Fatal("a replica on its source's server uses the network name")
+	}
+	rep.Engine = "valkey"
+	if !strings.HasPrefix(valkeyReplicaConfig(rep), "replicaof 10.0.0.1 15432\n") {
+		t.Fatal(valkeyReplicaConfig(rep))
+	}
+}
+
+func TestCreatingAReplicaOnAnotherServer(t *testing.T) {
+	d := newReplicaDocker()
+	m := testManager(t, d.run)
+	ctx := t.Context()
+	addTestServer(t, m, "s0000000a", "openrds@10.0.0.1", "10.0.0.1")
+	addTestServer(t, m, "s0000000b", "openrds@10.0.0.2", "10.0.0.2")
+	t.Setenv("OPENRDS_GATEWAY_IMAGE", "openrds-openrds:latest")
+	src := runningSource(t, m, d, instanceSpec{Name: "orders", Engine: "postgres", Port: 15432, Server: "s0000000a"})
+	src.Layout = currentLayout
+	writeJSON(m.recordPath("orders"), src)
+	cert, _ := m.serverTLS(record{instanceSpec: src.instanceSpec, Project: src.Project})
+	d.mu.Lock()
+	d.answers = map[string]string{}
+	d.mu.Unlock()
+	d.served = string(cert.cert) // a certificate without the server's address
+	if err := m.createReplica(ctx, "orders", replicaRequest{Name: "orders-far", Port: 15432, Server: "s0000000b"}); status(err) != 409 || !strings.Contains(err.Error(), "Reboot orders once first") {
+		t.Fatalf("the source must present a certificate for the address the replica dials: %v", err)
+	}
+	cert, _ = m.serverTLS(record{instanceSpec: src.instanceSpec, Project: src.Project, serverHosts: []string{"10.0.0.1"}})
+	d.served = string(cert.cert)
+	if err := m.createReplica(ctx, "orders", replicaRequest{Name: "orders-far", Port: 15432, Server: "s0000000b"}); err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := m.record("orders-far")
+	if rep.Server != "s0000000b" || rep.SourceAddress != "10.0.0.1:15432" || rep.SourceRoute != routePrivate {
+		t.Fatalf("the replica runs on its server and dials the source's private address: %+v", rep)
+	}
+	if standby := d.input("standby.signal"); !strings.Contains(standby, "host=10.0.0.1 port=15432 user=openrds_replication") {
+		t.Fatalf("standby settings: %s", standby)
+	}
+	if d.called("network", "connect") {
+		t.Fatal("a replica on another server joins no Docker network")
+	}
+	if !strings.Contains(d.everything(), "private-gateway.yaml") || !strings.Contains(d.everything(), "up --detach --wait --wait-timeout 60 private-gateway") {
+		t.Fatal("the source's private gateway opens for the replica's server")
+	}
+	if err := m.promote(ctx, "orders-far"); err != nil {
+		t.Fatal(err)
+	}
+	if rep, _ = m.record("orders-far"); rep.SourceAddress != "" || rep.SourceRoute != "" {
+		t.Fatalf("a promoted replica forgets its route: %+v", rep)
+	}
+	if src, _ = m.record("orders"); m.servesPrivately(src) {
+		t.Fatal("the source closes its private gateway again")
+	}
 }

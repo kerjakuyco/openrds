@@ -2,6 +2,20 @@
 import { h, icon, btn, api, modal, panel, alertBox, dataTable, empty, keyValues, mib, sizeLabel, ago, isRunning } from "./lib.mjs";
 import { state, instance, track, can } from "./store.mjs";
 import { SIZES, field, select } from "./forms.mjs";
+import { servers, multiServer, serverOf } from "./servers.mjs";
+
+// How a replica on server reaches d, as the console decides it, or why it can't.
+export function routeTo(d, serverId) {
+  const from = serverOf(d), to = servers().find(s => s.id === serverId);
+  if (!to || to.id === (d.server || "local")) return { route: "", text: "On the same server, over its Docker network." };
+  if (from?.privateAddress && to.privateAddress) return { route: "private", text: `Over the private network, to ${from.privateAddress}:${d.port}. ${d.name} lets in only ${to.name}.` };
+  const host = d.publicHost || from?.publicAddress;
+  if (!d.publicAccess) return { error: `${from?.name || "Its server"} and ${to.name} share no private network. Give both a private address on the Servers page, or turn on public access for ${d.name}.` };
+  if (!host) return { error: `Set the public address of ${from?.name || "its server"} on the Servers page.` };
+  if (!to.publicAddress) return { error: `Set the public address of ${to.name} on the Servers page, so ${d.name} can let it in.` };
+  return { route: "public", text: `Over the internet, through public access at ${host}:${d.publicPort}. ${d.name} lets in only ${to.name}. Require TLS on ${d.name}.` };
+}
+export const ROUTE_LABEL = { private: "Private network", public: "Internet, through public access" };
 
 const MAX_REPLICAS = 5;
 
@@ -36,6 +50,15 @@ export function replicaBlocker(d) {
 export function createReplica(d) {
   const all = state.instances || [];
   const used = new Set(all.flatMap(x => [x.port, x.publicPort, x.pooler?.port]).filter(Boolean));
+  const where = select(servers().filter(s => s.reachable || s.local).map(s => [s.id, `${s.name}${s.id === (d.server || "local") ? ` · with ${d.name}` : ""}`]), d.server || "local");
+  const routeNote = h("p", { class: "hint" });
+  const showRoute = () => {
+    const r = routeTo(d, where.value);
+    routeNote.className = r.error ? "hint warn-text" : "hint";
+    routeNote.textContent = r.error || r.text;
+  };
+  where.addEventListener("change", showRoute);
+  showRoute();
   let free = d.port + 1;
   while (used.has(free)) free++;
   const names = new Set(all.map(x => x.name));
@@ -51,6 +74,7 @@ export function createReplica(d) {
     body: [
       h("p", { class: "muted" }, `A read-only copy of ${d.name} that follows its changes within seconds. Send reads to it to take load off ${d.name}.`),
       h("div", { class: "form-grid" }, field("Replica DB identifier", name), field("Host port", port)),
+      multiServer() ? h("div", null, field("Server", where, { hint: "A replica on another server keeps a copy if this one’s server is lost." }), routeNote) : null,
       field("Instance size", size, { hint: d.engine === "valkey" ? "Keep at least the source’s memory: Valkey holds all data in memory." : "Smaller is fine for light read traffic." }),
       h("ul", { class: "plain-list" },
         h("li", null, h("strong", null, "Same users. "), `It has the users and passwords of ${d.name}. Manage them there.`),
@@ -59,6 +83,11 @@ export function createReplica(d) {
     ],
     run: async () => {
       const body = { name: name.value.trim(), port: Number(port.value) };
+      if (multiServer() && where.value !== (d.server || "local")) {
+        const r = routeTo(d, where.value);
+        if (r.error) throw new Error(r.error);
+        body.server = where.value;
+      }
       if (size.value !== "same") {
         const z = SIZES.find(x => x.value === size.value);
         Object.assign(body, { cpus: z.cpus, memoryMiB: z.memoryMiB });
@@ -98,7 +127,8 @@ export function replicationPanel(d) {
   return panel("Read replicas", { counter: rows.length, description: "Read-only copies that follow this database. Send reads to them.",
     actions: can("operator") ? [create] : [] },
   rows.length ? dataTable({ caption: "Read replicas", rows, columns: [
-    { key: "name", label: "Replica", value: r => h("a", { href: `#/databases/${r.name}` }, r.name) },
+    { key: "name", label: "Replica", value: r => h("span", { class: "stack" }, h("a", { href: `#/databases/${r.name}` }, r.name),
+      r.sourceRoute ? h("small", null, `On ${r.serverName} · ${ROUTE_LABEL[r.sourceRoute]}`) : null) },
     { key: "state", label: "Replication", value: r => replicationChip(r.replication) },
     { key: "lag", label: "Lag", value: r => lagLabel(r.replication?.lagSeconds) },
     { key: "port", label: "Port", cls: "num", value: r => r.port ? h("code", null, String(r.port)) : "—" },
@@ -130,6 +160,7 @@ function replicaPanel(d) {
   if (isRunning(d)) refresh();
   return panel("Replication", { description: "Read-only. Writes go to the source.",
     actions: [btn([icon("refresh"), "Refresh"], (e) => refresh(e.currentTarget), "small ghost"), can("operator") ? promote : null].filter(Boolean) },
-  keyValues([["Role", "Read replica"], ["Source", h("a", { href: `#/databases/${d.replicaOf}` }, d.replicaOf)], ["State", chipSlot], ["Lag", lag], ["Checked", checked]], "cols-4"),
+  keyValues([["Role", "Read replica"], ["Source", h("a", { href: `#/databases/${d.replicaOf}` }, d.replicaOf)], ["State", chipSlot], ["Lag", lag], ["Checked", checked],
+    d.sourceRoute ? ["Connects over", ROUTE_LABEL[d.sourceRoute]] : null], "cols-4"),
   detail);
 }

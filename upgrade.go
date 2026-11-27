@@ -127,12 +127,12 @@ func (m *manager) upgrade(ctx context.Context, name, version string) (err error)
 		m.unblockClients(ctx, r)
 		return fail(502, "The upgrade did not start: clients could not be held off. "+err.Error())
 	}
-	if r.PublicAccess || r.PrivateAccess || r.Pooler.on() {
+	if r.PublicAccess || m.servesPrivately(r) || r.Pooler.on() {
 		services := []string{}
 		if r.PublicAccess {
 			services = append(services, "gateway")
 		}
-		if r.PrivateAccess {
+		if m.servesPrivately(r) {
 			services = append(services, "private-gateway")
 		}
 		if r.Pooler.on() {

@@ -116,7 +116,11 @@ type record struct {
 	ReplicaOf           string `json:"replicaOf,omitempty"`
 	ReplicationPassword string `json:"replicationPassword,omitempty"`
 	ServerID            int    `json:"serverId,omitempty"` // MySQL replicas, and databases promoted from one
-	sourceTLS           bool   // a Valkey replica connects with TLS when its source requires it
+	// A replica on another server: the source address it connects to
+	// (host:port), and whether over the private network or the internet.
+	SourceAddress string `json:"sourceAddress,omitempty"`
+	SourceRoute   string `json:"sourceRoute,omitempty"`
+	sourceTLS     bool   // a Valkey replica connects with TLS when its source requires it
 	// Its server's private and public addresses, which its certificate names.
 	serverHosts []string
 }
