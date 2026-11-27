@@ -12,6 +12,7 @@ import { insightsTab, ENGINE_TERMS } from "./insights.mjs";
 import { poolerPanel } from "./pooler.mjs";
 import { settingsPanel, editParameters, editBackups, restoreToTime, PITR_ENGINES } from "./settings.mjs";
 import { replicationPanel, lagLabel, replicationChip } from "./replicas.mjs";
+import { multiServer, serverLabel, serverOf } from "./servers.mjs";
 
 const TABS = [["overview", "Overview"], ["connectivity", "Connect"], ["users", "Users"], ["monitoring", "Monitoring"], ["insights", "Performance"],
   ["backups", "Backups"], ["configuration", "Settings"], ["logs", "Logs"]];
@@ -245,10 +246,11 @@ function healthTile(label, now, values, { max = null, hint = "", tone = "" } = {
 function connectCard(d) {
   const eng = engine(d.engine);
   const rows = [
-    ["From this server", endpointChip(d)],
+    [multiServer() ? `From ${serverLabel(d)}` : "From this server", endpointChip(d)],
     ["From containers", h("span", { class: "row tight" }, endpointChip(d, { network: true }), h("small", null, `port ${{ postgres: 5432, mysql: 3306, valkey: 6379 }[d.engine]}`))],
+    d.privateHost ? ["From the private network", h("code", null, `${d.privateHost}:${d.port}`)] : null,
     d.pooler ? ["Through the pooler", h("code", null, `127.0.0.1:${d.pooler.port}`)] : null,
-    d.publicAccess ? ["From the internet", h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`)] : null,
+    d.publicAccess ? ["From the internet", h("code", null, `${d.publicHost || serverOf(d)?.publicAddress || "<server address>"}:${d.publicPort}`)] : null,
     ["User · database", h("code", null, `${eng.user} · ${eng.database}`)],
   ].filter(Boolean);
   return panel("Connect", { description: d.requireTLS ? "TLS required." : "TLS optional.",
@@ -355,8 +357,10 @@ const BUILD = { overview: overviewTab, connectivity: connectivityTab, users: use
 const SIGNATURE = {
   overview: d => JSON.stringify([d.status, d.busy, d.pendingRestore, d.port, d.cpus, d.memoryMiB, d.requireTLS, d.publicAccess, d.publicPort, d.publicHost, d.pooler, d.poolerStatus,
     d.backupRetentionDays, d.backupWindow, d.backupIntervalHours, d.latestBackupAt, d.nextBackupAt, d.pitr, d.recovery, d.deletionProtection, d.users, d.parameters, d.tags,
-    d.replicaOf, d.replication?.state, d.replication?.lagSeconds, (d.replicas || []).map(n => [n, instance(n)?.replication?.state, instance(n)?.replication?.lagSeconds, instance(n)?.port]), state.host?.cpus, state.me?.role]),
+    d.replicaOf, d.replication?.state, d.replication?.lagSeconds, (d.replicas || []).map(n => [n, instance(n)?.replication?.state, instance(n)?.replication?.lagSeconds, instance(n)?.port]), state.host?.cpus, state.me?.role,
+    d.privateHost, d.serverName, (state.servers || []).length]),
   connectivity: d => JSON.stringify([d.port, d.status, d.busy, d.users, d.publicAccess, d.publicPort, d.publicHost, d.firewall, d.requireTLS, d.tlsReady, d.pooler, d.poolerStatus,
+    d.privateAccess, d.privateHost, d.privateFirewall, d.serverName, (state.servers || []).map(s => [s.id, s.privateAddress, s.publicAddress]),
     d.replicaOf, (d.replicas || []).map(n => [n, instance(n)?.replication?.state, instance(n)?.replication?.lagSeconds, instance(n)?.port]), state.me?.role]),
   users: d => JSON.stringify([d.status, d.busy, d.users, d.tlsReady, d.requireTLS, d.port, d.replicaOf, state.me?.role]),
   monitoring: d => JSON.stringify([d.cpus, d.memoryMiB, d.replicaOf, state.host?.cpus]),
@@ -370,6 +374,7 @@ const SIGNATURE = {
 function factsStrip(d) {
   const fact = (label, value) => h("div", { class: "fact" }, h("span", { class: "fact-label" }, label), h("span", { class: "fact-value" }, value));
   return h("div", { class: "facts-strip" },
+    multiServer() ? fact("Server", h("a", { href: "#/servers", class: "with-icon" }, icon("host"), serverLabel(d))) : null,
     fact("Endpoint", endpointChip(d)),
     fact("Size", sizeLabel(d)),
     fact("Storage", d.diskGiB ? `${d.diskGiB} GiB` : "Uncapped"),
@@ -385,6 +390,7 @@ function banners(d) {
   if (d.pendingRestore && !d.busy) out.push(alertBox("The restore didn’t finish, so data is incomplete. Check the logs, then restore again.", "error"));
   if (d.status === "unhealthy" && !d.busy) out.push(alertBox("Health check failing. Check the logs.", "error"));
   if (d.status === "not provisioned" && !d.busy) out.push(alertBox("The container is missing. Use Actions → Start to retry, or delete it.", "warn"));
+  if (d.status === "unreachable") out.push(alertBox(`OpenRDS can’t reach ${serverLabel(d)} over SSH, so it can’t manage, back up or monitor ${d.name} right now. The database may still be running. Servers shows why.`, "warn"));
   const rs = d.replication;
   if (d.replicaOf && !d.busy && !d.pendingRestore && (rs?.state === "broken" || rs?.state === "connecting")) {
     out.push(alertBox(`${rs.state === "broken" ? "Not replicating" : "Not receiving changes"} from ${d.replicaOf}.${rs.detail ? ` ${rs.detail}` : ""}`, rs.state === "broken" ? "error" : "warn"));

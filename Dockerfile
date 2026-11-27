@@ -19,6 +19,9 @@ CMD ["pgbouncer", "/run/openrds/pgbouncer.ini"]
 FROM docker:29-cli AS runtime
 LABEL org.opencontainers.image.source="https://github.com/kerjakuyco/openrds" \
       org.opencontainers.image.licenses="Apache-2.0"
+# Other servers are reached as Docker over SSH: the console makes its own key
+# and reads a new server's host key before trusting it.
+RUN apk add --no-cache openssh-keygen openssh-client-common
 WORKDIR /opt/openrds
 COPY --from=build /out/openrds /usr/local/bin/openrds
 COPY engines ./engines

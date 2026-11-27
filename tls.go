@@ -137,14 +137,17 @@ func (m *manager) loadAuthority() (*authority, error) {
 }
 
 // Names a client may use to reach the database: the SSH tunnel or VPS
-// loopback, the Compose network and, when set, the public address.
+// loopback, the Compose network and, when set, the public address and its
+// server's private and public addresses.
 func tlsHosts(r record) []string {
 	hosts := []string{"localhost", "127.0.0.1", "::1", "db", "openrds-" + r.Name}
 	if r.Engine == "postgres" {
 		hosts = append(hosts, poolerAlias(r)) // clients reach the pooler by this name too
 	}
-	if r.PublicHost != "" && !slices.Contains(hosts, r.PublicHost) {
-		hosts = append(hosts, r.PublicHost)
+	for _, h := range append([]string{r.PublicHost}, r.serverHosts...) {
+		if h != "" && !slices.Contains(hosts, h) {
+			hosts = append(hosts, h) // the public address and its server's addresses
+		}
 	}
 	return hosts
 }

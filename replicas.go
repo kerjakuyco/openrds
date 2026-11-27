@@ -237,7 +237,7 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 	case len(reps) >= maxReplicas:
 		return fail(409, fmt.Sprintf("%s already has %d read replicas, the most it can have.", src.Name, maxReplicas))
 	}
-	spec := instanceSpec{Name: req.Name, Engine: src.Engine, Version: src.version(), Port: req.Port, CPUs: src.CPUs, MemoryMiB: src.MemoryMiB,
+	spec := instanceSpec{Name: req.Name, Engine: src.Engine, Version: src.version(), Server: src.Server, Port: req.Port, CPUs: src.CPUs, MemoryMiB: src.MemoryMiB,
 		DiskGiB: src.DiskGiB, Parameters: maps.Clone(src.Parameters), RequireTLS: src.RequireTLS, BackupWindow: src.BackupWindow, Tags: maps.Clone(src.Tags)}
 	if req.CPUs != nil {
 		spec.CPUs = *req.CPUs
@@ -254,7 +254,7 @@ func (m *manager) createReplica(ctx context.Context, source string, req replicaR
 	if err := checkStandby(src, record{instanceSpec: spec}); err != nil {
 		return err
 	}
-	if err := m.checkDiskRequest(ctx, spec.DiskGiB); err != nil {
+	if err := m.checkDiskRequest(ctx, spec.Server, spec.DiskGiB); err != nil {
 		return err
 	}
 	if src.ReplicationPassword == "" {
@@ -455,13 +455,13 @@ func (m *manager) linkReplica(ctx context.Context, r record) error {
 	}
 	network := src.Project + "_default"
 	var out bytes.Buffer
-	if err := m.docker.run(ctx, nil, nil, &out, "inspect", "--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", id); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, &out, "inspect", "--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", id); err != nil {
 		return err
 	}
 	if slices.Contains(strings.Fields(out.String()), network) {
 		return nil
 	}
-	if err := m.docker.run(ctx, nil, nil, io.Discard, "network", "connect", network, id); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, io.Discard, "network", "connect", network, id); err != nil {
 		return fmt.Errorf("joining the network of %s: %w", src.Name, err)
 	}
 	return nil
@@ -473,7 +473,7 @@ func (m *manager) unlinkReplica(ctx context.Context, r record, source string) {
 		return
 	}
 	if id, err := m.containerID(ctx, r); err == nil {
-		m.docker.run(ctx, nil, nil, io.Discard, "network", "disconnect", src.Project+"_default", id)
+		m.on(r).run(ctx, nil, nil, io.Discard, "network", "disconnect", src.Project+"_default", id)
 	}
 }
 
@@ -539,7 +539,7 @@ func (m *manager) refollow(ctx context.Context, src record) {
 		if err != nil {
 			continue
 		}
-		out, err := m.engineClient(ctx, id, valkeyClient, r.Password+"\nCONFIG GET tls-replication\n")
+		out, err := m.engineClient(ctx, r, id, valkeyClient, r.Password+"\nCONFIG GET tls-replication\n")
 		if lines := nonEmptyLines(out); err != nil || len(lines) == 0 || lines[len(lines)-1] == want {
 			continue
 		}
@@ -712,7 +712,7 @@ func (m *manager) replicationStatus(ctx context.Context, r record, container str
 	}
 	switch r.Engine {
 	case "postgres":
-		out, err := m.engineClient(ctx, container, pgClient, pgReplicaSQL)
+		out, err := m.engineClient(ctx, r, container, pgClient, pgReplicaSQL)
 		f := strings.Split(strings.TrimSpace(out), "|")
 		if err != nil || len(f) != 2 {
 			return replicationStatus{State: "unknown", Detail: "The replica did not answer.", At: st.At}
@@ -724,7 +724,7 @@ func (m *manager) replicationStatus(ctx context.Context, r record, container str
 		st.Detail = m.lastProblem(ctx, r)
 		if src, err := m.record(r.ReplicaOf); err == nil {
 			if id, err := m.runningContainer(ctx, src); err == nil {
-				out, err := m.engineClient(ctx, id, pgClient, fmt.Sprintf("SELECT /* openrds */ coalesce((SELECT wal_status FROM pg_replication_slots WHERE slot_name = '%s'), 'missing');\n", slotName(r)))
+				out, err := m.engineClient(ctx, src, id, pgClient, fmt.Sprintf("SELECT /* openrds */ coalesce((SELECT wal_status FROM pg_replication_slots WHERE slot_name = '%s'), 'missing');\n", slotName(r)))
 				if s := strings.TrimSpace(out); err == nil && (s == "lost" || s == "missing") {
 					st.State, st.Detail = "broken", fmt.Sprintf("%s no longer keeps the changes this replica needs: it fell too far behind. Delete it and create a new replica.", r.ReplicaOf)
 				}
@@ -733,7 +733,7 @@ func (m *manager) replicationStatus(ctx context.Context, r record, container str
 			}
 		}
 	case "mysql":
-		out, err := m.engineClient(ctx, container, mysqlStatusClient, "SHOW REPLICA STATUS;\n")
+		out, err := m.engineClient(ctx, r, container, mysqlStatusClient, "SHOW REPLICA STATUS;\n")
 		v, ok := replicaFields(out)
 		if err != nil || !ok {
 			return replicationStatus{State: "unknown", Detail: "The replica did not answer.", At: st.At}
@@ -752,7 +752,7 @@ func (m *manager) replicationStatus(ctx context.Context, r record, container str
 		}
 		st.Detail = strings.ReplaceAll(st.Detail, `\n`, " ")
 	case "valkey":
-		out, err := m.engineClient(ctx, container, valkeyClient, r.Password+"\nINFO replication\n")
+		out, err := m.engineClient(ctx, r, container, valkeyClient, r.Password+"\nINFO replication\n")
 		if err != nil || !strings.Contains(out, "role:") {
 			return replicationStatus{State: "unknown", Detail: "The replica did not answer.", At: st.At}
 		}

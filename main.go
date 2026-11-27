@@ -61,9 +61,8 @@ func main() {
 	m.offsite.ctx = ctx
 	go m.recoverDisks(ctx) // after prepareDisks attached the disk images
 	go m.maintain(ctx)
-	if m.engine != nil {
-		go m.sampleMetrics(ctx)
-	}
+	go m.sampleMetrics(ctx)
+	go m.syncAllImages(ctx) // an updated console brings new helper images
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()
 	log.Printf("OpenRDS listening on %s", srv.Addr)

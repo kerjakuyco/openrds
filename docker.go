@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -12,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 type engine struct {
@@ -175,6 +178,11 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 	if r.staging {
 		base = append(base, "--file", filepath.Join(m.templates, "upgrade.yaml"))
 	}
+	srv, ok := m.server(r.Server)
+	if !ok {
+		return fmt.Errorf("server %s is not registered", r.Server)
+	}
+	r.serverHosts = slices.DeleteFunc([]string{srv.PrivateAddress, srv.PublicAddress}, func(h string) bool { return h == "" })
 	files, err := m.injected(r)
 	if err != nil {
 		return err
@@ -186,7 +194,7 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		env = append(env, "OPENRDS_VALKEY_CLI_FLAGS=--tls --insecure")
 	}
 	if r.Pooler.on() {
-		image, err := m.poolerImage(ctx)
+		image, err := m.poolerImage(ctx, r.Server)
 		if err != nil {
 			return err
 		}
@@ -208,32 +216,88 @@ func (m *manager) compose(ctx context.Context, r record, in io.Reader, out io.Wr
 		return fmt.Errorf("writing the Compose override: %w", err)
 	}
 	base = append(base, "--file", path)
-	if r.PublicAccess {
+	if r.PublicAccess || r.PrivateAccess {
 		image, err := m.gatewayImage(ctx)
 		if err != nil {
 			return err
 		}
-		base = append(base, "--file", filepath.Join(m.templates, "gateway.yaml"))
-		env = append(env, "OPENRDS_GATEWAY_IMAGE="+image, "OPENRDS_GATEWAY_PUBLISH="+strconv.Itoa(r.PublicPort),
-			"OPENRDS_GATEWAY_TARGET=db:"+strconv.Itoa(engines[r.Engine].port), "OPENRDS_GATEWAY_ALLOW="+allowList(r.Firewall))
+		env = append(env, "OPENRDS_GATEWAY_IMAGE="+image, "OPENRDS_GATEWAY_TARGET=db:"+strconv.Itoa(engines[r.Engine].port))
 	}
-	return m.docker.run(ctx, env, in, out, append(base, args...)...)
+	if r.PublicAccess {
+		base = append(base, "--file", filepath.Join(m.templates, "gateway.yaml"))
+		env = append(env, "OPENRDS_GATEWAY_PUBLISH="+strconv.Itoa(r.PublicPort), "OPENRDS_GATEWAY_ALLOW="+allowList(r.Firewall))
+	}
+	if r.PrivateAccess && srv.PrivateAddress != "" {
+		base = append(base, "--file", filepath.Join(m.templates, "private-gateway.yaml"))
+		env = append(env, "OPENRDS_PRIVATE_BIND="+srv.PrivateAddress, "OPENRDS_PRIVATE_ALLOW="+allowList(r.PrivateFirewall))
+	}
+	return m.on(r).run(ctx, env, in, out, append(base, args...)...)
 }
 
+// The state of every database by Compose project. Databases on a server the
+// console can't reach are "unreachable".
 func (m *manager) states(ctx context.Context) (map[string]string, error) {
-	return m.statesFor(ctx, "io.openrds.database=true")
-}
-
-// The state of the containers with a label, by Compose project.
-func (m *manager) statesFor(ctx context.Context, label string) (map[string]string, error) {
-	var out bytes.Buffer
-	err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--filter", "label="+label,
-		"--format", `{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`)
+	states, err := m.statesFor(ctx, "io.openrds.database=true")
 	if err != nil {
 		return nil, err
 	}
+	if down := m.unreachable(); len(down) > 0 {
+		records, err := m.records()
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range records {
+			if down[r.Server] && states[r.Project] == "" {
+				states[r.Project] = "unreachable"
+			}
+		}
+	}
+	return states, nil
+}
+
+// The state of the containers with a label on every server, by Compose
+// project. The console's own server must answer; others that don't are
+// noted as unreachable and left out.
+func (m *manager) statesFor(ctx context.Context, label string) (map[string]string, error) {
+	list := m.serverList()
+	outputs := make([]string, len(list))
+	errs := make([]error, len(list))
+	var wg sync.WaitGroup
+	for i, s := range list {
+		if s.ID != localServer && m.recentlyDown(s.ID) {
+			errs[i] = errors.New("unreachable")
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			call := ctx
+			if s.ID != localServer {
+				var cancel context.CancelFunc
+				call, cancel = context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+			}
+			var out bytes.Buffer
+			errs[i] = m.dockerFor(s.ID).run(call, nil, nil, &out, "ps", "--all", "--filter", "label="+label,
+				"--format", `{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`)
+			outputs[i] = out.String()
+			if s.ID != localServer && ctx.Err() == nil {
+				m.noteReachable(s.ID, errs[i])
+			}
+		}()
+	}
+	wg.Wait()
+	if errs[0] != nil {
+		return nil, errs[0]
+	}
+	var lines []string
+	for i := range list {
+		if errs[i] == nil {
+			lines = append(lines, strings.Split(outputs[i], "\n")...)
+		}
+	}
 	states := make(map[string]string)
-	for _, line := range strings.Split(out.String(), "\n") {
+	for _, line := range lines {
 		fields := strings.SplitN(strings.TrimSpace(line), "|", 3)
 		if len(fields) != 3 {
 			continue

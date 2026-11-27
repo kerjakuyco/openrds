@@ -421,18 +421,29 @@ func (m *manager) sample(ctx context.Context, now time.Time) {
 		byProject[r.Project] = r
 	}
 	m.history.prune(known, now)
-	if m.engine == nil {
-		return
+	for _, srv := range m.serverList() {
+		engine := m.statsFor(srv.ID)
+		if engine == nil || srv.ID != localServer && m.recentlyDown(srv.ID) {
+			continue
+		}
+		if e := m.sampleServer(ctx, srv.ID, engine, known, byProject); e != nil && (err == nil || srv.ID == localServer) {
+			err = e
+		}
 	}
+	m.history.report(err)
+}
+
+// Sample the running databases of one server.
+func (m *manager) sampleServer(ctx context.Context, server string, engine statsReader, known map[string]bool, byProject map[string]record) error {
 	var out bytes.Buffer
-	err = m.docker.run(ctx, nil, nil, &out, "ps", "--filter", "label=io.openrds.database=true", "--filter", "status=running",
+	err := m.dockerFor(server).run(ctx, nil, nil, &out, "ps", "--filter", "label=io.openrds.database=true", "--filter", "status=running",
 		"--format", `{{.ID}}|{{.Label "com.docker.compose.project"}}`)
 	for _, line := range strings.Split(out.String(), "\n") {
 		id, project, ok := strings.Cut(strings.TrimSpace(line), "|")
-		if err != nil || !ok || !known[project] || !containerIDPattern.MatchString(id) {
+		if err != nil || !ok || !known[project] || !containerIDPattern.MatchString(id) || !sameServer(byProject[project].Server, server) {
 			continue
 		}
-		s, statsErr := m.engine.stats(ctx, id)
+		s, statsErr := engine.stats(ctx, id)
 		if statsErr != nil {
 			err = statsErr
 			continue
@@ -450,7 +461,7 @@ func (m *manager) sample(ctx context.Context, now time.Time) {
 		}
 		m.history.add(project, id, s, db)
 	}
-	m.history.report(err)
+	return err
 }
 
 // Sample every interval and keep a copy on disk so an update keeps the charts.

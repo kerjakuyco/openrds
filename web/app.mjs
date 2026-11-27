@@ -12,6 +12,7 @@ import { usersView } from "./users.mjs";
 import { notificationsView } from "./notifications.mjs";
 import { accountView } from "./account.mjs";
 import { startView } from "./start.mjs";
+import { serversView } from "./servers.mjs";
 import { renderAuth } from "./auth.mjs";
 import { initNav, markEventsSeen } from "./nav.mjs";
 
@@ -46,6 +47,7 @@ const ROUTES = [
   [/^\/snapshots$/, () => backupsView("manual")],
   [/^\/automated-backups$/, () => backupsView("automated")],
   [/^\/backup-storage$/, () => storageView()],
+  [/^\/servers$/, () => serversView()],
   [/^\/events$/, () => { markEventsSeen(); return eventsView(); }],
   [/^\/users$/, () => usersView()],
   [/^\/notifications$/, () => notificationsView()],

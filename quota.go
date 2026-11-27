@@ -20,10 +20,17 @@ type quotaSupport struct {
 	Message string `json:"message"`
 }
 
+// What each server supports, checked at most every 10 minutes.
 type quotaCache struct {
 	mu      sync.Mutex
-	support quotaSupport
-	expires time.Time
+	support map[string]quotaSupport
+	expires map[string]time.Time
+}
+
+func (c *quotaCache) forget(server string) {
+	c.mu.Lock()
+	delete(c.expires, server)
+	c.mu.Unlock()
 }
 
 const diskImageVolume = "openrds_disk_images"
@@ -35,44 +42,55 @@ func diskHelperImage() string {
 // A Docker volume has no portable size field. The workable approach is a
 // fixed-size ext4 image, attached by a privileged helper and mounted by the
 // ordinary local volume driver.
-func (m *manager) volumeQuota(ctx context.Context) quotaSupport {
+func (m *manager) volumeQuota(ctx context.Context, server string) quotaSupport {
+	if server == "" {
+		server = localServer
+	}
 	c := &m.quotaCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Now().Before(c.expires) {
-		return c.support
+	if time.Now().Before(c.expires[server]) {
+		return c.support[server]
 	}
 	probe, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	image := diskHelperImage()
-	err := m.docker.run(probe, nil, nil, nil, "image", "inspect", "--format", "{{.Id}}", image)
+	docker := m.dockerFor(server)
+	var support quotaSupport
+	err := docker.run(probe, nil, nil, nil, "image", "inspect", "--format", "{{.Id}}", image)
 	switch {
+	case err != nil && strings.Contains(err.Error(), "No such image") && server != localServer:
+		support = quotaSupport{"unsupported", "The disk helper image is not on this server yet. It is copied when the server is reachable and has the console’s architecture."}
 	case err != nil && strings.Contains(err.Error(), "No such image"):
-		c.support = quotaSupport{"unsupported", "The disk helper image is not installed. Run sh install.sh on the VPS."}
+		support = quotaSupport{"unsupported", "The disk helper image is not installed. Run sh install.sh on the VPS."}
 	case err != nil:
-		c.support = quotaSupport{"unknown", "Could not check disk limits: " + err.Error()}
+		support = quotaSupport{"unknown", "Could not check disk limits: " + err.Error()}
 	default:
-		err = m.docker.run(probe, nil, nil, nil, "run", "--rm", "--privileged", "--pid=host", image, "check")
+		err = docker.run(probe, nil, nil, nil, "run", "--rm", "--privileged", "--pid=host", image, "check")
 		if err != nil {
-			c.support = quotaSupport{"unsupported", "This Docker daemon cannot attach loop devices, so a hard disk limit is unavailable. Use rootful Docker on Linux. Helper said: " + err.Error()}
+			support = quotaSupport{"unsupported", "This Docker daemon cannot attach loop devices, so a hard disk limit is unavailable. Use rootful Docker on Linux. Helper said: " + err.Error()}
 		} else {
-			c.support = quotaSupport{"supported", "A disk limit is a fixed-size ext4 Docker volume. Usable space is slightly less than the size you choose."}
+			support = quotaSupport{"supported", "A disk limit is a fixed-size ext4 Docker volume. Usable space is slightly less than the size you choose."}
 		}
 	}
 	ttl := 10 * time.Minute
-	if c.support.State == "unknown" {
+	if support.State == "unknown" {
 		ttl = 30 * time.Second
 	}
-	c.expires = time.Now().Add(ttl)
-	return c.support
+	if c.support == nil {
+		c.support, c.expires = map[string]quotaSupport{}, map[string]time.Time{}
+	}
+	c.support[server], c.expires[server] = support, time.Now().Add(ttl)
+	return support
 }
 
-func (m *manager) diskImagePath(ctx context.Context, project string) (string, error) {
-	if err := m.docker.run(ctx, nil, nil, nil, "volume", "create", "--label", "io.openrds.disk-images=true", diskImageVolume); err != nil {
+func (m *manager) diskImagePath(ctx context.Context, r record) (string, error) {
+	project := r.diskKey()
+	if err := m.on(r).run(ctx, nil, nil, nil, "volume", "create", "--label", "io.openrds.disk-images=true", diskImageVolume); err != nil {
 		return "", err
 	}
 	var out bytes.Buffer
-	if err := m.docker.run(ctx, nil, nil, &out, "volume", "inspect", "--format", "{{.Mountpoint}}", diskImageVolume); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, &out, "volume", "inspect", "--format", "{{.Mountpoint}}", diskImageVolume); err != nil {
 		return "", err
 	}
 	mountpoint := strings.TrimSpace(out.String())
@@ -83,11 +101,11 @@ func (m *manager) diskImagePath(ctx context.Context, project string) (string, er
 }
 
 func (m *manager) diskHelper(ctx context.Context, command string, r record, gib int) error {
-	image, err := m.diskImagePath(ctx, r.diskKey())
+	image, err := m.diskImagePath(ctx, r)
 	if err != nil {
 		return err
 	}
-	return m.docker.run(ctx, nil, nil, nil, "run", "--rm", "--privileged", "--pid=host",
+	return m.on(r).run(ctx, nil, nil, nil, "run", "--rm", "--privileged", "--pid=host",
 		"--mount", "type=volume,src="+diskImageVolume+",dst=/images",
 		"--env", "OPENRDS_LINK="+r.diskKey(),
 		"--env", "OPENRDS_BYTES="+quotaBytes(gib),
@@ -112,8 +130,8 @@ func (m *manager) prepareDisks(ctx context.Context) {
 		return
 	}
 	for _, r := range records {
-		if r.DiskGiB == 0 {
-			continue
+		if r.DiskGiB == 0 || !sameServer(r.Server, localServer) {
+			continue // other servers' are attached when Docker there needs them
 		}
 		if err := m.attachDisk(ctx, r); err != nil {
 			log.Printf("disk limit for %s is not attached: %v", r.Name, err)
@@ -137,7 +155,10 @@ func (m *manager) failedMounts(ctx context.Context) []record {
 			continue
 		}
 		var out bytes.Buffer
-		err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project="+r.Project,
+		if !sameServer(r.Server, localServer) && m.recentlyDown(r.Server) {
+			continue
+		}
+		err := m.on(r).run(ctx, nil, nil, &out, "ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project="+r.Project,
 			"--filter", "label=io.openrds.database=true")
 		ids := strings.Fields(out.String())
 		if err != nil || len(ids) != 1 { // exactly one database container
@@ -145,7 +166,7 @@ func (m *manager) failedMounts(ctx context.Context) []record {
 		}
 		id := ids[0]
 		out.Reset()
-		if err := m.docker.run(ctx, nil, nil, &out, "inspect", "--format", "{{.State.Status}}|{{.State.Error}}", id); err != nil {
+		if err := m.on(r).run(ctx, nil, nil, &out, "inspect", "--format", "{{.State.Status}}|{{.State.Error}}", id); err != nil {
 			continue
 		}
 		state, problem, _ := strings.Cut(strings.TrimSpace(out.String()), "|")
@@ -173,14 +194,14 @@ func (m *manager) recoverDisks(ctx context.Context) {
 	}
 }
 
-func (m *manager) checkDiskRequest(ctx context.Context, gib int) error {
+func (m *manager) checkDiskRequest(ctx context.Context, server string, gib int) error {
 	if gib == 0 {
 		return nil
 	}
 	if gib < 0 || gib > maxDiskGiB {
 		return fail(400, fmt.Sprintf("Choose a data-volume limit of 1–%d GiB, or zero for uncapped.", maxDiskGiB))
 	}
-	support := m.volumeQuota(ctx)
+	support := m.volumeQuota(ctx, server)
 	switch support.State {
 	case "supported":
 		return nil
@@ -196,7 +217,7 @@ func (m *manager) checkDiskRequest(ctx context.Context, gib int) error {
 func (m *manager) checkExistingVolume(ctx context.Context, r record) error {
 	name := r.dataVolume()
 	var out bytes.Buffer
-	if err := m.docker.run(ctx, nil, nil, &out, "volume", "ls", "--quiet", "--filter", "name=^"+name+"$"); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, &out, "volume", "ls", "--quiet", "--filter", "name=^"+name+"$"); err != nil {
 		return err
 	}
 	if strings.TrimSpace(out.String()) == "" {
@@ -204,7 +225,7 @@ func (m *manager) checkExistingVolume(ctx context.Context, r record) error {
 	}
 	out.Reset()
 	format := `{{.Driver}}|{{index .Options "type"}}|{{index .Options "device"}}|{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.volume"}}`
-	if err := m.docker.run(ctx, nil, nil, &out, "volume", "inspect", "--format", format, name); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, &out, "volume", "inspect", "--format", format, name); err != nil {
 		return err
 	}
 	if strings.TrimSpace(out.String()) != "local|ext4|/dev/openrds/"+r.diskKey()+"|"+r.Project+"|data" {

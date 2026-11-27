@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -107,6 +108,9 @@ func (m *manager) prepareNetwork(s *instanceSpec) error {
 	if err != nil {
 		return err
 	}
+	if err := m.preparePrivate(s); err != nil {
+		return err
+	}
 	s.Firewall, s.PublicHost = rules, strings.TrimSpace(s.PublicHost)
 	if s.PublicAccess && s.PublicPort == 0 || s.Pooler != nil {
 		all, err := m.records()
@@ -161,6 +165,40 @@ func (m *manager) gatewayImage(ctx context.Context) (string, error) {
 	m.gateway = image
 	m.mu.Unlock()
 	return image, nil
+}
+
+// Private access needs an address on the database's server. Turning it on
+// without sources allows the usual private ranges.
+func (m *manager) preparePrivate(s *instanceSpec) error {
+	rules, err := normalizeFirewall(s.PrivateFirewall)
+	if err != nil {
+		return err
+	}
+	s.PrivateFirewall = rules
+	if !s.PrivateAccess {
+		return nil
+	}
+	srv, ok := m.server(s.Server)
+	if !ok || srv.PrivateAddress == "" {
+		return fail(409, "Set the private address of "+cmp.Or(srv.Name, "this server")+" on the Servers page first.")
+	}
+	if len(s.PrivateFirewall) == 0 {
+		for _, cidr := range privateRanges {
+			s.PrivateFirewall = append(s.PrivateFirewall, firewallRule{CIDR: cidr, Description: "Private networks"})
+		}
+	}
+	return nil
+}
+
+// Start, update or remove the private gateway to match the record.
+func (m *manager) applyPrivateGateway(ctx context.Context, previous, next record, databaseLive bool) error {
+	if next.PrivateAccess && databaseLive {
+		return m.compose(ctx, next, nil, nil, "up", "--detach", "--wait", "--wait-timeout", "60", "private-gateway")
+	}
+	if previous.PrivateAccess {
+		return m.compose(ctx, previous, nil, nil, "rm", "--stop", "--force", "private-gateway")
+	}
+	return nil
 }
 
 // Start, update or remove the gateway to match the record. Compose

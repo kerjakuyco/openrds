@@ -261,6 +261,15 @@ async function run() {
     await page.getByRole("link", { name: `Open ${name}` }).waitFor();
     assert.equal(await page.locator("#fleet-list tbody tr").count(), 1);
 
+    // Servers: the console's own, and how to add another.
+    await page.locator('nav#nav [data-nav="servers"]').click();
+    await page.getByRole("heading", { name: "Servers", exact: true }).waitFor();
+    await page.getByRole("cell", { name: /^This server/ }).first().waitFor();
+    await page.getByText("Reachable", { exact: true }).first().waitFor();
+    await page.locator("#add-server").click();
+    await page.getByRole("dialog").getByText("usermod -aG docker openrds", { exact: false }).waitFor();
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+
     // Automated backups: one row per database, changed in place.
     await page.locator('nav#nav [data-nav="automated"]').click();
     const schedule = page.locator(".sched-row").filter({ hasText: name });
@@ -364,7 +373,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, servers, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

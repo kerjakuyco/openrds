@@ -193,6 +193,8 @@ func (m *manager) maintain(ctx context.Context) {
 		go m.watchHealth(ctx)
 		go m.collectAllWAL(ctx)
 		go m.watchReplication(ctx)
+		go m.watchServers(ctx)
+		go m.recoverDisks(ctx) // capped databases a server's restart left stopped
 		m.watchDisk(ctx)
 		select {
 		case <-ctx.Done():

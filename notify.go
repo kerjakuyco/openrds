@@ -801,10 +801,29 @@ func (c containerHealth) healthy() bool {
 	return c.state == "running" && strings.Contains(c.status, "(healthy)")
 }
 
-// Every database container by Compose project, with its restart count.
+// Every database container on every reachable server by Compose project,
+// with its restart count.
 func (m *manager) inspectDatabases(ctx context.Context) (map[string]containerHealth, error) {
+	found := make(map[string]containerHealth)
+	for _, s := range m.serverList() {
+		if s.ID != localServer && m.recentlyDown(s.ID) {
+			continue
+		}
+		on, err := m.inspectServer(ctx, m.dockerFor(s.ID))
+		if err != nil {
+			if s.ID == localServer {
+				return nil, err
+			}
+			continue
+		}
+		maps.Copy(found, on)
+	}
+	return found, nil
+}
+
+func (m *manager) inspectServer(ctx context.Context, docker dockerRunner) (map[string]containerHealth, error) {
 	var out bytes.Buffer
-	if err := m.docker.run(ctx, nil, nil, &out, "ps", "--all", "--no-trunc", "--filter", "label=io.openrds.database=true",
+	if err := docker.run(ctx, nil, nil, &out, "ps", "--all", "--no-trunc", "--filter", "label=io.openrds.database=true",
 		"--format", `{{.ID}}|{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`); err != nil {
 		return nil, err
 	}
@@ -823,7 +842,7 @@ func (m *manager) inspectDatabases(ctx context.Context) (map[string]containerHea
 	}
 	out.Reset()
 	args := append([]string{"inspect", "--format", "{{.Id}}|{{.RestartCount}}|{{.State.OOMKilled}}|{{.State.ExitCode}}"}, ids...)
-	if err := m.docker.run(ctx, nil, nil, &out, args...); err != nil {
+	if err := docker.run(ctx, nil, nil, &out, args...); err != nil {
 		return nil, err // a container removed meanwhile; the next check sees the rest
 	}
 	details := make(map[string][]string)

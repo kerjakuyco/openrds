@@ -705,7 +705,7 @@ func (m *manager) restoreToTime(ctx context.Context, name string, req restoreToT
 	if err != nil {
 		return err
 	}
-	spec := instanceSpec{Name: req.Name, Engine: src.Engine, Version: src.version(), Port: req.Port, CPUs: src.CPUs, MemoryMiB: src.MemoryMiB,
+	spec := instanceSpec{Name: req.Name, Engine: src.Engine, Version: src.version(), Server: src.Server, Port: req.Port, CPUs: src.CPUs, MemoryMiB: src.MemoryMiB,
 		DiskGiB: src.DiskGiB, Parameters: src.Parameters, RequireTLS: src.RequireTLS, BackupRetentionDays: src.BackupRetentionDays, BackupWindow: src.BackupWindow,
 		BackupIntervalHours: src.BackupIntervalHours, Tags: src.Tags}
 	target := req.TargetTime.UTC()

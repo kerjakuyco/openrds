@@ -259,6 +259,7 @@ export function statusOf(d) {
     case "unhealthy": return { label: "Unhealthy", tone: "critical", icon: "error" };
     case "restarting": return { label: "Restarting", tone: "warn", icon: "spinner" };
     case "not provisioned": return { label: "Not provisioned", tone: "warn", icon: "alert" };
+    case "unreachable": return { label: "Server unreachable", tone: "warn", icon: "alert" };
     default: return { label: pretty(d.status), tone: "warn", icon: "alert" };
   }
 }

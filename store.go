@@ -58,6 +58,13 @@ type instanceSpec struct {
 	Firewall            []firewallRule    `json:"firewall,omitempty"`
 	Pooler              *poolerSpec       `json:"pooler,omitempty"` // PostgreSQL connection pooling
 	PITR                bool              `json:"pitr,omitempty"`   // point-in-time recovery: PostgreSQL and MySQL
+	// The server it runs on; empty for the console's own. It never changes:
+	// moving a database is a restore onto another server.
+	Server string `json:"server,omitempty"`
+	// Private access: the server's private address forwards to the database,
+	// from these sources.
+	PrivateAccess   bool           `json:"privateAccess,omitempty"`
+	PrivateFirewall []firewallRule `json:"privateFirewall,omitempty"`
 }
 
 // The container settings that change only when Compose recreates the database.
@@ -110,6 +117,8 @@ type record struct {
 	ReplicationPassword string `json:"replicationPassword,omitempty"`
 	ServerID            int    `json:"serverId,omitempty"` // MySQL replicas, and databases promoted from one
 	sourceTLS           bool   // a Valkey replica connects with TLS when its source requires it
+	// Its server's private and public addresses, which its certificate names.
+	serverHosts []string
 }
 
 type manager struct {
@@ -132,6 +141,7 @@ type manager struct {
 	alerts      alertState
 	pitr        pitrState
 	replication replicationState
+	servers     serverState
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
@@ -299,14 +309,15 @@ func (s instanceSpec) hostPorts() []int {
 	return ports
 }
 
-// Refuse host ports held by another instance or by the console itself.
+// Refuse host ports held by another instance on the same server, or by the
+// console itself on its own.
 func checkPorts(all []record, s instanceSpec) error {
 	for _, port := range s.hostPorts() {
-		if port == consolePort() {
+		if port == consolePort() && sameServer(s.Server, localServer) {
 			return fail(409, fmt.Sprintf("Port %d is used by the OpenRDS console.", port))
 		}
 		for _, other := range all {
-			if other.Name != s.Name && slices.Contains(other.hostPorts(), port) {
+			if other.Name != s.Name && sameServer(other.Server, s.Server) && slices.Contains(other.hostPorts(), port) {
 				return fail(409, fmt.Sprintf("Port %d is reserved by %s.", port, other.Name))
 			}
 		}

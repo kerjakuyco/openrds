@@ -6,11 +6,12 @@ import { state, subscribe, instance, can, go } from "./store.mjs";
 import { databaseActions, start, confirmReboot } from "./actions.mjs";
 import { sparkline } from "./charts.mjs";
 import { replicationChip, lagLabel } from "./replicas.mjs";
+import { multiServer, serverLabel, servers } from "./servers.mjs";
 
 // Kept across visits so filters and the preview survive navigation.
-const ui = { q: "", engine: "", status: "", sort: { key: "name", dir: "asc" }, selected: "" };
+const ui = { q: "", engine: "", server: "", status: "", sort: { key: "name", dir: "asc" }, selected: "" };
 
-const matches = (d, q) => !q || d.name.includes(q) || String(d.port).includes(q) || d.engineLabel.toLowerCase().includes(q)
+const matches = (d, q) => !q || d.name.includes(q) || String(d.port).includes(q) || d.engineLabel.toLowerCase().includes(q) || (d.serverName || "").toLowerCase().includes(q)
   || Object.entries(d.tags || {}).some(([k, v]) => `${k}=${v}`.toLowerCase().includes(q));
 
 const STATUS_FILTERS = {
@@ -25,7 +26,7 @@ export const engineBadge = (d, cls = "") => h("span", { class: `engine-badge ${d
 
 // Open the inventory with one status filter applied, such as from a dashboard tile.
 export function showDatabases(status = "") {
-  Object.assign(ui, { q: "", engine: "", status, selected: "" });
+  Object.assign(ui, { q: "", engine: "", server: "", status, selected: "" });
   location.hash = "#/databases";
 }
 
@@ -131,7 +132,9 @@ function preview(d, close) {
     actions.push(menu("", databaseActions(d), { cls: "icon-only small", labelIcon: "more", chevron: false, ariaLabel: `More actions for ${d.name}` }));
   }
   const facts = [
+    multiServer() ? ["Server", h("a", { href: "#/servers" }, serverLabel(d))] : null,
     ["Endpoint", endpointChip(d)],
+    d.privateHost ? ["Private network", h("code", null, `${d.privateHost}:${d.port}`)] : null,
     ["Network name", endpointChip(d, { network: true })],
     ["Size", sizeLabel(d)],
     ["Storage", d.diskGiB ? `${d.diskGiB} GiB limit` : "Uncapped"],
@@ -167,12 +170,19 @@ export function databasesView() {
   const engineSel = h("select", { "aria-label": "Filter by engine" }, h("option", { value: "" }, "All engines"), (state.engines || []).map(e => h("option", { value: e.key, selected: e.key === ui.engine }, e.title)));
   search.addEventListener("input", () => { ui.q = search.value.trim().toLowerCase(); render(); });
   engineSel.addEventListener("change", () => { ui.engine = engineSel.value; render(); });
+  const serverSel = h("select", { "aria-label": "Filter by server" });
+  serverSel.addEventListener("change", () => { ui.server = serverSel.value; render(); });
+  const fillServers = () => {
+    serverSel.hidden = !multiServer();
+    if (!servers().some(s => s.id === ui.server)) ui.server = "";
+    serverSel.replaceChildren(h("option", { value: "" }, "All servers"), ...servers().map(s => h("option", { value: s.id, selected: s.id === ui.server }, s.name)));
+  };
   const chips = h("div", { class: "segmented status-filter", role: "group", "aria-label": "Filter by status" });
   const summary = h("p", { class: "muted fleet-summary" });
   const list = h("div", { class: "fleet-list" });
   const side = h("div", { class: "fleet-side" });
   const layout = h("div", { class: "fleet-layout" }, h("section", { class: "panel fleet-panel" },
-    h("div", { class: "toolbar fleet-toolbar" }, chips, h("div", { class: "toolbar-end" }, h("label", { class: "search" }, icon("search"), search, h("kbd", null, "/")), engineSel)),
+    h("div", { class: "toolbar fleet-toolbar" }, chips, h("div", { class: "toolbar-end" }, h("label", { class: "search" }, icon("search"), search, h("kbd", null, "/")), engineSel, serverSel)),
     list), side);
   const el = h("div", { class: "fleet-page" },
     h("div", { class: "page-head" }, h("div", null, h("h1", null, "Databases"), summary),
@@ -217,7 +227,7 @@ export function databasesView() {
       h("td", { class: "c-status" }, h("span", { class: "stack" }, status(d),
         d.replicaOf && isRunning(d) ? h("small", { class: "repl-line" }, d.replication?.state === "replicating" ? `Lag ${lagLabel(d.replication.lagSeconds)}` : replicationChip(d.replication)) : null,
         (d.replicas || []).length ? h("small", null, plural(d.replicas.length, "replica")) : null)),
-      h("td", { class: "c-endpoint" }, endpointChip(d)),
+      h("td", { class: "c-endpoint" }, multiServer() ? h("span", { class: "stack" }, endpointChip(d), h("small", { class: "server-line" }, icon("host"), serverLabel(d))) : endpointChip(d)),
       h("td", { class: "c-size" }, h("span", { class: "stack" }, h("span", null, sizeLabel(d)), h("small", null, d.diskGiB ? `${d.diskGiB} GiB disk` : "Uncapped disk"))),
       h("td", { class: "c-load" }, loadCell(d)),
       h("td", { class: "c-backups" }, backupsCell(d)),
@@ -250,15 +260,16 @@ export function databasesView() {
     const running = all.filter(isRunning).length, replicas = all.filter(d => d.replicaOf).length;
     summary.textContent = all.length ? `${plural(all.length, "database")} · ${running} running${replicas ? ` · ${plural(replicas, "read replica")}` : ""}` : "None yet.";
     renderChips(all);
+    fillServers();
     if (!instance(ui.selected)) ui.selected = "";
     const filter = STATUS_FILTERS[ui.status];
-    const shown = all.filter(d => (!ui.engine || d.engine === ui.engine) && (!filter || filter.test(d)) && matches(d, ui.q));
+    const shown = all.filter(d => (!ui.engine || d.engine === ui.engine) && (!ui.server || (d.server || "local") === ui.server) && (!filter || filter.test(d)) && matches(d, ui.q));
     if (!all.length) {
       list.replaceChildren(can("operator") ? empty("db", "Create your first database", "Ready in about a minute.", h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database"))
         : empty("db", "No databases yet", "Ask an operator to create one."));
     } else if (!shown.length) {
       list.replaceChildren(empty("search", "No matching databases", "Try another name, port, tag or filter.", btn("Clear filters", () => {
-        ui.q = ui.engine = ui.status = ""; search.value = ""; engineSel.value = ""; render();
+        ui.q = ui.engine = ui.server = ui.status = ""; search.value = ""; engineSel.value = ""; render();
       })));
     } else {
       const focused = document.activeElement?.closest?.("tr[data-name]")?.dataset.name;
@@ -279,6 +290,6 @@ export function databasesView() {
   const onWidth = () => { if (!wide.matches && ui.selected) { ui.selected = ""; render(); } };
   wide.addEventListener("change", onWidth);
   render();
-  const stop = subscribe(changed => { if (changed.has("instances") || changed.has("host") || changed.has("engines")) render(); });
+  const stop = subscribe(changed => { if (changed.has("instances") || changed.has("host") || changed.has("engines") || changed.has("servers")) render(); });
   return { el, title: "Databases", nav: "databases", crumbs: [["Databases"]], destroy() { stop(); document.removeEventListener("keydown", onKey); wide.removeEventListener("change", onWidth); } };
 }

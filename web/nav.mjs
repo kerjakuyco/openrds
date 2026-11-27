@@ -53,6 +53,10 @@ export function initNav({ onSignOut, theme, setTheme }) {
     $("nav-create").hidden = !can("operator");
     const dbs = [...(state.instances || [])].sort((a, b) => a.name.localeCompare(b.name));
     $("db-count").textContent = state.instances ? String(dbs.length) : "";
+    const down = (state.servers || []).filter(s => !s.reachable).length;
+    $("server-count").textContent = (state.servers || []).length > 1 ? String(state.servers.length) : "";
+    $("server-count").classList.toggle("warn", down > 0);
+    $("server-count").title = down ? `${down} unreachable` : "";
     const current = /^#\/databases\/([a-z0-9-]+)/.exec(location.hash)?.[1];
     $("nav-dbs").replaceChildren(...dbs.slice(0, QUICK).map(d => {
       const st = statusOf(d);

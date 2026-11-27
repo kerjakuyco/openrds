@@ -29,6 +29,11 @@ case "${1:-}" in
       echo "no free loop device on the host: ${out:-losetup failed}" >&2
       exit 1
     fi
+    # Attaching uses the host's losetup options; BusyBox's lacks them.
+    if ! nsenter -t 1 -m losetup --version 2>/dev/null | grep -q util-linux; then
+      echo "the host's losetup is not util-linux; install util-linux on the server" >&2
+      exit 1
+    fi
     ;;
   attach)
     image_ok || { echo "invalid disk image request" >&2; exit 1; }

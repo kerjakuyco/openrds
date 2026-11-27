@@ -1,0 +1,26 @@
+# Private access: forwards connections that reach the server's private
+# address from allowed sources to the database, as the public gateway does
+# for the internet.
+services:
+  private-gateway:
+    image: ${OPENRDS_GATEWAY_IMAGE:?missing gateway image}
+    pull_policy: never
+    command: ["gateway"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    pids_limit: 512
+    labels:
+      io.openrds.gateway: "true"
+    environment:
+      OPENRDS_GATEWAY_TARGET: ${OPENRDS_GATEWAY_TARGET:?missing gateway target}
+      OPENRDS_GATEWAY_ALLOW: ${OPENRDS_PRIVATE_ALLOW:-}
+    ports:
+      - "${OPENRDS_PRIVATE_BIND:?missing private address}:${OPENRDS_DB_PORT:?missing host port}:7000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

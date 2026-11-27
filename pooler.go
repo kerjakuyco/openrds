@@ -155,9 +155,12 @@ func poolerUsers(r record) string {
 	return b.String()
 }
 
-func (m *manager) poolerImage(ctx context.Context) (string, error) {
+func (m *manager) poolerImage(ctx context.Context, server string) (string, error) {
 	image := env("OPENRDS_POOLER_IMAGE", "openrds-pooler:local")
-	if m.docker.run(ctx, nil, nil, io.Discard, "image", "inspect", "--format", "{{.Id}}", image) != nil {
+	if m.dockerFor(server).run(ctx, nil, nil, io.Discard, "image", "inspect", "--format", "{{.Id}}", image) != nil {
+		if !sameServer(server, localServer) {
+			return "", fail(409, "The connection pooler image is not on this server yet. It is copied while the server is reachable and has the console’s architecture.")
+		}
 		return "", fail(409, "The connection pooler image "+image+" is missing. Run sh install.sh again, or docker compose --profile helper build pooler, then retry.")
 	}
 	return image, nil

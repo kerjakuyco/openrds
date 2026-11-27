@@ -659,6 +659,70 @@ def exercise_mysql_pitr():
                 api(f"backups/{b['id']}", "DELETE")
 
 
+def exercise_servers():
+    """A second server reached as Docker over SSH: a Docker-in-Docker container with sshd."""
+    suffix = secrets.token_hex(4)
+    test, name = f"smoke-server-{suffix}", f"remote-{suffix}"
+    restored = f"{name}-here"
+    control = cli("docker", "compose", "ps", "-q", "openrds")
+    network = cli("docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", control).split()[0]
+    cli("docker", "build", "-q", "-t", "openrds-test-server:smoke", "scripts/test-server")
+    cli("docker", "run", "-d", "--privileged", "--name", test, "--network", network, "openrds-test-server:smoke")
+    server_id = None
+    try:
+        wait_for("the test server's Docker", lambda: subprocess.run(["docker", "exec", test, "docker", "version"], capture_output=True).returncode == 0, 90)
+        image = "postgres:18-alpine"  # from this host, not a registry
+        if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0:
+            cli("docker", "pull", "-q", image)
+        subprocess.run(f"docker save {image} | docker exec -i {test} docker load -q", shell=True, check=True, capture_output=True)
+        key = api("servers/key")
+        subprocess.run(["docker", "exec", "-i", test, "sh", "-c", "cat >> /home/openrds/.ssh/authorized_keys && chown openrds /home/openrds/.ssh/authorized_keys && chmod 600 /home/openrds/.ssh/authorized_keys"],
+                       input=key["publicKey"] + "\n", text=True, check=True)
+        address = f"openrds@{test}"
+        scan = api("servers/scan", "POST", {"address": address})
+        real = cli("docker", "exec", test, "ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub").split()[1]
+        assert any(real in f for f in scan["fingerprints"]), (real, scan)
+        private = cli("docker", "inspect", "-f", "{{(index .NetworkSettings.Networks \"" + network + "\").IPAddress}}", test)
+        server_id = api("servers", "POST", {"name": f"smoke-{suffix}", "address": address, "hostKeys": scan["hostKeys"], "privateAddress": private})["id"]
+        view = next(s for s in api("servers") if s["id"] == server_id)
+        assert view["reachable"] and view["info"]["cpus"] > 0, view
+
+        port = free_port()
+        api("instances", "POST", {"name": name, "engine": "postgres", "port": port, "memoryMiB": 256, "server": server_id, "privateAccess": True})
+        db = next(i for i in api("instances") if i["name"] == name)
+        c = api(f"instances/{name}/connection")
+        assert db["status"] == "running" and db["server"] == server_id and c["privateHost"] == private, (db, c)
+
+        def psql(query):
+            return cli("docker", "run", "--rm", "--network", network, "--env", "PGPASSWORD", "postgres:17-alpine", "psql", "-XAt", "-v", "ON_ERROR_STOP=1",
+                       "-h", private, "-p", str(port), "-U", c["user"], "-d", c["database"], "-c", query, env={**os.environ, "PGPASSWORD": c["password"]})
+        psql("CREATE TABLE smoke (id INTEGER PRIMARY KEY); INSERT INTO smoke VALUES (42)")
+        assert psql("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()") == "t"
+        wait_for("metric history over SSH", lambda: api(f"instances/{name}/history?range=1h")["points"], 120)
+        backup = api(f"instances/{name}/backups", "POST")
+        api(f"backups/{backup['id']}/restore", "POST", {"name": restored, "port": free_port()})
+        assert read_value("postgres", restored) == "42", "a snapshot taken there restores here"
+
+        cli("docker", "pause", test)
+        wait_for("the database to show its server is unreachable", lambda: next(i for i in api("instances") if i["name"] == name)["status"] == "unreachable", 180)
+        wait_for("the unreachable event", lambda: any(e.get("kind") == "server" and e["action"] == "Server unreachable" for e in api("activity")), 150)
+        cli("docker", "unpause", test)
+        wait_for("the database to come back", lambda: next(i for i in api("instances") if i["name"] == name)["status"] == "running", 180)
+        refused(f"servers/{server_id}", "DELETE", 409)
+        print("servers: added over SSH with its host key, a database there on the private address with TLS, metrics, a snapshot restored here, unreachable and back passed", flush=True)
+    finally:
+        subprocess.run(["docker", "unpause", test], capture_output=True)
+        for db in api("instances"):
+            if db["name"] in (name, restored):
+                api(f"instances/{db['name']}", "DELETE")
+        for b in api("backups"):
+            if b["name"] in (name, restored):
+                api(f"backups/{b['id']}", "DELETE")
+        if server_id:
+            api(f"servers/{server_id}", "DELETE")
+        subprocess.run(["docker", "rm", "-f", "--volumes", test], capture_output=True)
+
+
 def browser():
     """A cookie-keeping client, like one person's browser session."""
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -724,3 +788,4 @@ if __name__ == "__main__":
     exercise_versions(quota == "supported")
     exercise_mysql_pitr()
     exercise_storage()
+    exercise_servers()

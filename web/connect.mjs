@@ -1,6 +1,7 @@
 // "Connect your application": the connection string to copy, a second one
 // for the internet while public access is on, and code examples tucked away.
 import { h, icon, btn, api, toast, codeBlock, alertBox, nextId, copyText } from "./lib.mjs";
+import { serverOf } from "./servers.mjs";
 
 const PLACEHOLDER = "<password>";
 const MASK = "••••••••";
@@ -167,7 +168,7 @@ const usesTLS = (d, where) => d.tlsReady && (d.requireTLS || (where === "interne
 
 function settings(d, eng, where, user, password) {
   const internet = where === "internet";
-  const host = internet ? (d.publicHost || "YOUR_SERVER_ADDRESS") : "127.0.0.1";
+  const host = internet ? (d.publicHost || serverOf(d)?.publicAddress || "YOUR_SERVER_ADDRESS") : where === "private" ? d.privateHost : "127.0.0.1";
   const port = internet ? d.publicPort : where === "pooler" ? d.pooler.port : d.port;
   const tls = usesTLS(d, where);
   const scheme = { postgres: "postgresql", mysql: "mysql", valkey: tls ? "rediss" : "redis" }[d.engine];
@@ -231,6 +232,7 @@ export function connectGuide(d, eng, { canReveal }) {
   }
   const local = stringRow("vps", "Connection string");
   const remote = d.publicAccess ? stringRow("internet", "From the internet") : null;
+  const privately = d.privateHost ? stringRow("private", "From the private network") : null;
   const pooled = d.pooler ? stringRow("pooler", "Through the connection pooler") : null;
   const notes = h("div", { class: "conn-after" });
 
@@ -256,6 +258,7 @@ export function connectGuide(d, eng, { canReveal }) {
     }
     local.update();
     remote?.update();
+    privately?.update();
     pooled?.update();
 
     const tls = usesTLS(d, "vps") || (d.publicAccess && usesTLS(d, "internet"));
@@ -287,6 +290,6 @@ export function connectGuide(d, eng, { canReveal }) {
   const el = h("section", { class: "panel connect-guide" },
     h("header", { class: "panel-head" },
       h("div", null, h("h2", null, icon("link"), "Connect your application"), h("p", { class: "muted" }, "Copy this into your app’s settings."))),
-    h("div", { class: "panel-body" }, local, pooled, remote, notes, more));
+    h("div", { class: "panel-body" }, local, privately, pooled, remote, notes, more));
   return { el };
 }

@@ -35,7 +35,10 @@ function recommendations(dbs, now, host) {
     add(disk.freeBytes < disk.reserveBytes ? "critical" : "warn", disk.freeBytes < disk.reserveBytes ? "Backups are paused: disk almost full" : "Disk space is running low",
       `${bytes(disk.freeBytes)} free. Backups stop below ${bytes(disk.reserveBytes)} so databases keep running.`, "#/snapshots", "Review snapshots");
   }
-  for (const d of dbs.filter(needsAttention)) {
+  for (const s of (state.servers || []).filter(s => !s.reachable)) {
+    add("critical", `${s.name} is unreachable`, `OpenRDS can’t manage, back up or monitor its ${plural(s.databases.length, "database")}.`, "#/servers", "Review");
+  }
+  for (const d of dbs.filter(d => needsAttention(d) && d.status !== "unreachable")) {
     add("critical", `${d.name} needs attention`, d.pendingRestore ? "Restore didn’t finish." : `Status: ${d.status}.`, `#/databases/${d.name}/logs`, "Open logs");
   }
   for (const d of dbs.filter(d => d.backupRetentionDays && isRunning(d))) {
@@ -166,8 +169,11 @@ export function dashboardView() {
         row("db", "Databases", `${up} of ${dbs.length} running`, "#/databases"),
         row("camera", "Snapshots", backups ? `${manual.length} · ${bytes(manual.reduce((n, b) => n + b.bytes, 0))}` : "—", "#/snapshots"),
         row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/automated-backups"),
-        row("cloud", "Backup storage", state.storage?.enabled ? `${state.storage.copied} copied` : "Off", "#/backup-storage")),
-      host ? h("div", { class: "cap" },
+        row("cloud", "Backup storage", state.storage?.enabled ? `${state.storage.copied} copied` : "Off", "#/backup-storage"),
+        (state.servers || []).length > 1 ? row("host", "Servers", `${state.servers.filter(s => s.reachable).length} of ${state.servers.length} reachable`, "#/servers") : null),
+      (state.servers || []).length > 1 ? h("div", { class: "cap" }, state.servers.filter(s => s.info).map(s =>
+        line(`${s.name} memory`, `${bytes(s.allocatedMemoryMiB * 1048576)} of ${bytes(s.info.memoryBytes)}`, s.allocatedMemoryMiB * 1048576 / s.info.memoryBytes)))
+      : host ? h("div", { class: "cap" },
         line("Memory limits", `${bytes(mem)} of ${bytes(host.memoryBytes)}`, mem / host.memoryBytes),
         line("CPU limits", `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`, cpu / host.cpus)) : null);
 

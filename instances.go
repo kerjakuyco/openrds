@@ -35,6 +35,8 @@ type instanceView struct {
 	ReplicaOf      string             `json:"replicaOf,omitempty"`
 	Replicas       []string           `json:"replicas,omitempty"`
 	Replication    *replicationStatus `json:"replication,omitempty"` // a replica's, as last read
+	ServerName     string             `json:"serverName"`
+	PrivateHost    string             `json:"privateHost,omitempty"` // with private access on
 }
 
 func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
@@ -83,6 +85,12 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 		}
 		v.BackupIntervalHours = int(backupInterval(r.BackupIntervalHours) / time.Hour)
 		v.Version = r.version()
+		if srv, ok := m.server(r.Server); ok {
+			v.ServerName = srv.Name
+			if r.PrivateAccess {
+				v.PrivateHost = srv.PrivateAddress
+			}
+		}
 		if t, ok := latest[r.Name]; ok {
 			v.LatestBackup = &t
 		}
@@ -132,7 +140,13 @@ func (m *manager) provision(ctx context.Context, spec instanceSpec, from *backup
 
 // Like provision, rolling a base backup forward to target when given.
 func (m *manager) provisionAt(ctx context.Context, spec instanceSpec, from *backup, target *time.Time) (err error) {
-	if err := m.checkDiskRequest(ctx, spec.DiskGiB); err != nil {
+	if spec.Server == localServer {
+		spec.Server = ""
+	}
+	if _, ok := m.server(spec.Server); !ok {
+		return fail(400, "Choose a server from the Servers page.")
+	}
+	if err := m.checkDiskRequest(ctx, spec.Server, spec.DiskGiB); err != nil {
 		return err // reject before reserving a name/port or touching an instance
 	}
 	physical := from != nil && from.Format == "physical"
@@ -228,7 +242,11 @@ func (m *manager) resizeDisk(ctx context.Context, name string, gib int) (err err
 	if gib == 0 {
 		return fail(400, "A disk limit cannot be removed in place. Restore a backup into an uncapped instance instead.")
 	}
-	if err := m.checkDiskRequest(ctx, gib); err != nil {
+	current, err := m.record(name)
+	if err != nil {
+		return err
+	}
+	if err := m.checkDiskRequest(ctx, current.Server, gib); err != nil {
 		return err
 	}
 	r, release, err := m.begin(name, nil, false)
@@ -283,7 +301,7 @@ func (m *manager) up(ctx context.Context, r record) error {
 // The record is updated to what now runs.
 func (m *manager) start(ctx context.Context, r *record) error {
 	if r.DiskGiB > 0 {
-		if err := m.checkDiskRequest(ctx, r.DiskGiB); err != nil {
+		if err := m.checkDiskRequest(ctx, r.Server, r.DiskGiB); err != nil {
 			return err
 		}
 		if err := m.checkExistingVolume(ctx, *r); err != nil {
@@ -324,6 +342,11 @@ func (m *manager) start(ctx context.Context, r *record) error {
 			return fmt.Errorf("the database is running, but its public port did not open: %w", err)
 		}
 	}
+	if r.PrivateAccess {
+		if err := m.applyPrivateGateway(ctx, *r, *r, true); err != nil {
+			return fmt.Errorf("the database is running, but its private address did not open: %w", err)
+		}
+	}
 	if r.Pooler.on() {
 		if err := m.applyPooler(ctx, *r, *r, true); err != nil {
 			return fmt.Errorf("the database is running, but its connection pooler did not start: %w", err)
@@ -337,6 +360,9 @@ func (m *manager) stop(ctx context.Context, r record) error {
 	services := []string{"db"}
 	if r.PublicAccess {
 		services = append(services, "gateway")
+	}
+	if r.PrivateAccess {
+		services = append(services, "private-gateway")
 	}
 	if r.Pooler.on() {
 		services = append(services, "pooler")
@@ -443,7 +469,7 @@ func (m *manager) remove(ctx context.Context, name string, finalBackup bool) (er
 	}
 	m.history.forget(r.Project)
 	m.forgetTLS(r)
-	m.docker.run(ctx, nil, nil, nil, "volume", "rm", "--force", r.Project+"_archive") // WAL not yet collected
+	m.on(r).run(ctx, nil, nil, nil, "volume", "rm", "--force", r.Project+"_archive") // WAL not yet collected
 	if err := os.Remove(m.overridePath(r)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -469,6 +495,8 @@ type modification struct {
 	Firewall            *[]firewallRule   `json:"firewall"`
 	Pooler              *poolerSpec       `json:"pooler"` // replaced as a whole; {"enabled": false} turns it off
 	PITR                *bool             `json:"pitr"`
+	PrivateAccess       *bool             `json:"privateAccess"`
+	PrivateFirewall     *[]firewallRule   `json:"privateFirewall"`
 	ApplyImmediately    bool              `json:"applyImmediately"`
 }
 
@@ -542,6 +570,15 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	if mod.PITR != nil {
 		next.PITR = *mod.PITR
 	}
+	if mod.PrivateAccess != nil {
+		next.PrivateAccess = *mod.PrivateAccess
+	}
+	if mod.PrivateFirewall != nil {
+		next.PrivateFirewall = *mod.PrivateFirewall
+	}
+	if err := m.preparePrivate(&next.instanceSpec); err != nil {
+		return result, err
+	}
 	if mod.Pooler != nil {
 		p := *mod.Pooler
 		if p.Enabled && p.Port == 0 && r.Pooler.on() {
@@ -591,8 +628,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	gatewayChanged := next.PublicAccess != r.PublicAccess ||
 		next.PublicAccess && (next.PublicPort != r.PublicPort || allowList(next.Firewall) != allowList(r.Firewall))
 	poolerChanged := !samePooler(next.Pooler, r.Pooler)
+	privateChanged := next.PrivateAccess != r.PrivateAccess || next.PrivateAccess && allowList(next.PrivateFirewall) != allowList(r.PrivateFirewall)
 	running := false
-	if recreate || gatewayChanged || poolerChanged {
+	if recreate || gatewayChanged || poolerChanged || privateChanged {
 		states, err := m.states(ctx)
 		if err != nil {
 			return result, fail(503, "Cannot read database status: "+err.Error())
@@ -601,7 +639,7 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 	}
 	action := "Modify database"
 	switch {
-	case !recreate && gatewayChanged:
+	case !recreate && (gatewayChanged || privateChanged):
 		action = "Change network access"
 	case !recreate && poolerChanged:
 		action = "Change connection pooling"
@@ -620,6 +658,9 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 		result.Restarted = true
 		if next.PublicAccess {
 			gatewayChanged = false // start brought the gateway up with the new settings
+		}
+		if next.PrivateAccess {
+			privateChanged = false
 		}
 	case running:
 		if next.Applied == nil {
@@ -647,6 +688,16 @@ func (m *manager) modify(ctx context.Context, name string, mod modification) (re
 				m.applyGateway(ctx, next, back, running)
 			}
 			return result, fail(502, "Network access did not change: the public port could not be opened. "+err.Error())
+		}
+	}
+	if privateChanged {
+		if err = m.applyPrivateGateway(ctx, r, next, running); err != nil {
+			back := next
+			back.PrivateAccess, back.PrivateFirewall = r.PrivateAccess, r.PrivateFirewall
+			if saveErr := m.save(back); saveErr == nil {
+				m.applyPrivateGateway(ctx, next, back, running)
+			}
+			return result, fail(502, "Network access did not change: the private address could not be opened. "+err.Error())
 		}
 	}
 	if poolerChanged {
@@ -728,7 +779,7 @@ func (m *manager) host(ctx context.Context) (hostInfo, error) {
 	}
 	err := json.Unmarshal(out.Bytes(), &host)
 	if err == nil {
-		host.VolumeQuota = m.volumeQuota(ctx)
+		host.VolumeQuota = m.volumeQuota(ctx, localServer)
 	}
 	if free, total, ok := m.space(m.backupDir()); ok {
 		host.BackupDisk = &diskInfo{free, total, backupReserve(total)}
@@ -753,7 +804,7 @@ func (m *manager) metrics(ctx context.Context, name string) (*usage, error) {
 		return nil, nil // stopped or not yet created; no live sample
 	}
 	out.Reset()
-	if err := m.docker.run(ctx, nil, nil, &out, "stats", "--no-stream", "--format", "{{json .}}", id); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, &out, "stats", "--no-stream", "--format", "{{json .}}", id); err != nil {
 		return nil, err
 	}
 	var u usage

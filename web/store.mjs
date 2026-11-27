@@ -3,7 +3,7 @@
 import { api, toast } from "./lib.mjs";
 
 export const state = {
-  instances: null, backups: null, activity: null, host: null, engines: null, users: null,
+  instances: null, backups: null, activity: null, host: null, engines: null, users: null, servers: null,
   me: null, signedIn: false, syncedAt: 0, problems: [],
 };
 
@@ -16,7 +16,7 @@ export const subscribe = (fn) => { listeners.add(fn); return () => listeners.del
 const emit = (changed) => listeners.forEach(fn => fn(changed));
 
 let syncID = 0;
-const RESOURCES = ["instances", "backups", "activity", "host", "storage"];
+const RESOURCES = ["instances", "backups", "activity", "host", "storage", "servers"];
 
 export async function sync() {
   if (!state.signedIn) return;

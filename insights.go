@@ -69,9 +69,9 @@ SELECT 'active', COUNT(*) FROM information_schema.PROCESSLIST
 
 // Run the engine's client in a container with input on stdin, so passwords
 // and SQL stay off command lines.
-func (m *manager) engineClient(ctx context.Context, container, script, input string) (string, error) {
+func (m *manager) engineClient(ctx context.Context, r record, container, script, input string) (string, error) {
 	var out bytes.Buffer
-	err := m.docker.run(ctx, nil, strings.NewReader(input), &out, "exec", "-i", container, "sh", "-ec", script)
+	err := m.on(r).run(ctx, nil, strings.NewReader(input), &out, "exec", "-i", container, "sh", "-ec", script)
 	return out.String(), err
 }
 
@@ -95,7 +95,7 @@ func (m *manager) sampleEngine(ctx context.Context, r record, container string) 
 	s := &dbSample{at: time.Now()}
 	switch r.Engine {
 	case "postgres":
-		out, err := m.engineClient(ctx, container, pgClient, pgSampleSQL)
+		out, err := m.engineClient(ctx, r, container, pgClient, pgSampleSQL)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +107,7 @@ func (m *manager) sampleEngine(ctx context.Context, r record, container string) 
 		s.conns, s.active, s.maxConns, s.ops, s.hits, s.misses = int(n[0]), int(n[1]), int(n[2]), n[3], n[4], n[5]
 		s.activeKnown = true
 	case "mysql":
-		out, err := m.engineClient(ctx, container, mysqlClient, mysqlSampleSQL)
+		out, err := m.engineClient(ctx, r, container, mysqlClient, mysqlSampleSQL)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +127,7 @@ func (m *manager) sampleEngine(ctx context.Context, r record, container string) 
 		s.ops, s.hits, s.misses = v["questions"], requests-min(reads, requests), reads
 		s.activeKnown = true
 	case "valkey":
-		out, err := m.engineClient(ctx, container, valkeyClient, r.Password+"\nINFO\n")
+		out, err := m.engineClient(ctx, r, container, valkeyClient, r.Password+"\nINFO\n")
 		if err != nil {
 			return nil, err
 		}
@@ -278,7 +278,7 @@ func (m *manager) insights(ctx context.Context, name string) (insightsView, erro
 	}
 	switch r.Engine {
 	case "postgres":
-		out, err := m.engineClient(ctx, id, pgClient, pgInsightsSQL)
+		out, err := m.engineClient(ctx, r, id, pgClient, pgInsightsSQL)
 		if err != nil {
 			return v, unreadable(err)
 		}
@@ -295,7 +295,7 @@ func (m *manager) insights(ctx context.Context, name string) (insightsView, erro
 			return v, fail(502, "The running statements could not be read.")
 		}
 	case "mysql":
-		out, err := m.engineClient(ctx, id, mysqlClient, mysqlInsightsSQL)
+		out, err := m.engineClient(ctx, r, id, mysqlClient, mysqlInsightsSQL)
 		if err != nil {
 			return v, unreadable(err)
 		}
@@ -313,7 +313,7 @@ func (m *manager) insights(ctx context.Context, name string) (insightsView, erro
 		}
 	case "valkey":
 		// OpenRDS's own commands are filtered out afterwards, so read well past them.
-		out, err := m.engineClient(ctx, id, valkeyClient+" --json SLOWLOG GET 512", r.Password+"\n")
+		out, err := m.engineClient(ctx, r, id, valkeyClient+" --json SLOWLOG GET 512", r.Password+"\n")
 		if err != nil {
 			return v, unreadable(err)
 		}
@@ -407,7 +407,7 @@ func (m *manager) cancelStatement(ctx context.Context, name, session string) err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := m.engineClient(ctx, id, script, sql)
+	out, err := m.engineClient(ctx, r, id, script, sql)
 	if err == nil && r.Engine == "postgres" && strings.TrimSpace(out) != "t" {
 		err = errors.New("the session has already finished")
 	}
@@ -440,7 +440,7 @@ func (m *manager) resetInsights(ctx context.Context, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := m.engineClient(ctx, id, script, input); err != nil {
+	if _, err := m.engineClient(ctx, r, id, script, input); err != nil {
 		m.note(ctx, name, "Reset query statistics", "failed", strings.TrimPrefix(err.Error(), "docker: "))
 		return fail(409, "The statistics were not reset: "+strings.TrimPrefix(err.Error(), "docker: "))
 	}

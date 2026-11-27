@@ -2,6 +2,7 @@
 // firewall, encryption in transit, and database users.
 import { h, icon, btn, api, toast, modal, panel, infoPanel, keyValues, dataTable, alertBox, empty, when, ago, chip, codeBlock, nextId, help, menu, isLive, isRunning } from "./lib.mjs";
 import { engine, sync, can, go } from "./store.mjs";
+import { serverOf, multiServer } from "./servers.mjs";
 import { confirmReboot } from "./actions.mjs";
 import { connectAs } from "./connect.mjs";
 
@@ -163,18 +164,18 @@ export function usersTab(d) {
 
 // ---- network access
 
-function rulesEditor(initial) {
+function rulesEditor(initial, { scope = "", example = "203.0.113.7 or 203.0.113.0/24" } = {}) {
   const rows = h("div", { class: "rule-rows" });
   function addRow(rule = { cidr: "", description: "" }) {
-    const cidr = h("input", { type: "text", value: rule.cidr, placeholder: "203.0.113.7 or 203.0.113.0/24", spellcheck: "false", autocomplete: "off", "aria-label": "Source address or range" });
-    const desc = h("input", { type: "text", value: rule.description || "", placeholder: "Office, CI runner…", maxlength: "100", "aria-label": "Description" });
+    const cidr = h("input", { type: "text", value: rule.cidr, placeholder: example, spellcheck: "false", autocomplete: "off", "aria-label": `${scope}Source address or range` });
+    const desc = h("input", { type: "text", value: rule.description || "", placeholder: "Office, CI runner…", maxlength: "100", "aria-label": `${scope}Description` });
     const row = h("div", { class: "rule-row" }, cidr, desc, h("button", { type: "button", class: "icon-btn ghost", "aria-label": "Remove source", onclick: () => row.remove() }, icon("trash")));
     rows.append(row);
     return cidr;
   }
   (initial || []).forEach(addRow);
   return {
-    el: h("div", null, rows, h("button", { type: "button", class: "btn small", onclick: () => addRow().focus() }, icon("plus"), "Add source")),
+    el: h("div", null, rows, h("button", { type: "button", class: "btn small", onclick: () => addRow().focus() }, icon("plus"), scope ? `Add ${scope.toLowerCase()}source` : "Add source")),
     value: () => [...rows.children].map(r => ({ cidr: r.children[0].value.trim(), description: r.children[1].value.trim() })).filter(r => r.cidr),
   };
 }
@@ -189,11 +190,21 @@ function suggestPublicPort(d, all) {
   return 0;
 }
 
+// Private access allows these unless you choose others, as the server does.
+const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"].map(cidr => ({ cidr, description: "Private networks" }));
+
 function editNetwork(d, all, { addSource = "" } = {}) {
+  const srv = serverOf(d);
+  const privateOn = h("input", { type: "checkbox", class: "switch", role: "switch", checked: Boolean(d.privateAccess), disabled: !srv?.privateAddress && !d.privateAccess, id: nextId("private") });
+  const privateRules = rulesEditor(d.privateFirewall?.length ? d.privateFirewall : PRIVATE_RANGES, { scope: "Private ", example: "10.0.0.0/8 or 10.0.1.7" });
+  const offersPrivate = Boolean(srv?.privateAddress || d.privateAccess);
+  const privateDetails = h("div", { class: "stack-gap", hidden: !privateOn.checked },
+    h("div", null, h("span", { class: "field-label" }, "Allowed sources ", help("Only these addresses on your private network can connect.", "About private sources")), privateRules.el));
+  privateOn.addEventListener("change", () => { privateDetails.hidden = !privateOn.checked; });
   const on = h("input", { type: "checkbox", class: "switch", role: "switch", checked: d.publicAccess || Boolean(addSource), id: nextId("public") });
   const port = h("input", { type: "number", min: "1024", max: "65535", value: String(d.publicPort || suggestPublicPort(d, all)), id: nextId("pport") });
   const local = /^(localhost|127\.|\[?::1\]?$)/.test(location.hostname) ? "" : location.hostname;
-  const address = h("input", { type: "text", value: d.publicHost || "", placeholder: local || "db.example.com or 203.0.113.10", spellcheck: "false", id: nextId("paddr") });
+  const address = h("input", { type: "text", value: d.publicHost || "", placeholder: srv?.publicAddress || local || "db.example.com or 203.0.113.10", spellcheck: "false", id: nextId("paddr") });
   const rules = rulesEditor([...(d.firewall || []), ...(addSource ? [{ cidr: addSource, description: "" }] : [])]);
   const details = h("div", { class: "stack-gap", hidden: !on.checked },
     h("div", { class: "form-grid" },
@@ -207,14 +218,20 @@ function editNetwork(d, all, { addSource = "" } = {}) {
   modal({
     title: "Network access", kicker: d.name, confirm: "Save network access", wide: true,
     body: [
+      offersPrivate ? h("label", { class: "check", for: privateOn.id }, privateOn, h("span", null, h("strong", null, "Private access"),
+        h("small", null, srv?.privateAddress ? `Reach it from your other servers at ${srv.privateAddress}:${d.port}.` : `${srv?.name || "Its server"} has no private address now.`))) : null,
+      offersPrivate ? privateDetails : null,
+      !offersPrivate && multiServer() ? h("p", { class: "muted" }, `To reach it from your other servers privately, set the private address of ${srv?.name || "its server"} on the Servers page.`) : null,
       h("label", { class: "check", for: on.id }, on, h("span", null, h("strong", null, "Public access"), h("small", null, "Allow the sources below to connect from outside."))),
       details,
     ],
     run: async () => {
       const body = { publicAccess: on.checked, firewall: rules.value(), publicHost: address.value.trim() };
+      if (offersPrivate) Object.assign(body, { privateAccess: privateOn.checked, privateFirewall: privateRules.value() });
       if (on.checked) body.publicPort = Number(port.value);
       const r = await api(`instances/${d.name}/modify`, { method: "POST", body });
-      toast(r?.pendingRestart ? "Saved. Reboot to update the certificate." : on.checked ? `${d.name} is public on port ${body.publicPort}.` : `${d.name} is private.`, "success");
+      toast(r?.pendingRestart ? "Saved. Reboot to update the certificate." : on.checked ? `${d.name} is public on port ${body.publicPort}.`
+        : body.privateAccess ? `${d.name} is open to your private network.` : `${d.name} is private.`, "success");
       await sync();
     },
   });
@@ -226,7 +243,8 @@ export function connectivityPanel(d, all) {
   const rules = d.firewall || [];
   const tls = !d.tlsReady ? chip("After a reboot", "neutral")
     : d.requireTLS ? chip("Required", "good") : d.engine === "valkey" ? chip("Off", "warn") : chip("Optional", "info");
-  const names = ["localhost", "127.0.0.1", `openrds-${d.name}`, d.engine === "postgres" && `openrds-${d.name}-pooler`, d.publicHost].filter(Boolean);
+  const srv = serverOf(d);
+  const names = [...new Set(["localhost", "127.0.0.1", `openrds-${d.name}`, d.engine === "postgres" && `openrds-${d.name}-pooler`, d.publicHost, srv?.privateAddress, srv?.publicAddress].filter(Boolean))];
   const actions = [];
   if (can("operator")) actions.push(btn([icon("globe"), "Edit network"], () => editNetwork(d, all), "small"));
   actions.push(h("a", { class: "btn small", href: "/api/tls/ca.pem", download: "openrds-ca.pem" }, icon("download"), "CA certificate"));
@@ -241,8 +259,10 @@ export function connectivityPanel(d, all) {
       ["Container DNS name", h("code", null, `openrds-${d.name}`)],
     ]],
     ["Networking", [
+      multiServer() ? ["Server", h("a", { href: "#/servers" }, srv?.name || d.serverName)] : null,
+      d.privateAccess || srv?.privateAddress ? ["Private access", d.privateAccess ? h("span", { class: "status info" }, icon("lock"), "On ", h("code", null, `${d.privateHost}:${d.port}`)) : "Off"] : null,
       ["Public access", d.publicAccess ? h("span", { class: "status info" }, icon("globe"), `On · port ${d.publicPort}`) : h("span", { class: "status good" }, icon("lock"), "Off")],
-      ["Public endpoint", d.publicAccess ? h("code", null, `${d.publicHost || "<server address>"}:${d.publicPort}`) : "—"],
+      ["Public endpoint", d.publicAccess ? h("code", null, `${d.publicHost || srv?.publicAddress || "<server address>"}:${d.publicPort}`) : "—"],
       ["Allowed sources", d.publicAccess ? String(rules.length) : "—"],
     ]],
     ["Security", [

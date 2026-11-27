@@ -191,8 +191,17 @@ func handler(m *manager, a auth) http.Handler {
 		internal := u
 		alias := "openrds-" + db.Name
 		internal.Host = alias + ":" + strconv.Itoa(engines[db.Engine].port)
-		sendJSON(w, 200, map[string]any{"host": "127.0.0.1", "port": db.Port, "user": login, "database": eng.database, "password": password, "uri": u.String(),
-			"network": db.Project + "_default", "networkHost": alias, "networkURI": internal.String()})
+		info := map[string]any{"host": "127.0.0.1", "port": db.Port, "user": login, "database": eng.database, "password": password, "uri": u.String(),
+			"network": db.Project + "_default", "networkHost": alias, "networkURI": internal.String()}
+		if srv, ok := m.server(db.Server); ok {
+			info["server"] = srv.Name
+			if db.PrivateAccess && srv.PrivateAddress != "" {
+				private := u
+				private.Host = srv.PrivateAddress + ":" + strconv.Itoa(db.Port)
+				info["privateHost"], info["privateURI"] = srv.PrivateAddress, private.String()
+			}
+		}
+		sendJSON(w, 200, info)
 		return nil
 	})
 	add("POST /api/instances/{name}/password", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
@@ -420,6 +429,7 @@ func handler(m *manager, a auth) http.Handler {
 	upgradeRoutes(add, m)
 	pitrRoutes(add, m)
 	replicaRoutes(add, m)
+	serverRoutes(add, m)
 	add("GET /api/storage/backups", roleOperator, func(w http.ResponseWriter, r *http.Request) error {
 		list, err := m.remoteBackups(r.Context())
 		if err == nil {

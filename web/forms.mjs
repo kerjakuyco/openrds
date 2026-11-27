@@ -2,6 +2,7 @@
 // with a summary that shows what the request will do to the host.
 import { h, icon, btn, api, alertBox, setAlert, mib, nextId, windowLabel, scheduleLabel, plural, bytes, keyValues, isLive, modal, toast, help } from "./lib.mjs";
 import { state, loadEngines, engine, instance, track, sync, go } from "./store.mjs";
+import { servers, multiServer } from "./servers.mjs";
 
 const SIZES = [
   { value: "micro", title: "Micro", cpus: 0.5, memoryMiB: 512 },
@@ -209,10 +210,17 @@ export function tagEditor(initial = {}) {
 // ---------- the shared form
 
 function databaseForm({ mode, eng, initial, source }) {
-  const host = state.host;
+  const v = { ...initial };
+  // Where it runs: chosen when creating or restoring, the reachable server
+  // with the most room first; capacity, disk limits and ports follow it.
+  const placeable = servers().filter(s => s.reachable || s.local);
+  if (mode !== "modify" && !placeable.some(s => s.id === v.server)) v.server = (placeable.find(s => s.suggested) || placeable[0])?.id || "local";
+  const serverInfo = () => placeable.find(s => s.id === (v.server || "local")) || servers().find(s => s.id === (v.server || "local"));
+  const hostOf = () => { const s = serverInfo(); return s?.info ? { cpus: s.info.cpus, memoryBytes: s.info.memoryBytes, volumeQuota: s.volumeQuota } : state.host; };
+  let host = hostOf();
+  const sameServer = (d) => (d.server || "local") === (v.server || "local");
   const others = (state.instances || []).filter(d => d.name !== initial.name);
   const taken = new Set(others.map(d => d.port));
-  const v = { ...initial };
   const note = h("div", { class: "alert error", role: "alert", hidden: true });
   const fields = {};
   const sections = [];
@@ -292,12 +300,18 @@ function databaseForm({ mode, eng, initial, source }) {
   if (mode !== "modify") {
     const disk = h("input", { type: "number", min: "1", max: "65536", step: "1", value: v.diskGiB || "", placeholder: "Uncapped" });
     disk.addEventListener("input", () => { v.diskGiB = Number(disk.value) || 0; fields.disk.setError(""); changed(); });
-    const quota = host?.volumeQuota;
-    const supported = quota?.state === "supported";
-    fields.disk = field("Data volume limit (GiB)", disk, { optional: true, explain: "Stops one database from filling the disk.", hint: supported
-      ? "Writes fail once the volume is full."
-      : `${quota?.message || "Checking disk limit support…"} Leave blank for no limit.` });
-    sections.push(section(++n, "Storage", null, h("p", { class: "row" }, h("span", { class: `chip ${supported ? "good" : quota?.state === "unsupported" ? "warn" : "neutral"}` }, supported ? "Limits enforceable" : quota?.state === "unsupported" ? "Limits not enforceable here" : "Checking host")), fields.disk));
+    fields.disk = field("Data volume limit (GiB)", disk, { optional: true, explain: "Stops one database from filling the disk.", hint: " " });
+    const quotaChip = h("p", { class: "row" });
+    const hint = fields.disk.querySelector(".hint");
+    const showQuota = () => {
+      const quota = host?.volumeQuota;
+      const supported = quota?.state === "supported";
+      hint.textContent = supported ? "Writes fail once the volume is full." : `${quota?.message || "Checking disk limit support…"} Leave blank for no limit.`;
+      quotaChip.replaceChildren(h("span", { class: `chip ${supported ? "good" : quota?.state === "unsupported" ? "warn" : "neutral"}` }, supported ? "Limits enforceable" : quota?.state === "unsupported" ? "Limits not enforceable here" : "Checking host"));
+    };
+    showQuota();
+    changes.add(showQuota);
+    sections.push(section(++n, "Storage", null, quotaChip, fields.disk));
   } else {
     sections.push(section(++n, "Storage", null, keyValues([["Data volume limit", v.diskGiB ? `${v.diskGiB} GiB` : "Uncapped"]]),
       h("p", { class: "muted" }, v.diskGiB ? "Resize it on the Configuration tab while stopped." : "To add a limit, restore a snapshot into a new database.")));
@@ -306,8 +320,17 @@ function databaseForm({ mode, eng, initial, source }) {
   // Connectivity
   const port = h("input", { type: "number", min: "1024", max: "65535", step: "1", value: v.port, required: true });
   port.addEventListener("input", () => { v.port = Number(port.value); fields.port.setError(""); changed(); });
-  fields.port = field("Host port", port, { explain: "Any free port from 1024 to 65535.", hint: "Private to this server." });
-  sections.push(section(++n, "Connectivity", null, fields.port));
+  fields.port = field("Host port", port, { explain: "Any free port from 1024 to 65535.", hint: "Private to its server." });
+  if (mode !== "modify" && multiServer()) {
+    const where = h("select", { id: nextId("server") }, placeable.map(s => h("option", { value: s.id, selected: s.id === v.server },
+      `${s.name}${s.info ? ` · ${s.info.cpus} vCPU · ${bytes(s.info.memoryBytes)}` : ""}${s.suggested ? " · most room" : ""}`)));
+    where.addEventListener("change", () => { v.server = where.value; host = hostOf(); fields.port.setError(""); changed(); });
+    fields.server = field("Server", where, { explain: "The machine it runs on. It stays there: to move it later, restore a snapshot onto another server.",
+      hint: "Its port, disk limit and memory count against this server." });
+    sections.push(section(++n, "Connectivity", null, fields.server, fields.port));
+  } else {
+    sections.push(section(++n, "Connectivity", null, fields.port));
+  }
 
   // Backups
   const retention = select([...new Set([...RETENTION, v.retention])].sort((a, b) => a - b).map(d => [d, d === 0 ? "Off — no automated backups" : plural(d, "day")]), v.retention);
@@ -372,6 +395,7 @@ function databaseForm({ mode, eng, initial, source }) {
       name: v.name, engine: eng.key, version: v.version, port: v.port, cpus: v.cpus || 0, memoryMiB: v.memoryMiB || 0, diskGiB: v.diskGiB || 0,
       backupRetentionDays: v.retention, backupWindow: v.window, backupIntervalHours: v.interval || 24, deletionProtection: v.protection, requireTLS: Boolean(v.tls),
       tags: tags.value(), parameters: params.value(),
+      ...(mode !== "modify" && v.server && v.server !== "local" ? { server: v.server } : {}),
     };
   }
 
@@ -383,7 +407,7 @@ function databaseForm({ mode, eng, initial, source }) {
       else if (others.some(d => d.name === spec.name)) flag(fields.name, "This name is taken.");
     }
     if (!Number.isInteger(spec.port) || spec.port < 1024 || spec.port > 65535) flag(fields.port, "Choose a port from 1024 to 65535.");
-    else if (taken.has(spec.port)) flag(fields.port, `Port ${spec.port} is used by ${others.find(d => d.port === spec.port).name}.`);
+    else if (others.some(d => sameServer(d) && d.port === spec.port)) flag(fields.port, `Port ${spec.port} is used by ${others.find(d => sameServer(d) && d.port === spec.port).name}.`);
     if (spec.cpus && (spec.cpus < 0.1 || spec.cpus > 1024)) flag(fields.cpus, "Use at least 0.1, or leave empty.");
     if (spec.memoryMiB && spec.memoryMiB < eng.minMemoryMiB) flag(fields.memory, `${eng.title} needs at least ${eng.minMemoryMiB} MiB.`);
     if (fields.disk && spec.diskGiB && (!Number.isInteger(spec.diskGiB) || spec.diskGiB < 1 || spec.diskGiB > 65536)) flag(fields.disk, "Use a whole number from 1 to 65536, or leave empty.");
@@ -405,6 +429,7 @@ function databaseForm({ mode, eng, initial, source }) {
       mode !== "modify" && ["Identifier", spec.name || "—"],
       ["Size", spec.cpus || spec.memoryMiB ? `${spec.cpus ? `${spec.cpus} vCPU` : "Shared CPU"} · ${spec.memoryMiB ? mib(spec.memoryMiB) : "shared memory"}` : "Shared host"],
       ["Storage", spec.diskGiB ? `${spec.diskGiB} GiB limit` : "Uncapped"],
+      multiServer() && ["Server", serverInfo()?.name || "This server"],
       ["Endpoint", `127.0.0.1:${spec.port || "—"}`],
       ["Automated backups", spec.backupRetentionDays ? `${plural(spec.backupRetentionDays, "day")} · ${scheduleLabel(spec.backupWindow, spec.backupIntervalHours)}` : "Off"],
       ["Deletion protection", spec.deletionProtection ? "On" : "Off"],
@@ -413,10 +438,10 @@ function databaseForm({ mode, eng, initial, source }) {
       ["Tags", Object.keys(spec.tags).length || "None"],
     ], "stacked"));
     if (!host) { capacity.replaceChildren(); return; }
-    const alloc = (key, extra) => others.filter(isLive).reduce((sum, d) => sum + (d[key] || 0), 0) + extra;
+    const alloc = (key, extra) => others.filter(d => isLive(d) && sameServer(d)).reduce((sum, d) => sum + (d[key] || 0), 0) + extra;
     const cpu = alloc("cpus", spec.cpus), memBytes = alloc("memoryMiB", spec.memoryMiB) * 1048576;
     const bar = (used, total) => { const fill = h("span", { class: "meter-fill" }); fill.style.width = `${Math.min(100, used / total * 100).toFixed(1)}%`; return h("span", { class: `meter ${used > total ? "critical" : used / total > 0.8 ? "warn" : "ok"}` }, fill); };
-    capacity.replaceChildren(h("h3", null, "Host allocation after this change"),
+    capacity.replaceChildren(h("h3", null, multiServer() ? `${serverInfo()?.name || "Server"} allocation after this change` : "Host allocation after this change"),
       h("div", { class: "cap-row" }, h("span", null, "CPU limits"), h("strong", null, `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`), bar(cpu, host.cpus)),
       h("div", { class: "cap-row" }, h("span", null, "Memory limits"), h("strong", null, `${bytes(memBytes)} of ${bytes(host.memoryBytes)}`), bar(memBytes, host.memoryBytes)),
       h("p", { class: "muted" }, "Unlimited databases share spare capacity."));

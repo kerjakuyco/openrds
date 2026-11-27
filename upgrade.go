@@ -67,7 +67,7 @@ psql -X -q -v ON_ERROR_STOP=1 -U openrds -d app -c "SELECT pg_reload_conf()"`
 
 // Remove a data generation's volume, and its disk image when capped.
 func (m *manager) dropData(ctx context.Context, r record) error {
-	if err := m.docker.run(ctx, nil, nil, nil, "volume", "rm", "--force", r.dataVolume()); err != nil {
+	if err := m.on(r).run(ctx, nil, nil, nil, "volume", "rm", "--force", r.dataVolume()); err != nil {
 		return err
 	}
 	if r.DiskGiB > 0 {
@@ -108,7 +108,7 @@ func (m *manager) upgrade(ctx context.Context, name, version string) (err error)
 		return fail(409, fmt.Sprintf("Start %s and wait until it is healthy: the upgrade copies its data while it runs.", r.Name))
 	}
 	if r.DiskGiB > 0 {
-		if err := m.checkDiskRequest(ctx, r.DiskGiB); err != nil {
+		if err := m.checkDiskRequest(ctx, r.Server, r.DiskGiB); err != nil {
 			return err // the new version gets its own disk while the old one is kept
 		}
 	}
@@ -116,8 +116,8 @@ func (m *manager) upgrade(ctx context.Context, name, version string) (err error)
 	defer func() { finish(err) }()
 	// Download the new version first, so it does not add to the downtime.
 	image := fmt.Sprintf(engineVersions[r.Engine].image, version)
-	if m.docker.run(ctx, nil, nil, io.Discard, "image", "inspect", "--format", "{{.Id}}", image) != nil {
-		if err := m.docker.run(ctx, nil, nil, io.Discard, "pull", "--quiet", image); err != nil {
+	if m.on(r).run(ctx, nil, nil, io.Discard, "image", "inspect", "--format", "{{.Id}}", image) != nil {
+		if err := m.on(r).run(ctx, nil, nil, io.Discard, "pull", "--quiet", image); err != nil {
 			return fail(502, "The upgrade did not start: "+image+" could not be downloaded. "+err.Error())
 		}
 	}
@@ -127,10 +127,13 @@ func (m *manager) upgrade(ctx context.Context, name, version string) (err error)
 		m.unblockClients(ctx, r)
 		return fail(502, "The upgrade did not start: clients could not be held off. "+err.Error())
 	}
-	if r.PublicAccess || r.Pooler.on() {
+	if r.PublicAccess || r.PrivateAccess || r.Pooler.on() {
 		services := []string{}
 		if r.PublicAccess {
 			services = append(services, "gateway")
+		}
+		if r.PrivateAccess {
+			services = append(services, "private-gateway")
 		}
 		if r.Pooler.on() {
 			services = append(services, "pooler")
