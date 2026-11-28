@@ -131,7 +131,9 @@ async function run() {
     // Network access: open a public port for one address, then close it.
     await page.getByRole("tab", { name: "Connect", exact: true }).click();
     const network = page.locator("section.panel").filter({ has: page.getByRole("heading", { name: "Connectivity & security" }) });
-    await network.getByText("Off", { exact: true }).waitFor();
+    // Its own row: a server with a private address also shows "Private access: Off".
+    const publicRow = network.locator("dl > div").filter({ has: page.getByText("Public access", { exact: true }) });
+    await publicRow.getByText("Off", { exact: true }).waitFor();
     await network.getByRole("button", { name: "Edit network" }).click();
     dialog = page.getByRole("dialog");
     await dialog.getByRole("switch", { name: /Public access/ }).check();
@@ -148,7 +150,7 @@ async function run() {
     await network.getByRole("button", { name: "Edit network" }).click();
     await page.getByRole("dialog").getByRole("switch", { name: /Public access/ }).uncheck();
     await page.getByRole("dialog").getByRole("button", { name: "Save network access" }).click();
-    await network.getByText("Off", { exact: true }).waitFor({ timeout: 60000 });
+    await publicRow.getByText("Off", { exact: true }).waitFor({ timeout: 60000 });
     assert.ok(await page.getByRole("link", { name: "CA certificate" }).getAttribute("href") === "/api/tls/ca.pem");
 
     // Read replica: created from the Overview, followed, then promoted.
