@@ -41,6 +41,8 @@ The console is plain HTML, CSS and JavaScript modules embedded in the binary, so
 | --- | --- |
 | `main.go`, `cli.go` | Startup, configuration and the `openrds` maintenance commands (`api-key`, `reset-password`, `gateway`) |
 | `api.go`, `auth.go` | HTTP routes, roles and sessions |
+| `serve.go` | Responses on the wire: compressed, revalidated console files and compressed JSON |
+| `library.go` | The backup library and event history in memory, and pages of them with filters and sorting |
 | `users.go`, `users_api.go` | Accounts, invitations and password hashing |
 | `store.go`, `instances.go` | Database records, create, modify, start, stop and delete |
 | `docker.go`, `engines/` | Engine definitions and the Compose templates each database runs from |
@@ -74,6 +76,12 @@ go test -race ./...
 for f in web/*.mjs scripts/*.cjs; do node --check "$f"; done
 ```
 
+For changes to listings, refreshes or anything else on every page load, compare the refresh benchmark before and after. It builds a library of 10,000 backups, so don't run it while the end-to-end checks below are running:
+
+```sh
+go test -run '^$' -bench Refresh -benchmem
+```
+
 For changes that touch Docker, engines or the console, also run the end-to-end checks against an installed copy, as CI does:
 
 ```sh
@@ -85,7 +93,7 @@ NODE_PATH=/tmp/openrds-ui/node_modules node scripts/ui-smoke.cjs
 
 `scripts/smoke.py` exercises PostgreSQL, MySQL and Valkey against real Docker: accounts and roles; database users, password changes, required TLS and the firewall gateway; parameters, a deferred change applied by reboot, metric history, backups, deletion protection and a final snapshot restored into a new database; a snapshot of each engine's oldest version restored into its latest; MySQL point-in-time recovery; backup storage against a signature-checking S3 gateway, including an import and restore after losing the local copy; and a second server reached over SSH (a privileged Docker-in-Docker container), with a database there on its private address, a snapshot restored onto this server, a read replica on a second test server, a move between them, and a server going away and coming back.
 
-`scripts/ui-smoke.cjs` drives Chrome on desktop and mobile: first-run setup, creating a database from the dashboard, every tab, settings changed in place, a snapshot, modify and reboot, backup storage, the restore form, events and themes, and a viewer who accepts an invitation in a second browser. It needs a fresh installation, because it creates the first administrator account.
+`scripts/ui-smoke.cjs` drives Chrome on desktop and mobile: first-run setup, creating a database from the dashboard, every tab, settings changed in place, a snapshot, modify and reboot, backup storage, the restore form, events and themes, and a viewer who accepts an invitation in a second browser. On a fresh installation it creates the first administrator account; with accounts already there, it signs in through an invitation made with the API key. CI runs it after `scripts/smoke.py` on the same installation.
 
 ## Guidelines
 

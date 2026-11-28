@@ -40,7 +40,8 @@ Each database runs in its own container with its own volume, network and generat
 - **Many servers, one console.** Add servers over SSH and choose where each database runs. Move a database to another server in one step with seconds of write downtime, reach databases from your other servers over a private network with an allowlist, see each server's capacity, and get alerted when one becomes unreachable.
 - **Read replicas.** Read-only copies of PostgreSQL, MySQL and Valkey databases that follow their source within seconds, each with its own port and size, on the same server or another one. Send reads to them, watch their lag, and promote one to a standalone database, for example when a server is lost.
 - **Secure by default.** Databases listen only on the server itself. Add read-only or read-write database users, change passwords, require TLS with a certificate authority per installation, and open a database to the internet only through an IP allowlist. Every password reveal is recorded.
-- **A console that answers at a glance.** The database list shows live load, copyable endpoints and replicas under their source, and previews any database beside the list with its last hour of CPU, memory and connections and quick actions. Each database opens on an overview of its health, how to connect, replication, backups and recent events.
+- **A console that answers at a glance.** The database list shows live load, copyable endpoints and replicas under their source, and previews any database beside the list with its last hour of CPU, memory and connections and quick actions. Each database opens on an overview of its health, how to connect, replication, backups and recent events. **Jump to** (Ctrl K, or ⌘K on a Mac) finds any page, database or server in a few keystrokes.
+- **Fast at any size.** Lists of databases, backups and events come in pages, so the console stays quick with hundreds of databases and thousands of backups, even over a slow SSH tunnel.
 - **Easy to operate.** Monitoring charts with connections, throughput and cache hit ratio, Performance insights with the top statements and what runs now, logs and events, deletion protection, settings that apply now or at the next restart, and a dashboard that recommends what to fix. Snapshots and restores of large databases finish even if your browser disconnects, and backups never fill the disk your databases need.
 - **Made for teams.** Accounts with admin, operator and viewer roles, invitations, password resets and an audit trail.
 - **Alerts where you work.** Slack, Discord, Telegram, webhook or email messages when a database turns unhealthy, crashes or runs out of memory, an operation fails, or disk space runs low.
@@ -71,11 +72,15 @@ A database keeps its version until you upgrade it: **Upgrade** moves it to a new
     <td width="50%"><img src="docs/images/network.png" alt="Connectivity and security with public access through an IP allowlist"><p align="center"><b>Public access and firewall</b></p></td>
     <td width="50%"><img src="docs/images/storage.png" alt="Backup storage connected to an S3-compatible bucket"><p align="center"><b>S3 backup storage</b></p></td>
   </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/servers.png" alt="The Servers page: each server's status, capacity and databases, and a card to add another"><p align="center"><b>Servers</b></p></td>
+    <td width="50%"><img src="docs/images/create.png" alt="The create database form with engine, version, template and a summary of the host's allocation"><p align="center"><b>Create a database</b></p></td>
+  </tr>
 </table>
 
 ## Quick start
 
-You need a Linux server with SSH access. The installer sets up Docker for you if it's missing.
+You need a Linux VPS (Ubuntu 24.04 or 22.04, or Debian 12, with 2 GB of memory or more) and SSH access. The installer sets up Docker for you if it's missing.
 
 1. **Install.** On the server, run:
 
@@ -93,14 +98,14 @@ You need a Linux server with SSH access. The installer sets up Docker for you if
 4. **Create a database.** Pick PostgreSQL, MySQL or Valkey. It's ready in about a minute.
 5. **Connect.** Choose **Connect** on the database and copy the connection string into your app.
 
-**New to servers?** Follow the **[step-by-step install guide with screenshots](docs/install.md)**. It also covers backups to S3, inviting your team, internet access and troubleshooting.
+**New to servers?** Follow the **[step-by-step Linux VPS guide with screenshots](docs/install.md)**. It covers preparing the server, backups to S3, alerts, your team, internet access, more servers, updates and troubleshooting.
 
 <details>
 <summary><b>Installer details and requirements</b></summary>
 
 <br>
 
-The installer downloads OpenRDS into `~/openrds`, offers to install Docker with Docker's official script if it is missing, builds and starts the console, and then prints what to open. It continues with `sudo` when your user cannot use Docker. Running it again, or `sh install.sh` in your copy, updates OpenRDS and keeps your databases, backups and accounts. Set `OPENRDS_YES=1` to accept its questions, or `OPENRDS_DIR` to choose another folder.
+The installer downloads OpenRDS into `~/openrds`, offers to install Docker with Docker's official script if it is missing, builds and starts the console, and then prints what to open. It continues with `sudo` when your user cannot use Docker. Running the install command again updates OpenRDS (in a clone of your own, run `git pull` and then `sh install.sh`), and keeps your databases, backups and accounts. Set `OPENRDS_YES=1` to accept its questions, or `OPENRDS_DIR` to choose another folder.
 
 OpenRDS needs **Docker Engine 28+** (rootful, with the local `/var/run/docker.sock`) and the **Docker Compose plugin**. Size the server for your engines, data and local backups. To choose another console port or monitoring interval, copy `.env.example` to `.env` and set `OPENRDS_PORT` or `OPENRDS_METRICS_INTERVAL` before installing.
 
@@ -116,13 +121,14 @@ The console and databases listen only on the server itself, so you reach them th
 flowchart LR
     you["You<br/>browser or API"] -- "SSH tunnel" --> cp["OpenRDS<br/>console and API"]
     cp -- "Docker Compose" --> dbs[("PostgreSQL · MySQL · Valkey<br/>one container, volume and<br/>network per database")]
+    cp -. "Docker over SSH" .-> more[("Databases on<br/>other servers")]
     apps["Your apps<br/>on the server"] --> dbs
     clients["Allowed internet<br/>clients"] -. "optional" .-> gw["Gateway<br/>IP allowlist"] -.-> dbs
     cp -- "backups" --> vol[("Control volume")]
     cp -. "signed copies" .-> s3[("S3-compatible<br/>storage")]
 ```
 
-- **One control plane.** A single Go binary serves the console and the HTTP API, and drives Docker through the Docker CLI and Compose: on its own server through the Docker socket, on others as Docker over SSH with pinned host keys. Its state (accounts, database metadata, certificates, backups) lives in one Docker volume.
+- **One control plane.** A single Go binary serves the console and the HTTP API. It makes changes with Docker Compose and reads status and metrics from the Docker Engine API: on its own server through the Docker socket, on others as Docker over SSH with pinned host keys. Its state (accounts, database metadata, certificates, backups) lives in one Docker volume, with backup and event lists kept in memory so pages come back in milliseconds.
 - **Isolated databases.** Every database is its own Compose project, with its own network, data volume and random password. Ports are published on the server's loopback interface only.
 - **Opt-in internet access.** A small gateway container forwards connections from allowed addresses only, and logs every attempt.
 - **Backups off the server.** Backups are logical dumps; for point-in-time recovery, PostgreSQL's are physical base backups with archived WAL, and MySQL's record their position in the binary logs OpenRDS copies every minute. They are stored on the server and, when you connect storage, copied to an S3-compatible bucket with signed requests.
@@ -132,8 +138,8 @@ flowchart LR
 
 | Guide | What's inside |
 | --- | --- |
-| [Install guide](docs/install.md) | Set up a VPS step by step, with screenshots: install, first database, backups, team and internet access. |
-| [User guide](docs/guide.md) | Databases and versions, access and security, settings, backups and snapshots, accounts and roles, monitoring, where state lives. |
+| [Install guide](docs/install.md) | Set up a Linux VPS step by step, with screenshots: prepare the server, install, first database, backups, alerts, team, internet access, more servers, updates, uninstall and troubleshooting. |
+| [User guide](docs/guide.md) | Databases and versions, access and security, servers, connection pooling, read replicas, settings, backups and point-in-time recovery, accounts and roles, notifications, monitoring, where state lives. |
 | [HTTP API](docs/api.md) | Authentication, every endpoint, the roles they need, and examples. |
 | [Contributing](CONTRIBUTING.md) | Development setup, project layout, tests and pull requests. |
 | [Security policy](SECURITY.md) | How to report a vulnerability privately. |
