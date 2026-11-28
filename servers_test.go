@@ -390,3 +390,36 @@ func TestALeavingPageSaysNothingAboutServers(t *testing.T) {
 		t.Fatal("a request the browser cancelled does not mark a server unreachable")
 	}
 }
+
+// The default data directory when running from source is relative. Docker
+// over SSH must still find the console's ssh wrapper and key by absolute
+// paths: the docker CLI refuses a program found through a relative PATH entry.
+func TestARelativeDataDirectoryStillReachesServers(t *testing.T) {
+	t.Chdir(t.TempDir())
+	m, err := openManager(".openrds", "engines", runFunc(newFleet().run))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := m.serverEnv(server{Address: "openrds@10.0.0.9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var path string
+	for _, v := range env {
+		if p, ok := strings.CutPrefix(v, "PATH="); ok {
+			path = p
+		}
+	}
+	if first, _, _ := strings.Cut(path, ":"); !filepath.IsAbs(first) {
+		t.Fatalf("PATH starts with %q", first)
+	}
+	config, err := os.ReadFile(filepath.Join(m.sshDir(), "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(config), "\n") {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), " "); ok && (key == "IdentityFile" || key == "UserKnownHostsFile") && !filepath.IsAbs(strings.Trim(value, `"`)) {
+			t.Fatalf("%s is relative: %s", key, value)
+		}
+	}
+}

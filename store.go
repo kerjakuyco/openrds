@@ -153,6 +153,13 @@ type manager struct {
 }
 
 func openManager(dir, templates string, docker dockerRunner) (*manager, error) {
+	// Docker over SSH runs the ssh wrapper in this directory from PATH, and
+	// the docker CLI, a Go program, refuses one found through a relative
+	// entry. So the default when running from source, .openrds, becomes absolute.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
 	for _, sub := range []string{"instances", "backups", "compose", "tls"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return nil, err
