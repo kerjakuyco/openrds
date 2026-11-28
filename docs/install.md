@@ -104,7 +104,7 @@ Open the database and choose **Connect**: the **Connect** tab shows its connecti
 
 ## 7. Protect your backups
 
-**Automated backups** run every day and are kept for the days you choose. The Production template turns them on. Under **Backups → Automated backups**, you can check each database's schedule and use **Turn on** or **Change**.
+**Automated backups** run every day and are kept for the days you choose. The Production template turns them on. Under **Backups → Schedules**, you can check each database's schedule and use **Turn on** or **Change**.
 
 ![Automated backups: one row per database](images/backups.png)
 

@@ -420,7 +420,7 @@ function databaseForm({ mode, eng, initial, source }) {
   const summary = h("div", { class: "summary-body" });
   const capacity = h("div", { class: "capacity" });
   const submit = h("button", { type: "submit", class: "btn primary wide" }, { create: "Create database", restore: "Restore database", modify: "Continue" }[mode]);
-  const aside = h("aside", { class: "form-summary panel" }, h("header", { class: "panel-head" }, h("h2", null, "Summary")), summary, capacity, h("div", { class: "summary-actions" }, submit, h("a", { class: "btn wide", href: mode === "modify" ? `#/databases/${initial.name}` : mode === "restore" ? "#/snapshots" : "#/databases" }, "Cancel")));
+  const aside = h("aside", { class: "form-summary panel" }, h("header", { class: "panel-head" }, h("h2", null, "Summary")), summary, capacity, h("div", { class: "summary-actions" }, submit, h("a", { class: "btn wide", href: mode === "modify" ? `#/databases/${initial.name}` : mode === "restore" ? "#/backups" : "#/databases" }, "Cancel")));
 
   function renderSummary() {
     const spec = read();
@@ -499,7 +499,7 @@ export async function restoreView(id) {
   await loadEngines();
   if (!state.backups) await sync();
   const b = state.backups?.find(x => x.id === id);
-  if (!b) return { el: h("div", null, heading("Snapshot not found", "It may have been deleted or expired."), h("a", { class: "btn", href: "#/snapshots" }, "Back to snapshots")), title: "Restore", nav: "snapshots", crumbs: [["Snapshots", "#/snapshots"], ["Restore"]] };
+  if (!b) return { el: h("div", null, heading("Snapshot not found", "It may have been deleted or expired."), h("a", { class: "btn", href: "#/backups" }, "Back to backups")), title: "Restore", nav: "backups", crumbs: [["Backups", "#/backups"], ["Restore"]] };
   const eng = engine(b.engine);
   let name = `${b.name.slice(0, 32)}-restore`;
   for (let i = 2; state.instances?.some(d => d.name === name); i++) name = `${b.name.slice(0, 30)}-restore${i}`;
@@ -511,7 +511,7 @@ export async function restoreView(id) {
     delete spec.engine;
     launch({ request: api(`backups/${b.id}/restore`, { method: "POST", body: spec }), label: `Restore ${spec.name}`, success: `${spec.name} was restored from the snapshot.`, then: `#/databases/${spec.name}`, note: f.note, submit: f.submit });
   });
-  return { el: h("div", null, heading(`Restore snapshot`, `From the ${new Date(b.createdAt).toLocaleString()} snapshot of ${b.name}.`), f.form), title: "Restore snapshot", nav: b.kind === "automated" ? "automated" : "snapshots", crumbs: [[b.kind === "automated" ? "Automated backups" : "Snapshots", b.kind === "automated" ? "#/automated-backups" : "#/snapshots"], ["Restore"]], update: f.refresh };
+  return { el: h("div", null, heading(`Restore snapshot`, `From the ${new Date(b.createdAt).toLocaleString()} snapshot of ${b.name}.`), f.form), title: "Restore snapshot", nav: "backups", crumbs: [["Backups", "#/backups"], ["Restore"]], update: f.refresh };
 }
 
 const describeRuntime = (c) => ({ cpu: c.cpus ? `${c.cpus} vCPU` : "Unlimited", memory: c.memoryMiB ? mib(c.memoryMiB) : "Unlimited" });

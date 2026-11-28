@@ -44,8 +44,7 @@ const ROUTES = [
   [/^\/databases\/([a-z0-9-]+)\/modify$/, operatorOnly(m => modifyView(m[1]))],
   [/^\/databases\/([a-z0-9-]+)(?:\/([a-z]+))?$/, m => instanceView(m[1], m[2]), "instance"],
   [/^\/snapshots\/([a-f0-9]{32})\/restore$/, operatorOnly(m => restoreView(m[1]))],
-  [/^\/snapshots$/, () => backupsView("manual")],
-  [/^\/automated-backups$/, () => backupsView("automated")],
+  [/^\/backups(?:\/(snapshots|automated|schedules))?$/, m => backupsView(m[1] || "")],
   [/^\/backup-storage$/, () => storageView()],
   [/^\/servers$/, () => serversView()],
   [/^\/events$/, () => { markEventsSeen(); return eventsView(); }],
@@ -53,7 +52,8 @@ const ROUTES = [
   [/^\/notifications$/, () => notificationsView()],
   [/^\/account$/, () => accountView({ onIdentity })],
 ];
-const LEGACY = { overview: "/", databases: "/databases", backups: "/snapshots", activity: "/events" };
+const LEGACY = { overview: "/", databases: "/databases", backups: "/backups", activity: "/events",
+  "/snapshots": "/backups/snapshots", "/automated-backups": "/backups/schedules" };
 
 let view = null, routeID = 0;
 

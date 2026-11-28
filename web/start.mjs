@@ -21,7 +21,7 @@ export function steps() {
       text: "PostgreSQL, MySQL or Valkey, ready in a minute." },
     { id: "connect", title: "Connect your app", done: flag("openrds-connected"), href: first ? `#/databases/${first.name}` : "#/databases/new", action: "Open the guide",
       text: "Copy a snippet for your language." },
-    { id: "backups", title: "Turn on automated backups", done: dbs.length > 0 && !unprotected, href: unprotected ? `#/databases/${unprotected.name}/modify` : "#/automated-backups", action: "Set a schedule",
+    { id: "backups", title: "Turn on automated backups", done: dbs.length > 0 && !unprotected, href: unprotected ? `#/databases/${unprotected.name}/modify` : "#/backups/schedules", action: "Set a schedule",
       text: "Backups on a schedule, kept as long as you choose." },
     { id: "offsite", title: "Keep an offsite copy", done: flag("openrds-downloaded") || Boolean(state.storage?.enabled), href: "#/backup-storage", action: "Set up storage",
       text: "Copy backups to S3-compatible storage." },

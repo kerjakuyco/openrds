@@ -79,9 +79,11 @@ export function initNav({ onSignOut, theme, setTheme }) {
     if (!state.me) return;
     document.querySelectorAll(".admin-only").forEach(el => { el.hidden = !can("admin"); });
     $("nav-create").hidden = !can("operator");
-    // Databases that need you first, then by name.
-    const dbs = [...(state.instances || [])].sort((a, b) => needsAttention(b) - needsAttention(a) || a.name.localeCompare(b.name));
-    $("db-count").textContent = state.instances ? String(dbs.length) : "";
+    // Only databases that need you get their own links; Databases and
+    // Jump to reach the rest.
+    const all = state.instances || [];
+    const dbs = all.filter(needsAttention).sort((a, b) => a.name.localeCompare(b.name));
+    $("db-count").textContent = state.instances ? String(all.length) : "";
     $("nav-dbs-group").hidden = !dbs.length;
     const down = (state.servers || []).filter(s => !s.reachable).length;
     $("server-count").textContent = (state.servers || []).length > 1 ? String(state.servers.length) : "";
@@ -92,7 +94,7 @@ export function initNav({ onSignOut, theme, setTheme }) {
       const st = statusOf(d);
       return h("a", { href: `#/databases/${d.name}`, class: "db-quick", title: `${d.name} · ${st.label}`, "aria-current": d.name === current ? "page" : null },
         h("span", { class: `dot ${st.tone}`, "aria-hidden": "true" }), h("span", { class: "label" }, d.name), h("span", { class: "sr-only" }, `, ${st.label}`));
-    }), dbs.length > QUICK ? h("a", { href: "#/databases", class: "db-quick more" }, h("span", { class: "label" }, `All ${dbs.length} databases`), icon("chevron-right")) : "");
+    }), dbs.length > QUICK ? h("a", { href: "#/databases", class: "db-quick more" }, h("span", { class: "label" }, `${dbs.length - QUICK} more`), icon("chevron-right")) : "");
     badge($("events-badge"), newFailures(), "New failed operations");
     // Getting started, as a small card until it is done or hidden.
     const list = state.instances ? steps() : [];
@@ -121,8 +123,6 @@ export function initNav({ onSignOut, theme, setTheme }) {
       { element: profile },
       "-",
       { label: "Account settings", icon: "key", run: () => { location.hash = "#/account"; } },
-      can("admin") && { label: "Users", icon: "users", run: () => { location.hash = "#/users"; } },
-      can("admin") && { label: "Notifications", icon: "alert", run: () => { location.hash = "#/notifications"; } },
       "-",
       { element: h("div", { class: "menu-theme-row", role: "presentation" }, h("span", { class: "menu-heading" }, "Theme"), themes) },
       "-",

@@ -2,7 +2,6 @@
 // doing and the one thing to do next.
 import { h, icon, panel, empty, status, statusOf, bytes, mib, plural, ago, isLive, isRunning, needsAttention, percent } from "./lib.mjs";
 import { state, subscribe, can, go } from "./store.mjs";
-import { steps, dismissed, hideStart } from "./start.mjs";
 import { cpuShare } from "./databases.mjs";
 import { preferEngine } from "./forms.mjs";
 
@@ -33,7 +32,7 @@ function recommendations(dbs, now, host) {
   const disk = host?.backupDisk;
   if (disk && disk.freeBytes < 2 * disk.reserveBytes) {
     add(disk.freeBytes < disk.reserveBytes ? "critical" : "warn", disk.freeBytes < disk.reserveBytes ? "Backups are paused: disk almost full" : "Disk space is running low",
-      `${bytes(disk.freeBytes)} free. Backups stop below ${bytes(disk.reserveBytes)} so databases keep running.`, "#/snapshots", "Review snapshots");
+      `${bytes(disk.freeBytes)} free. Backups stop below ${bytes(disk.reserveBytes)} so databases keep running.`, "#/backups/snapshots", "Review snapshots");
   }
   for (const s of (state.servers || []).filter(s => !s.reachable)) {
     add("critical", `${s.name} is unreachable`, `OpenRDS can’t manage, back up or monitor its ${plural(s.databases.length, "database")}.`, "#/servers", "Review");
@@ -50,7 +49,7 @@ function recommendations(dbs, now, host) {
   const unprotected = dbs.filter(d => !d.backupRetentionDays);
   if (unprotected.length) {
     add("warn", `Backups off for ${plural(unprotected.length, "database")}`, unprotected.slice(0, 4).map(d => d.name).join(", ") + (unprotected.length > 4 ? "…" : ""),
-      unprotected.length === 1 ? `#/databases/${unprotected[0].name}/modify` : "#/automated-backups", unprotected.length === 1 ? "Turn on" : "Review");
+      unprotected.length === 1 ? `#/databases/${unprotected[0].name}/modify` : "#/backups/schedules", unprotected.length === 1 ? "Turn on" : "Review");
   }
   for (const d of dbs.filter(d => d.applied)) add("info", `${d.name} needs a restart`, "To apply new settings.", `#/databases/${d.name}/configuration`, "Review");
   const prod = dbs.filter(d => !d.deletionProtection && Object.entries(d.tags || {}).some(([k, v]) => /^env(ironment)?$/i.test(k) && /^prod(uction)?$/i.test(v)));
@@ -108,22 +107,6 @@ function firstRun() {
         h("li", null, h("span", { class: "how-icon" }, icon(symbol)), h("span", null, h("small", null, `Step ${i + 1}`), h("strong", null, title), h("span", { class: "muted" }, text))))));
 }
 
-// The next unfinished getting-started step, one at a time.
-function nextStep() {
-  const list = steps();
-  const next = list.find(s => !s.done);
-  if (!next || dismissed()) return null;
-  const done = list.filter(s => s.done).length;
-  const operate = can("operator") || ["connect", "offsite", "account"].includes(next.id);
-  return h("section", { class: "next-step", "aria-label": "Next step" },
-    h("span", { class: "next-icon" }, icon("spark")),
-    h("div", null, h("p", { class: "kicker" }, `Next step · ${done + 1} of ${list.length}`), h("strong", null, next.title), h("p", { class: "muted" }, next.text)),
-    h("div", { class: "next-actions" },
-      operate ? h("a", { class: "btn primary small", href: next.href }, next.action) : null,
-      h("a", { class: "btn ghost small", href: "#/getting-started" }, "All steps"),
-      h("button", { type: "button", class: "icon-btn ghost", "aria-label": "Hide the next step", title: "Hide. Reopen it from Getting started.", onclick: hideStart }, icon("close"))));
-}
-
 export function dashboardView() {
   const hero = h("div", { class: "dash-hero" });
   const body = h("div");
@@ -138,8 +121,7 @@ export function dashboardView() {
           : up === dbs.length ? [h("span", { class: "dot good" }), h("span", null, dbs.length === 1 ? "Your database is running" : `All ${dbs.length} databases are running`)]
             : [h("span", { class: "dot neutral" }), h("span", null, `${up} of ${plural(dbs.length, "database")} running`)];
     hero.replaceChildren(
-      h("div", null, h("p", { class: "kicker" }, "Dashboard"), h("h1", null, greeting(state.me)), h("p", { class: "summary" }, summary)),
-      can("operator") && dbs?.length ? h("div", { class: "page-actions" }, h("a", { class: "btn primary", href: "#/databases/new" }, icon("plus"), "Create database")) : "");
+      h("div", null, h("p", { class: "kicker" }, "Dashboard"), h("h1", null, greeting(state.me)), h("p", { class: "summary" }, summary)));
 
     if (!dbs) { body.replaceChildren(h("div", { class: "panel" }, empty("db", "Loading your databases…", ""))); return; }
     if (!dbs.length) { body.replaceChildren(firstRun()); return; }
@@ -167,8 +149,8 @@ export function dashboardView() {
     const resources = panel("Resources", {},
       h("div", { class: "res-list" },
         row("db", "Databases", `${up} of ${dbs.length} running`, "#/databases"),
-        row("camera", "Snapshots", backups ? `${manual.length} · ${bytes(manual.reduce((n, b) => n + b.bytes, 0))}` : "—", "#/snapshots"),
-        row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/automated-backups"),
+        row("camera", "Snapshots", backups ? `${manual.length} · ${bytes(manual.reduce((n, b) => n + b.bytes, 0))}` : "—", "#/backups/snapshots"),
+        row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/backups/schedules"),
         row("cloud", "Backup storage", state.storage?.enabled ? `${state.storage.copied} copied` : "Off", "#/backup-storage"),
         (state.servers || []).length > 1 ? row("host", "Servers", `${state.servers.filter(s => s.reachable).length} of ${state.servers.length} reachable`, "#/servers") : null),
       (state.servers || []).length > 1 ? h("div", { class: "cap" }, state.servers.filter(s => s.info).map(s =>
@@ -189,10 +171,9 @@ export function dashboardView() {
             e.actor && e.actor !== "system" && e.actor !== e.name ? ` · ${e.actor}` : "", ` · ${ago(e.at, now)}`)))))
         : empty("bell", "Nothing yet", "Actions show up here."));
 
-    body.replaceChildren(...[nextStep(), h("div", { class: "dash-main" }, cards, h("div", { class: "side-stack" }, attention, resources, activity))].filter(Boolean));
+    body.replaceChildren(h("div", { class: "dash-main" }, cards, h("div", { class: "side-stack" }, attention, resources, activity)));
   }
   render();
   const stop = subscribe(render);
-  window.addEventListener("openrds:start", render);
-  return { el, title: "Dashboard", nav: "dashboard", crumbs: [["Dashboard"]], destroy: () => { stop(); window.removeEventListener("openrds:start", render); } };
+  return { el, title: "Dashboard", nav: "dashboard", crumbs: [["Dashboard"]], destroy: stop };
 }

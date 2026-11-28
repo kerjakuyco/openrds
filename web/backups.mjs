@@ -94,24 +94,29 @@ function schedules(dbs, backups) {
     h("div", { class: "sched-list" }, dbs.map(d => scheduleRow(d, backups.filter(b => b.kind === "automated" && b.name === d.name && Date.parse(b.createdAt) >= Date.parse(d.createdAt)).length))));
 }
 
-export function backupsView(kind) {
-  const automated = kind === "automated";
+// One Backups page: every backup, snapshots, automated ones, and the
+// schedules that take them, as tabs.
+const BACKUP_TABS = [["", "All"], ["snapshots", "Snapshots"], ["automated", "Automated"], ["schedules", "Schedules"]];
+
+export function backupsView(tab = "") {
+  if (!BACKUP_TABS.some(([key]) => key === tab)) tab = "";
   const ui = { instance: "", sort: { key: "created", dir: "desc" } };
   const filter = h("select", { "aria-label": "Filter by database" });
   filter.addEventListener("change", () => { ui.instance = filter.value; render(); });
-  const listSlot = h("div");
-  const settingsSlot = h("div");
+  const body = h("div", { class: "stack-gap" });
   const count = h("span", { class: "counter" });
   const totals = h("p", { class: "muted" });
+  const listSlot = h("div");
   const main = h("section", { class: "panel" },
-    h("header", { class: "panel-head" }, h("div", null, h("h2", null, automated ? "Backups" : "Snapshots", count), totals),
+    h("header", { class: "panel-head" }, h("div", null, h("h2", null, { "": "All backups", snapshots: "Snapshots", automated: "Automated backups" }[tab] || "", count), totals),
       h("div", { class: "panel-actions" }, filter)),
     listSlot);
+  const tabs = h("div", { class: "tabs", role: "tablist", "aria-label": "Backups" }, BACKUP_TABS.map(([key, label]) =>
+    h("a", { role: "tab", href: key ? `#/backups/${key}` : "#/backups", "aria-selected": String(key === tab) }, label)));
   const el = h("div", null,
-    h("div", { class: "page-head" }, h("div", null, h("h1", null, automated ? "Automated backups" : "Snapshots"),
-      h("p", { class: "muted" }, automated ? "Backups on a schedule, from daily to hourly, kept for the days you choose." : "Backups you take. They stay until you delete them.")),
-      h("div", { class: "page-actions" }, h("a", { class: "btn", href: automated ? "#/snapshots" : "#/automated-backups" }, icon(automated ? "camera" : "history"), automated ? "View snapshots" : "View automated backups"))),
-    h("div", { class: "stack-gap" }, automated ? settingsSlot : null, main));
+    h("div", { class: "page-head" }, h("div", null, h("h1", null, "Backups"),
+      h("p", { class: "muted" }, "Snapshots you take, and backups on a schedule."))),
+    tabs, body);
 
   function onSort(key) {
     ui.sort = { key, dir: ui.sort.key === key && ui.sort.dir === "asc" ? "desc" : "asc" };
@@ -120,9 +125,13 @@ export function backupsView(kind) {
 
   function render() {
     const all = state.backups, dbs = state.instances || [];
-    if (automated) settingsSlot.replaceChildren(dbs.length ? schedules(dbs, all || []) : panel("Schedules", {}, empty("db", "No databases yet", "Create a database to back it up.")));
+    if (tab === "schedules") {
+      body.replaceChildren(dbs.length ? schedules(dbs, all || []) : panel("Schedules", {}, empty("db", "No databases yet", "Create a database to back it up.")));
+      return;
+    }
+    body.replaceChildren(main);
     if (!all) { listSlot.replaceChildren(empty("archive", "Loading backups…", "")); return; }
-    const mine = all.filter(b => automated ? b.kind === "automated" : b.kind !== "automated");
+    const mine = all.filter(b => tab === "automated" ? b.kind === "automated" : tab === "snapshots" ? b.kind !== "automated" : true);
     const names = [...new Set(mine.map(b => b.name))].sort();
     if (ui.instance && !names.includes(ui.instance)) ui.instance = "";
     filter.hidden = names.length < 2;
@@ -131,12 +140,14 @@ export function backupsView(kind) {
     count.textContent = String(list.length);
     totals.textContent = list.length ? `${bytes(list.reduce((n, b) => n + b.bytes, 0))} on this server. Download copies to keep them safe.` : "";
     const next = dbs.filter(d => d.nextBackupAt && isLive(d)).map(d => d.nextBackupAt).sort()[0];
-    listSlot.replaceChildren(list.length ? backupTable(list, { showType: !automated, sort: ui.sort, onSort }) : automated
-      ? empty("history", "No automated backups yet", next ? `The first one runs ${ago(next)}.` : "Turn on a schedule above.")
-      : empty("camera", "No snapshots yet", "Use Actions → Take snapshot on a database."));
+    listSlot.replaceChildren(list.length ? backupTable(list, { showType: tab !== "automated", sort: ui.sort, onSort })
+      : tab === "automated" ? empty("history", "No automated backups yet", next ? `The first one runs ${ago(next)}.` : "Turn one on under Schedules.")
+        : tab === "snapshots" ? empty("camera", "No snapshots yet", "Use Actions → Take snapshot on a database.")
+          : empty("archive", "No backups yet", "Take a snapshot, or turn on a schedule."));
   }
 
   render();
   const stop = subscribe((changed) => { if (changed.has("backups") || changed.has("instances")) render(); });
-  return { el, title: automated ? "Automated backups" : "Snapshots", nav: automated ? "automated" : "snapshots", crumbs: [[automated ? "Automated backups" : "Snapshots"]], destroy: stop };
+  const title = BACKUP_TABS.find(([key]) => key === tab)[1];
+  return { el, title: tab ? `${title} · Backups` : "Backups", nav: "backups", crumbs: tab ? [["Backups", "#/backups"], [title]] : [["Backups"]], destroy: stop };
 }

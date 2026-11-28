@@ -269,9 +269,9 @@ async function run() {
     await page.keyboard.press("Enter");
     await page.waitForURL(new RegExp(`#/databases/${name}$`));
     // Sidebar groups fold.
-    await page.locator("nav#nav").getByRole("button", { name: "Backups" }).click();
-    assert.equal(await page.locator('nav#nav [data-nav="snapshots"]').isVisible(), false, "a folded group hides its pages");
-    await page.locator("nav#nav").getByRole("button", { name: "Backups" }).click();
+    await page.locator("nav#nav").getByRole("button", { name: "Settings" }).click();
+    assert.equal(await page.locator('nav#nav [data-nav="storage"]').isVisible(), false, "a folded group hides its pages");
+    await page.locator("nav#nav").getByRole("button", { name: "Settings" }).click();
 
     // Servers: the console's own, and how to add another.
     await page.locator('nav#nav [data-nav="servers"]').click();
@@ -288,8 +288,10 @@ async function run() {
     await wizard.getByRole("button", { name: "Back" }).click();
     await wizard.getByRole("button", { name: "Cancel" }).click();
 
-    // Automated backups: one row per database, changed in place.
-    await page.locator('nav#nav [data-nav="automated"]').click();
+    // Backups: one page; schedules are a tab, one row per database, changed in place.
+    await page.locator('nav#nav [data-nav="backups"]').click();
+    await page.getByRole("tab", { name: "Schedules" }).click();
+    await page.waitForURL(/#\/backups\/schedules$/);
     const schedule = page.locator(".sched-row").filter({ hasText: name });
     await schedule.getByText("Kept 3 days", { exact: false }).waitFor();
     await schedule.getByText("Every 6 hours from", { exact: false }).waitFor();
@@ -318,8 +320,12 @@ async function run() {
     await page.getByText("No channels yet").waitFor();
 
     // Restore form is prefilled from the snapshot.
-    await page.locator('nav#nav [data-nav="snapshots"]').click();
+    await page.locator('nav#nav [data-nav="backups"]').click();
+    await page.getByRole("tab", { name: "Snapshots" }).click();
+    await page.waitForURL(/#\/backups\/snapshots$/);
+    await page.locator(".panel-head h2").filter({ hasText: "Snapshots" }).waitFor();
     const snapshot = page.locator("tbody tr").filter({ hasText: name });
+    await snapshot.first().waitFor({ timeout: 60000 });
     await snapshot.getByRole("link", { name: /Restore the/ }).click();
     await page.getByRole("heading", { name: "Restore snapshot" }).waitFor();
     assert.equal(await page.getByLabel("DB instance identifier").inputValue(), `${name}-restore`);
@@ -391,7 +397,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, jump to, sidebar groups, servers, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, jump to, sidebar groups, backups tabs, servers, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

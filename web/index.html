@@ -43,25 +43,19 @@
           <a href="#/" data-nav="dashboard" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="/icons.svg#overview"/></svg><span class="label">Dashboard</span></a>
           <a href="#/databases" data-nav="databases" title="Databases"><svg class="icon" aria-hidden="true"><use href="/icons.svg#db"/></svg><span class="label">Databases</span><span id="db-count" class="nav-count"></span></a>
           <a href="#/servers" data-nav="servers" title="Servers"><svg class="icon" aria-hidden="true"><use href="/icons.svg#host"/></svg><span class="label">Servers</span><span id="server-count" class="nav-count"></span></a>
+          <a href="#/backups" data-nav="backups" title="Backups"><svg class="icon" aria-hidden="true"><use href="/icons.svg#archive"/></svg><span class="label">Backups</span></a>
           <a href="#/events" data-nav="events" title="Events"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bell"/></svg><span class="label">Events</span><span id="events-badge" class="nav-badge warn" hidden></span></a>
         </div>
-        <section class="nav-group nav-dbs-group" data-group="dbs" id="nav-dbs-group">
-          <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-dbs"><span class="label">Your databases</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
+        <section class="nav-group nav-dbs-group" data-group="dbs" id="nav-dbs-group" hidden>
+          <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-dbs"><span class="label">Needs attention</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
           <div id="nav-dbs" class="nav-items nav-dbs"></div>
         </section>
-        <section class="nav-group" data-group="backups">
-          <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-backups"><span class="label">Backups</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
-          <div id="nav-backups" class="nav-items">
-            <a href="#/snapshots" data-nav="snapshots" title="Snapshots"><svg class="icon" aria-hidden="true"><use href="/icons.svg#camera"/></svg><span class="label">Snapshots</span></a>
-            <a href="#/automated-backups" data-nav="automated" title="Automated backups"><svg class="icon" aria-hidden="true"><use href="/icons.svg#history"/></svg><span class="label">Automated backups</span></a>
-            <a href="#/backup-storage" data-nav="storage" title="Backup storage"><svg class="icon" aria-hidden="true"><use href="/icons.svg#cloud"/></svg><span class="label">Backup storage</span></a>
-          </div>
-        </section>
-        <section class="nav-group admin-only" data-group="settings" hidden>
+        <section class="nav-group" data-group="settings">
           <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-settings"><span class="label">Settings</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
           <div id="nav-settings" class="nav-items">
-            <a href="#/users" data-nav="users" title="Users"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg><span class="label">Users</span></a>
-            <a href="#/notifications" data-nav="notifications" title="Notifications"><svg class="icon" aria-hidden="true"><use href="/icons.svg#alert"/></svg><span class="label">Notifications</span></a>
+            <a href="#/backup-storage" data-nav="storage" title="Backup storage"><svg class="icon" aria-hidden="true"><use href="/icons.svg#cloud"/></svg><span class="label">Backup storage</span></a>
+            <a href="#/users" data-nav="users" class="admin-only" title="Users" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg><span class="label">Users</span></a>
+            <a href="#/notifications" data-nav="notifications" class="admin-only" title="Notifications" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#alert"/></svg><span class="label">Notifications</span></a>
           </div>
         </section>
       </nav>

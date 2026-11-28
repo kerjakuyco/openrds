@@ -200,8 +200,7 @@ function intro() {
 export function serversView() {
   const grid = h("div", { class: "srv-grid" });
   const summary = h("p", { class: "muted fleet-summary" });
-  const head = h("div", { class: "page-head" }, h("div", null, h("h1", null, "Servers"), summary),
-    can("admin") ? h("div", { class: "page-actions" }, h("button", { type: "button", class: "btn primary", onclick: addServer }, icon("plus"), "Add server")) : null);
+  const head = h("div", { class: "page-head" }, h("div", null, h("h1", null, "Servers"), summary));
   const top = h("div");
   const el = h("div", { class: "stack-gap" }, head, top, grid);
 
