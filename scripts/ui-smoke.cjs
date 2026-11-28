@@ -261,6 +261,18 @@ async function run() {
     await page.getByRole("link", { name: `Open ${name}` }).waitFor();
     assert.equal(await page.locator("#fleet-list tbody tr").count(), 1);
 
+    // Jump to: Ctrl+K finds a database by part of its name.
+    await page.keyboard.press("Control+K");
+    const jump = page.getByRole("dialog", { name: "Jump to" });
+    await jump.getByRole("combobox").fill(name.slice(0, 8));
+    await jump.getByRole("option", { name: new RegExp(name) }).waitFor();
+    await page.keyboard.press("Enter");
+    await page.waitForURL(new RegExp(`#/databases/${name}$`));
+    // Sidebar groups fold.
+    await page.locator("nav#nav").getByRole("button", { name: "Backups" }).click();
+    assert.equal(await page.locator('nav#nav [data-nav="snapshots"]').isVisible(), false, "a folded group hides its pages");
+    await page.locator("nav#nav").getByRole("button", { name: "Backups" }).click();
+
     // Servers: the console's own, and how to add another.
     await page.locator('nav#nav [data-nav="servers"]').click();
     await page.getByRole("heading", { name: "Servers", exact: true }).waitFor();
@@ -379,7 +391,7 @@ async function run() {
     await page.getByRole("menuitem", { name: "Sign out" }).click();
     await page.getByRole("heading", { name: "Open your workspace" }).waitFor();
     assert.deepEqual(errors, []);
-    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, servers, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
+    console.log("Browser: first-run setup, create with parameters and tags, overview, connectivity guide, connection pooling, database users and passwords, network access, read replica and promotion, backup storage, jump to, sidebar groups, servers, notifications, monitoring, performance, logs, configuration, point-in-time recovery, snapshot, deferred modify and reboot, search and preview, restore form, engine upgrade, events, themes, invite and viewer role, mobile layout and sign out passed.");
   } finally {
     await browser.close();
     for (const db of await api("instances")) if (db.name === name) await api(`instances/${name}`, "DELETE");

@@ -37,24 +37,39 @@
         <button id="nav-close" class="icon-btn rail-btn mobile-only" type="button" aria-label="Close navigation"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button>
       </div>
       <a id="nav-create" class="btn primary nav-create" href="#/databases/new" title="Create database" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#plus"/></svg><span class="label">Create database</span></a>
+      <button id="jump" class="jump" type="button" title="Jump to… (Ctrl K)" aria-keyshortcuts="Control+K Meta+K"><svg class="icon" aria-hidden="true"><use href="/icons.svg#search"/></svg><span class="label">Jump to…</span><kbd class="label" id="jump-key">Ctrl K</kbd></button>
       <nav id="nav" aria-label="Main">
-        <a href="#/" data-nav="dashboard" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="/icons.svg#overview"/></svg><span class="label">Dashboard</span></a>
-        <a href="#/getting-started" data-nav="start" title="Getting started"><svg class="icon" aria-hidden="true"><use href="/icons.svg#spark"/></svg><span class="label">Getting started</span><span id="start-badge" class="nav-badge info" hidden></span></a>
-        <p class="nav-label"><span class="label">Databases</span></p>
-        <a href="#/databases" data-nav="databases" title="All databases"><svg class="icon" aria-hidden="true"><use href="/icons.svg#db"/></svg><span class="label">All databases</span><span id="db-count" class="nav-count"></span></a>
-        <div id="nav-dbs" class="nav-dbs"></div>
-        <a href="#/servers" data-nav="servers" title="Servers"><svg class="icon" aria-hidden="true"><use href="/icons.svg#host"/></svg><span class="label">Servers</span><span id="server-count" class="nav-count"></span></a>
-        <p class="nav-label"><span class="label">Backups</span></p>
-        <a href="#/snapshots" data-nav="snapshots" title="Snapshots"><svg class="icon" aria-hidden="true"><use href="/icons.svg#camera"/></svg><span class="label">Snapshots</span></a>
-        <a href="#/automated-backups" data-nav="automated" title="Automated backups"><svg class="icon" aria-hidden="true"><use href="/icons.svg#history"/></svg><span class="label">Automated backups</span></a>
-        <a href="#/backup-storage" data-nav="storage" title="Backup storage"><svg class="icon" aria-hidden="true"><use href="/icons.svg#cloud"/></svg><span class="label">Backup storage</span></a>
-        <p class="nav-label"><span class="label">Activity</span></p>
-        <a href="#/events" data-nav="events" title="Events"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bell"/></svg><span class="label">Events</span><span id="events-badge" class="nav-badge warn" hidden></span></a>
-        <p class="nav-label admin-only" hidden><span class="label">Administration</span></p>
-        <a href="#/users" data-nav="users" class="admin-only" title="Users" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg><span class="label">Users</span></a>
-        <a href="#/notifications" data-nav="notifications" class="admin-only" title="Notifications" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#alert"/></svg><span class="label">Notifications</span></a>
+        <div class="nav-group nav-main">
+          <a href="#/" data-nav="dashboard" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="/icons.svg#overview"/></svg><span class="label">Dashboard</span></a>
+          <a href="#/databases" data-nav="databases" title="Databases"><svg class="icon" aria-hidden="true"><use href="/icons.svg#db"/></svg><span class="label">Databases</span><span id="db-count" class="nav-count"></span></a>
+          <a href="#/servers" data-nav="servers" title="Servers"><svg class="icon" aria-hidden="true"><use href="/icons.svg#host"/></svg><span class="label">Servers</span><span id="server-count" class="nav-count"></span></a>
+          <a href="#/events" data-nav="events" title="Events"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bell"/></svg><span class="label">Events</span><span id="events-badge" class="nav-badge warn" hidden></span></a>
+        </div>
+        <section class="nav-group nav-dbs-group" data-group="dbs" id="nav-dbs-group">
+          <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-dbs"><span class="label">Your databases</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
+          <div id="nav-dbs" class="nav-items nav-dbs"></div>
+        </section>
+        <section class="nav-group" data-group="backups">
+          <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-backups"><span class="label">Backups</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
+          <div id="nav-backups" class="nav-items">
+            <a href="#/snapshots" data-nav="snapshots" title="Snapshots"><svg class="icon" aria-hidden="true"><use href="/icons.svg#camera"/></svg><span class="label">Snapshots</span></a>
+            <a href="#/automated-backups" data-nav="automated" title="Automated backups"><svg class="icon" aria-hidden="true"><use href="/icons.svg#history"/></svg><span class="label">Automated backups</span></a>
+            <a href="#/backup-storage" data-nav="storage" title="Backup storage"><svg class="icon" aria-hidden="true"><use href="/icons.svg#cloud"/></svg><span class="label">Backup storage</span></a>
+          </div>
+        </section>
+        <section class="nav-group admin-only" data-group="settings" hidden>
+          <button class="nav-label" type="button" aria-expanded="true" aria-controls="nav-settings"><span class="label">Settings</span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#chevron"/></svg></button>
+          <div id="nav-settings" class="nav-items">
+            <a href="#/users" data-nav="users" title="Users"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg><span class="label">Users</span></a>
+            <a href="#/notifications" data-nav="notifications" title="Notifications"><svg class="icon" aria-hidden="true"><use href="/icons.svg#alert"/></svg><span class="label">Notifications</span></a>
+          </div>
+        </section>
       </nav>
       <div class="side-foot">
+        <a id="nav-start" class="start-card" href="#/getting-started" data-nav="start" title="Getting started" hidden>
+          <span class="start-card-head"><svg class="icon" aria-hidden="true"><use href="/icons.svg#spark"/></svg><span class="label">Getting started</span><span id="start-badge" class="nav-count"></span></span>
+          <span class="start-bar label" aria-hidden="true"><span id="start-fill"></span></span>
+        </a>
         <a class="side-link" href="https://github.com/kerjakuyco/openrds#readme" target="_blank" rel="noopener noreferrer" title="Documentation (opens in a new tab)"><svg class="icon" aria-hidden="true"><use href="/icons.svg#book"/></svg><span class="label">Documentation</span></a>
         <div id="account" class="account"></div>
       </div>

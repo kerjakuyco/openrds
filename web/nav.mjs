@@ -1,8 +1,9 @@
 // The sidebar: navigation with live counts, quick links to databases, the
 // account menu, a collapsible rail on desktop and a drawer on small screens.
-import { h, icon, menu, avatar, ROLES, statusOf } from "./lib.mjs";
+import { h, icon, menu, avatar, ROLES, statusOf, needsAttention } from "./lib.mjs";
 import { state, can, subscribe } from "./store.mjs";
-import { remaining, dismissed } from "./start.mjs";
+import { remaining, dismissed, steps } from "./start.mjs";
+import { openPalette } from "./palette.mjs";
 
 const $ = (id) => document.getElementById(id);
 const QUICK = 6;
@@ -34,6 +35,33 @@ export function initNav({ onSignOut, theme, setTheme }) {
   collapse(read("openrds-collapsed") === "1");
   toggle.addEventListener("click", () => collapse(!shell.classList.contains("collapsed")));
 
+  // Groups fold away and stay folded, per browser.
+  let folded = {};
+  try { folded = JSON.parse(read("openrds-nav-folded") || "{}"); } catch { folded = {}; }
+  document.querySelectorAll(".nav-group[data-group]").forEach(group => {
+    const button = group.querySelector(".nav-label");
+    const set = (open) => {
+      button.setAttribute("aria-expanded", String(open));
+      group.classList.toggle("folded", !open);
+    };
+    set(!folded[group.dataset.group]);
+    button.addEventListener("click", () => {
+      const open = button.getAttribute("aria-expanded") !== "true";
+      set(open);
+      folded[group.dataset.group] = !open;
+      write("openrds-nav-folded", JSON.stringify(folded));
+    });
+  });
+
+  // Jump to anything: the button, or Ctrl/Cmd K anywhere.
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  $("jump-key").textContent = mac ? "⌘K" : "Ctrl K";
+  $("jump").title = `Jump to… (${mac ? "⌘K" : "Ctrl K"})`;
+  $("jump").addEventListener("click", () => { drawer(false); openPalette(); });
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k" && state.signedIn) { e.preventDefault(); openPalette(); }
+  });
+
   const opener = $("menu-toggle");
   function drawer(open) {
     document.body.classList.toggle("nav-open", open);
@@ -51,8 +79,10 @@ export function initNav({ onSignOut, theme, setTheme }) {
     if (!state.me) return;
     document.querySelectorAll(".admin-only").forEach(el => { el.hidden = !can("admin"); });
     $("nav-create").hidden = !can("operator");
-    const dbs = [...(state.instances || [])].sort((a, b) => a.name.localeCompare(b.name));
+    // Databases that need you first, then by name.
+    const dbs = [...(state.instances || [])].sort((a, b) => needsAttention(b) - needsAttention(a) || a.name.localeCompare(b.name));
     $("db-count").textContent = state.instances ? String(dbs.length) : "";
+    $("nav-dbs-group").hidden = !dbs.length;
     const down = (state.servers || []).filter(s => !s.reachable).length;
     $("server-count").textContent = (state.servers || []).length > 1 ? String(state.servers.length) : "";
     $("server-count").classList.toggle("warn", down > 0);
@@ -62,9 +92,15 @@ export function initNav({ onSignOut, theme, setTheme }) {
       const st = statusOf(d);
       return h("a", { href: `#/databases/${d.name}`, class: "db-quick", title: `${d.name} · ${st.label}`, "aria-current": d.name === current ? "page" : null },
         h("span", { class: `dot ${st.tone}`, "aria-hidden": "true" }), h("span", { class: "label" }, d.name), h("span", { class: "sr-only" }, `, ${st.label}`));
-    }), dbs.length > QUICK ? h("a", { href: "#/databases", class: "db-quick more" }, h("span", { class: "label" }, `${dbs.length - QUICK} more…`)) : "");
+    }), dbs.length > QUICK ? h("a", { href: "#/databases", class: "db-quick more" }, h("span", { class: "label" }, `All ${dbs.length} databases`), icon("chevron-right")) : "");
     badge($("events-badge"), newFailures(), "New failed operations");
-    badge($("start-badge"), !dismissed() && state.instances ? remaining() : 0, "Steps left in getting started");
+    // Getting started, as a small card until it is done or hidden.
+    const list = state.instances ? steps() : [];
+    const left = list.length ? remaining() : 0;
+    $("nav-start").hidden = dismissed() || !list.length || !left;
+    $("start-badge").textContent = list.length ? `${list.length - left} of ${list.length}` : "";
+    $("start-fill").style.width = list.length ? `${((list.length - left) / list.length) * 100}%` : "0";
+    $("nav-start").title = `Getting started: ${list.length - left} of ${list.length} done`;
     const me = state.me, chosen = theme();
     const sig = JSON.stringify([me, chosen]);
     if (sig === accountSig) return;

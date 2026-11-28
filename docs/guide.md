@@ -232,7 +232,7 @@ The **Performance** tab shows what the database is doing, like RDS Performance I
 
 OpenRDS's own queries, and the container's health check, are left out of all of these.
 
-The sidebar groups the console into databases, backups, activity and administration, with a quick link and live status dot for each database. Collapse it to icons on a desktop; on a phone it opens as a drawer. The account menu at its foot holds account settings, the light, dark or system theme, and sign-out.
+The sidebar puts Dashboard, Databases, Servers and Events first, then groups you can fold away: your databases (with a live status dot, those that need you first), backups, and settings for administrators. **Jump to** at its top, or **Ctrl K** (**⌘K** on a Mac) anywhere, finds any page, database or server by a few letters, and offers Create database and Add a server. Until you finish or hide it, a small Getting started card at its foot shows your progress. Collapse the sidebar to icons on a desktop; on a phone it opens as a drawer. It follows the light or dark theme. The account menu at its foot holds account settings, the light, dark or system theme, and sign-out.
 
 ## Where state lives
 
