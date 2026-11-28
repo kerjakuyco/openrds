@@ -593,6 +593,11 @@ func privateIPv4(text string) bool {
 // The private IPv4 addresses a server's own interfaces have, read with the
 // disk helper image on the host network, without Docker's own bridges.
 func (m *manager) detectPrivate(ctx context.Context, id string) []string {
+	// Docker Desktop opens published ports on the computer it runs on, not in
+	// its virtual machine, so the machine's addresses can't serve private access.
+	if info, err := m.dockerInfo(ctx, id); err == nil && info.OS == "Docker Desktop" {
+		return nil
+	}
 	var out bytes.Buffer
 	if m.dockerFor(id).run(ctx, nil, nil, &out, "run", "--rm", "--network", "host", "--entrypoint", "ip", diskHelperImage(), "-4", "-o", "addr", "show") != nil {
 		return nil
@@ -771,9 +776,10 @@ type serverInfo struct {
 	MemoryBytes int64  `json:"memoryBytes"`
 	Version     string `json:"dockerVersion"`
 	Arch        string `json:"architecture"`
+	OS          string `json:"os,omitempty"`
 }
 
-const infoFormat = `{"hostname":{{json .Name}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}},"dockerVersion":{{json .ServerVersion}},"architecture":{{json .Architecture}}}`
+const infoFormat = `{"hostname":{{json .Name}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}},"dockerVersion":{{json .ServerVersion}},"architecture":{{json .Architecture}},"os":{{json .OperatingSystem}}}`
 
 // A server's capacity is read again after this long. Whether another
 // server is reachable is known sooner: every refresh lists its containers.

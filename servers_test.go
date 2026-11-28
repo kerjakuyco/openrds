@@ -423,3 +423,28 @@ func TestARelativeDataDirectoryStillReachesServers(t *testing.T) {
 		}
 	}
 }
+
+// Docker Desktop publishes ports on the computer, not in its virtual
+// machine, so the machine's address would be a private address nothing can
+// bind. It is left empty there, and found on a Linux server.
+func TestDockerDesktopHasNoPrivateAddressToOffer(t *testing.T) {
+	for _, c := range []struct {
+		os   string
+		want []string
+	}{{"Docker Desktop", nil}, {"Ubuntu 24.04.3 LTS", []string{"192.168.65.3"}}} {
+		ran := false
+		m := testManager(t, func(_ context.Context, _ []string, _ io.Reader, out io.Writer, args ...string) error {
+			switch {
+			case args[0] == "info":
+				fmt.Fprintf(out, `{"hostname":"h","cpus":8,"memoryBytes":8589934592,"dockerVersion":"29.1.0","architecture":"aarch64","os":%q}`, c.os)
+			case slices.Contains(args, "ip"):
+				ran = true
+				fmt.Fprint(out, "2: eth0    inet 192.168.65.3/24 brd 192.168.65.255 scope global eth0\n")
+			}
+			return nil
+		})
+		if got := m.detectPrivate(t.Context(), localServer); !slices.Equal(got, c.want) || ran != (c.want != nil) {
+			t.Errorf("%s: %v (looked: %v)", c.os, got, ran)
+		}
+	}
+}

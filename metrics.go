@@ -171,11 +171,12 @@ func (m *manager) localContainers(server string) (containerLister, bool) {
 
 func (e engineAPI) info(ctx context.Context) (serverInfo, error) {
 	var raw struct {
-		Name          string
-		NCPU          int
-		MemTotal      int64
-		ServerVersion string
-		Architecture  string
+		Name            string
+		NCPU            int
+		MemTotal        int64
+		ServerVersion   string
+		Architecture    string
+		OperatingSystem string
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/info", nil)
 	if err != nil {
@@ -192,7 +193,7 @@ func (e engineAPI) info(ctx context.Context) (serverInfo, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&raw); err != nil {
 		return serverInfo{}, fmt.Errorf("reading docker info: %w", err)
 	}
-	return serverInfo{raw.Name, raw.NCPU, raw.MemTotal, raw.ServerVersion, raw.Architecture}, nil
+	return serverInfo{raw.Name, raw.NCPU, raw.MemTotal, raw.ServerVersion, raw.Architecture, raw.OperatingSystem}, nil
 }
 
 func (e engineAPI) stats(ctx context.Context, id string) (rawStats, error) {
