@@ -125,6 +125,7 @@ type serverState struct {
 	list    map[string]server
 	health  map[string]serverHealth
 	info    map[string]serverInfo
+	infoAt  map[string]time.Time // when info was read
 	engines map[string]statsReader
 	sshOnce sync.Once
 	sshErr  error
@@ -563,6 +564,7 @@ func (m *manager) removeServer(ctx context.Context, id string) error {
 	delete(m.servers.list, id)
 	delete(m.servers.health, id)
 	delete(m.servers.info, id)
+	delete(m.servers.infoAt, id)
 	delete(m.servers.engines, id)
 	m.servers.mu.Unlock()
 	if t, err := parseSSH(s.Address); err == nil {
@@ -738,13 +740,9 @@ func (m *manager) unreachable() map[string]bool {
 func (m *manager) watchServers(ctx context.Context) {
 	for _, s := range m.serverList()[1:] {
 		check, cancel := context.WithTimeout(ctx, 30*time.Second)
-		var out bytes.Buffer
-		err := m.dockerFor(s.ID).run(check, nil, nil, &out, "info", "--format", infoFormat)
+		_, err := m.dockerInfo(check, s.ID)
 		cancel()
 		m.noteReachable(s.ID, err)
-		if err == nil {
-			m.noteInfo(s.ID, out.Bytes())
-		}
 		m.servers.mu.Lock()
 		h := m.servers.health[s.ID]
 		raise, recovered := !h.reachable && !h.alerted, h.reachable && h.alerted
@@ -777,17 +775,56 @@ type serverInfo struct {
 
 const infoFormat = `{"hostname":{{json .Name}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}},"dockerVersion":{{json .ServerVersion}},"architecture":{{json .Architecture}}}`
 
-func (m *manager) noteInfo(id string, data []byte) {
+// A server's capacity is read again after this long. Whether another
+// server is reachable is known sooner: every refresh lists its containers.
+const infoFresh = 30 * time.Second
+
+type infoReader interface {
+	info(ctx context.Context) (serverInfo, error)
+}
+
+// What docker info says about a server. The console's own Docker answers
+// through the Engine API: the docker CLI starts every CLI plugin to answer
+// docker info, a third of a CPU second each time. Other servers answer
+// through the CLI, whose errors say why a server can't be reached.
+func (m *manager) dockerInfo(ctx context.Context, id string) (serverInfo, error) {
 	var info serverInfo
-	if json.Unmarshal(bytes.TrimSpace(data), &info) != nil {
-		return
+	if api, ok := m.engine.(infoReader); ok && (id == "" || id == localServer) {
+		var err error
+		if info, err = api.info(ctx); err != nil {
+			return info, err
+		}
+	} else {
+		var out bytes.Buffer
+		if err := m.dockerFor(id).run(ctx, nil, nil, &out, "info", "--format", infoFormat); err != nil {
+			return info, err
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &info); err != nil {
+			return info, fmt.Errorf("reading docker info: %w", err)
+		}
 	}
 	m.servers.mu.Lock()
+	defer m.servers.mu.Unlock()
 	if m.servers.info == nil {
-		m.servers.info = make(map[string]serverInfo)
+		m.servers.info, m.servers.infoAt = make(map[string]serverInfo), make(map[string]time.Time)
 	}
-	m.servers.info[id] = info
-	m.servers.mu.Unlock()
+	m.servers.info[id], m.servers.infoAt[id] = info, time.Now()
+	return info, nil
+}
+
+// A server's capacity read within infoFresh, while it is reachable.
+func (m *manager) freshInfo(id string) (serverInfo, bool) {
+	m.servers.mu.Lock()
+	defer m.servers.mu.Unlock()
+	info, ok := m.servers.info[id]
+	if !ok || time.Since(m.servers.infoAt[id]) >= infoFresh {
+		return info, false
+	}
+	if id == "" || id == localServer {
+		return info, true
+	}
+	h := m.servers.health[id]
+	return info, h.reachable && time.Since(h.checked) < infoFresh
 }
 
 type serverView struct {
@@ -847,24 +884,23 @@ func (v *serverView) fill(ctx context.Context, m *manager) {
 		m.servers.mu.Unlock()
 		return
 	}
-	check, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	var out bytes.Buffer
-	err := m.dockerFor(v.ID).run(check, nil, nil, &out, "info", "--format", infoFormat)
-	if ctx.Err() != nil {
-		v.Reachable = !m.recentlyDown(v.ID) // the page went away: no news about the server
-		return
+	info, ok := m.freshInfo(v.ID)
+	if !ok {
+		check, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		var err error
+		info, err = m.dockerInfo(check, v.ID)
+		if ctx.Err() != nil {
+			v.Reachable = !m.recentlyDown(v.ID) // the page went away: no news about the server
+			return
+		}
+		m.noteReachable(v.ID, err)
+		if err != nil {
+			v.Problem = strings.TrimPrefix(err.Error(), "docker: ")
+			return
+		}
 	}
-	m.noteReachable(v.ID, err)
-	if err != nil {
-		v.Problem = strings.TrimPrefix(err.Error(), "docker: ")
-		return
-	}
-	var info serverInfo
-	if json.Unmarshal(bytes.TrimSpace(out.Bytes()), &info) == nil {
-		v.Info = &info
-		m.noteInfo(v.ID, out.Bytes())
-	}
+	v.Info = &info
 	v.Reachable = true
 	v.Quota = m.volumeQuota(ctx, v.ID)
 }

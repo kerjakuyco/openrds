@@ -290,8 +290,16 @@ func (m *manager) statesFor(ctx context.Context, label string) (map[string]strin
 				defer cancel()
 			}
 			var out bytes.Buffer
-			errs[i] = m.dockerFor(s.ID).run(call, nil, nil, &out, "ps", "--all", "--filter", "label="+label,
-				"--format", `{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`)
+			if lister, ok := m.localContainers(s.ID); ok {
+				var list []listedContainer
+				list, errs[i] = lister.containers(call, label, false)
+				for _, c := range list {
+					fmt.Fprintf(&out, "%s|%s|%s\n", c.Project, c.State, c.Status)
+				}
+			} else {
+				errs[i] = m.dockerFor(s.ID).run(call, nil, nil, &out, "ps", "--all", "--filter", "label="+label,
+					"--format", `{{.Label "com.docker.compose.project"}}|{{.State}}|{{.Status}}`)
+			}
 			outputs[i] = out.String()
 			if s.ID != localServer && ctx.Err() == nil {
 				m.noteReachable(s.ID, errs[i])

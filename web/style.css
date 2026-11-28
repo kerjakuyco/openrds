@@ -273,6 +273,11 @@ nav#nav a.db-quick.more .icon { width: 13px; height: 13px }
 .tab-panel { outline: none }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 20px 14px }
 .more-row { display: flex; justify-content: center; padding: 12px }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line) }
+.pager[hidden] { display: none }
+.pager-text { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums }
+.pager-buttons { display: flex; gap: 6px }
+@media (max-width: 560px) { .pager-buttons .btn span { display: none } }
 .more-row:empty { display: none }
 
 /* ---------- key-value pairs */

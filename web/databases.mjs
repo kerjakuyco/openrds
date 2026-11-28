@@ -1,7 +1,7 @@
 // The database inventory: one dense table with live load, replicas under
 // their source, and a preview beside it, so most questions are answered
 // without leaving the list. Select a row to preview it; open it for details.
-import { h, icon, btn, menu, status, empty, isRunning, isLive, needsAttention, percent, bytes, sizeLabel, plural, ago, when, copyText, toast, api, chip } from "./lib.mjs";
+import { h, icon, btn, menu, status, empty, isRunning, isLive, needsAttention, percent, bytes, sizeLabel, plural, ago, when, copyText, toast, api, chip, pager } from "./lib.mjs";
 import { state, subscribe, instance, can, go } from "./store.mjs";
 import { databaseActions, start, confirmReboot } from "./actions.mjs";
 import { sparkline } from "./charts.mjs";
@@ -165,6 +165,17 @@ function preview(d, close) {
 
 // ---------- the view
 
+// Pages of about PAGE rows; a source and its replicas stay on one page.
+const PAGE = 50;
+function pageBounds(rows) {
+  const pages = [];
+  let start = 0;
+  for (let i = 1; i <= rows.length; i++) {
+    if (i === rows.length || (i - start >= PAGE && !rows[i].child)) { pages.push([start, i]); start = i; }
+  }
+  return pages.length ? pages : [[0, 0]];
+}
+
 export function databasesView() {
   const search = h("input", { type: "search", id: "search", value: ui.q, placeholder: "Filter by name, port, engine or tag", "aria-label": "Filter databases by name, port, engine or tag", autocomplete: "off" });
   const engineSel = h("select", { "aria-label": "Filter by engine" }, h("option", { value: "" }, "All engines"), (state.engines || []).map(e => h("option", { value: e.key, selected: e.key === ui.engine }, e.title)));
@@ -181,6 +192,7 @@ export function databasesView() {
   const summary = h("p", { class: "muted fleet-summary" });
   const list = h("div", { class: "fleet-list" });
   const side = h("div", { class: "fleet-side" });
+  let pageSig = "", pageIndex = 0;
   const layout = h("div", { class: "fleet-layout" }, h("section", { class: "panel fleet-panel" },
     h("div", { class: "toolbar fleet-toolbar" }, chips, h("div", { class: "toolbar-end" }, h("label", { class: "search" }, icon("search"), search, h("kbd", null, "/")), engineSel, serverSel)),
     list), side);
@@ -273,11 +285,19 @@ export function databasesView() {
       })));
     } else {
       const focused = document.activeElement?.closest?.("tr[data-name]")?.dataset.name;
+      const rows = arrange(shown);
+      const sig = JSON.stringify([ui.q, ui.engine, ui.server, ui.status, ui.sort]);
+      if (sig !== pageSig) { pageSig = sig; pageIndex = 0; } // a new filter starts at the first page
+      const pages = pageBounds(rows);
+      pageIndex = Math.min(pageIndex, pages.length - 1);
+      const [from, to] = pages[pageIndex];
+      const turn = (step) => { pageIndex += step; render(); list.scrollIntoView({ block: "nearest" }); };
       list.replaceChildren(h("div", { class: "table-wrap fleet-wrap" }, h("table", { id: "fleet-list", class: "fleet" },
         h("caption", { class: "sr-only" }, "Databases. Select a row to preview it."),
         h("thead", null, h("tr", null, headCell("name", "Database", "c-name"), headCell("status", "Status", "c-status"), headCell("port", "Endpoint", "c-endpoint"),
           headCell("size", "Size", "c-size"), headCell("load", "Load", "c-load"), headCell("backups", "Backups", "c-backups"), headCell("", h("span", { class: "sr-only" }, "Actions"), "c-actions"))),
-        h("tbody", null, arrange(shown).map(row)))));
+        h("tbody", null, rows.slice(from, to).map(row)))),
+        pager({ from, to, total: rows.length, label: "Database pages", onPrev: () => turn(-1), onNext: () => turn(1) }));
       if (focused) list.querySelector(`tr[data-name="${focused}"]`)?.focus({ preventScroll: true });
     }
     const d = instance(ui.selected);

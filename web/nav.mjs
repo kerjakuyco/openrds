@@ -10,12 +10,7 @@ const QUICK = 6;
 const read = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 const write = (key, value) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } };
 
-export const markEventsSeen = () => write("openrds-events-seen", new Date().toISOString());
-
-function newFailures() {
-  const seen = Date.parse(read("openrds-events-seen") || "") || Date.now() - 86400000;
-  return (state.activity || []).filter(e => e.result === "failed" && Date.parse(e.at) > seen).length;
-}
+const newFailures = () => state.failures?.total || 0;
 
 function badge(el, value, label) {
   el.hidden = !value;

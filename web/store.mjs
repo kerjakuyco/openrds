@@ -1,11 +1,23 @@
 // Shared state: the inventory read from the control plane, refreshed on an
 // interval, plus operations this browser started and is still waiting on.
+// Long lists are not part of it: backups and events come as counts and the
+// latest few, and pages read their own rows.
 import { api, toast } from "./lib.mjs";
 
 export const state = {
-  instances: null, backups: null, activity: null, host: null, engines: null, users: null, servers: null,
+  instances: null, backups: null, activity: null, failures: null, host: null, engines: null, users: null, servers: null,
   me: null, signedIn: false, syncedAt: 0, problems: [],
 };
+
+// When this browser last opened Events; failures since then get a badge.
+const SEEN = "openrds-events-seen";
+export function eventsSeen() {
+  try { return localStorage.getItem(SEEN) || ""; } catch { return ""; }
+}
+export function markEventsSeen() {
+  try { localStorage.setItem(SEEN, new Date().toISOString()); } catch { /* private mode */ }
+  if (state.failures) { state.failures = { ...state.failures, total: 0 }; emit(new Set(["failures"])); }
+}
 
 const LEVEL = { viewer: 1, operator: 2, admin: 3 };
 // Whether the signed-in person has at least this role. The server enforces the same rule.
@@ -16,13 +28,22 @@ export const subscribe = (fn) => { listeners.add(fn); return () => listeners.del
 const emit = (changed) => listeners.forEach(fn => fn(changed));
 
 let syncID = 0;
-const RESOURCES = ["instances", "backups", "activity", "host", "storage", "servers"];
+const RESOURCES = {
+  instances: () => "instances",
+  backups: () => "backups?limit=1", // counts and sizes by kind, and the newest backup
+  activity: () => "activity?limit=20", // the latest events
+  failures: () => `activity?result=failed&limit=0&since=${encodeURIComponent(eventsSeen() || new Date(Date.now() - 86400000).toISOString())}`,
+  host: () => "host",
+  storage: () => "storage",
+  servers: () => "servers",
+  users: () => "users",
+};
 
 export async function sync() {
   if (!state.signedIn) return;
   const id = ++syncID;
-  const keys = can("admin") ? [...RESOURCES, "users"] : RESOURCES;
-  const results = await Promise.allSettled(keys.map(k => api(k)));
+  const keys = Object.keys(RESOURCES).filter(k => k !== "users" || can("admin"));
+  const results = await Promise.allSettled(keys.map(k => api(RESOURCES[k]())));
   if (id !== syncID || !state.signedIn) return;
   const changed = new Set(), problems = [];
   results.forEach((res, i) => {
@@ -50,7 +71,7 @@ export const instance = (name) => state.instances?.find(d => d.name === name);
 
 export function reset() {
   syncID++;
-  for (const key of [...RESOURCES, "users"]) state[key] = null;
+  for (const key of Object.keys(RESOURCES)) state[key] = null;
   state.me = null;
   state.problems = [];
   operations.clear();

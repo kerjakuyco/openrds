@@ -18,7 +18,7 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 
 | Method | Path (under `/api`) |
 | --- | --- |
-| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit, with pooling `pooler` and `poolerStatus`, with point-in-time recovery `recovery` (`earliest`, `latest`), a source's `replicas` (names), and a replica's `replicaOf` and `replication` as last read, plus its `server` (empty for the console's own), `serverName`, and with private access `privateHost`. Create on another server with `server`; `status` is `unreachable` while OpenRDS can't reach it |
+| GET / POST | `/instances` — each instance lists `tuned`, the memory settings sized to its memory limit, with pooling `pooler` and `poolerStatus`, with point-in-time recovery `recovery` (`earliest`, `latest`), a source's `replicas` (names), and a replica's `replicaOf` and `replication` as last read, plus its `server` (empty for the console's own), `serverName`, and with private access `privateHost`; `latestBackupAt`, `nextBackupAt` and `automatedBackups` (how many it keeps) describe its backups. Create on another server with `server`; `status` is `unreachable` while OpenRDS can't reach it |
 | GET | `/servers` — every server with `reachable`, `problem`, `info` (`hostname`, `cpus`, `memoryBytes`, `dockerVersion`, `architecture`), `databases`, `allocatedMemoryMiB`, `volumeQuota`, `suggested` (where a new database goes by default) and its `privateAddress` and `publicAddress`; admins also see the SSH `address` |
 | GET | `/servers/key` — admin: the console's SSH public key and the `setup` command for a new server |
 | POST | `/servers/scan` — admin: `{"address"}` returns the server's `hostKeys` and their `fingerprints` |
@@ -51,7 +51,9 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | PUT / DELETE | `/notifications/smtp` — admin: `{"host","port","security","username","password","from"}` with `security` `starttls`, `tls` or `none`; checked by connecting and signing in. Removing it needs the email channels gone first |
 | POST / DELETE | `/storage/backups/{id}/import` (bring a copy into the library as a snapshot), `/storage/backups/{id}` (delete a copy that is not in the library) |
 | DELETE | `/instances/{name}` — add `?finalSnapshot=true` to take a final snapshot first; refused while deletion protection is on |
-| GET | `/backups`, `/backups/{id}/download`, `/activity` |
+| GET | `/backups` — every backup, newest first. Filter with `name`, `kind` (`manual` or `automated`) and `since` (RFC 3339; created at or after). Add `limit` (0–500) and `offset` for a page, `{"items","total","bytes","offset","limit","names","kinds"}`: `total` and `bytes` cover every match, `names` lists the databases with backups of that kind, and `kinds` gives the `count` and `bytes` of `manual` and `automated` backups of that database. Sort a page with `sort` (`created`, `name`, `kind`, `size` or `expires`) and `order` (`desc`, the default, or `asc`) |
+| GET | `/backups/{id}`, `/backups/{id}/download` |
+| GET | `/activity` — the last 1,000 events, newest first. Filter with `name`, `result` (`started`, `completed` or `failed`), `q` (text in the operation, detail, name or person) and `since`. Add `limit` (0–500) and `offset` for a page, `{"items","total","count","offset","limit","names"}`: `total` counts every match, `count` every event, and `names` lists the databases and accounts in the history |
 | POST | `/backups/{id}/restore` — body: `{"name":"orders-restored","port":15433}`; engine, version, data-volume limit and parameters are inherited. Set `version` (same or newer), `diskGiB` or `parameters` to override them. A physical backup (`format: "physical"`) restores into its own version, and with `targetTime` rolls forward to that time using WAL from the library or backup storage. A MySQL base backup (with `binlogFile`) restores into the same or a newer version, and with `targetTime` rolls forward by replaying binary logs. |
 | POST | `/backups/{id}/keep` — turn an automated backup into a snapshot that never expires |
 | DELETE | `/backups/{id}` |
@@ -65,6 +67,8 @@ Only `name`, `engine` and `port` are required. An omitted `version` means the en
 | PATCH | `/account` — your `name`; POST `/account/password` with `{"current","password"}`; POST `/account/signout` ends your other sessions |
 
 Roles: viewer for every GET except `/connection` and `/download`, which need operator like all changes; admin for `/users` and `/notifications`. Backups report `kind` (`manual` or `automated`), `expiresAt` for automated backups, `final` for final snapshots, and `compression` (`gzip`) when OpenRDS compressed the dump, as it does for MySQL. Base backups for point-in-time recovery have `startedAt` and `dataKey`: PostgreSQL's also `format: "physical"`, MySQL's the binary log position they were taken at, `binlogFile` and `binlogPos`. `bytes` is the size stored and downloaded.
+
+Replies larger than about 1.4 KB are gzip-compressed for clients that send `Accept-Encoding: gzip` (`curl --compressed`).
 
 Operations are synchronous; the first provision may take several minutes to pull the image. A change keeps running for up to 24 hours even when the client disconnects, so a snapshot or restore of a large database finishes; `GET /activity` shows how it ended. Reads stop with their client after 30 minutes at most. Only one mutation runs per instance at a time. A failed creation keeps its record: fix the Docker error and choose **Start** to retry, or delete the instance to release its name and port.
 

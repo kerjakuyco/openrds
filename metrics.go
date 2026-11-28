@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -107,6 +108,91 @@ func dockerEngine() (statsReader, error) {
 	}
 	transport := &http.Transport{DialContext: dial, MaxIdleConns: 2, IdleConnTimeout: time.Minute}
 	return engineAPI{&http.Client{Timeout: 20 * time.Second, Transport: transport}}, nil
+}
+
+// A container as docker ps lists it.
+type listedContainer struct {
+	ID, Project, State, Status string
+}
+
+type containerLister interface {
+	containers(ctx context.Context, label string, running bool) ([]listedContainer, error)
+}
+
+// The containers with a label, as docker ps --all lists them, or only the
+// running ones.
+func (e engineAPI) containers(ctx context.Context, label string, running bool) ([]listedContainer, error) {
+	filters := map[string][]string{"label": {label}}
+	if running {
+		filters["status"] = []string{"running"}
+	}
+	encoded, err := json.Marshal(filters)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{"filters": {string(encoded)}}
+	if !running {
+		q.Set("all", "true")
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/containers/json?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing containers: HTTP %d", resp.StatusCode)
+	}
+	var raw []struct {
+		ID     string `json:"Id"`
+		Labels map[string]string
+		State  string
+		Status string
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+	list := make([]listedContainer, len(raw))
+	for i, c := range raw {
+		list[i] = listedContainer{c.ID, c.Labels["com.docker.compose.project"], c.State, c.Status}
+	}
+	return list, nil
+}
+
+// The console's own Docker lists containers through the Engine API, saving
+// a docker CLI start on every refresh.
+func (m *manager) localContainers(server string) (containerLister, bool) {
+	lister, ok := m.engine.(containerLister)
+	return lister, ok && (server == "" || server == localServer)
+}
+
+func (e engineAPI) info(ctx context.Context) (serverInfo, error) {
+	var raw struct {
+		Name          string
+		NCPU          int
+		MemTotal      int64
+		ServerVersion string
+		Architecture  string
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://docker/info", nil)
+	if err != nil {
+		return serverInfo{}, err
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return serverInfo{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return serverInfo{}, fmt.Errorf("docker info: HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&raw); err != nil {
+		return serverInfo{}, fmt.Errorf("reading docker info: %w", err)
+	}
+	return serverInfo{raw.Name, raw.NCPU, raw.MemTotal, raw.ServerVersion, raw.Architecture}, nil
 }
 
 func (e engineAPI) stats(ctx context.Context, id string) (rawStats, error) {
@@ -421,46 +507,80 @@ func (m *manager) sample(ctx context.Context, now time.Time) {
 		byProject[r.Project] = r
 	}
 	m.history.prune(known, now)
-	for _, srv := range m.serverList() {
+	// Servers are sampled at the same time; the console's own error wins.
+	list := m.serverList()
+	errs := make([]error, len(list))
+	var wg sync.WaitGroup
+	for i, srv := range list {
 		engine := m.statsFor(srv.ID)
 		if engine == nil || srv.ID != localServer && m.recentlyDown(srv.ID) {
 			continue
 		}
-		if e := m.sampleServer(ctx, srv.ID, engine, known, byProject); e != nil && (err == nil || srv.ID == localServer) {
+		wg.Go(func() { errs[i] = m.sampleServer(ctx, srv.ID, engine, known, byProject) })
+	}
+	wg.Wait()
+	for _, e := range errs {
+		if e != nil && err == nil {
 			err = e
 		}
 	}
 	m.history.report(err)
 }
 
+// Databases of one server sampled at once: each reading runs the engine's
+// client in its container, which takes a few hundred milliseconds.
+const sampleWorkers = 4
+
 // Sample the running databases of one server.
 func (m *manager) sampleServer(ctx context.Context, server string, engine statsReader, known map[string]bool, byProject map[string]record) error {
 	var out bytes.Buffer
-	err := m.dockerFor(server).run(ctx, nil, nil, &out, "ps", "--filter", "label=io.openrds.database=true", "--filter", "status=running",
-		"--format", `{{.ID}}|{{.Label "com.docker.compose.project"}}`)
+	var err error
+	if lister, ok := m.localContainers(server); ok {
+		var list []listedContainer
+		list, err = lister.containers(ctx, "io.openrds.database=true", true)
+		for _, c := range list {
+			fmt.Fprintf(&out, "%s|%s\n", c.ID, c.Project)
+		}
+	} else {
+		err = m.dockerFor(server).run(ctx, nil, nil, &out, "ps", "--filter", "label=io.openrds.database=true", "--filter", "status=running",
+			"--format", `{{.ID}}|{{.Label "com.docker.compose.project"}}`)
+	}
+	if err != nil {
+		return err
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, sampleWorkers)
 	for _, line := range strings.Split(out.String(), "\n") {
 		id, project, ok := strings.Cut(strings.TrimSpace(line), "|")
-		if err != nil || !ok || !known[project] || !containerIDPattern.MatchString(id) || !sameServer(byProject[project].Server, server) {
+		if !ok || !known[project] || !containerIDPattern.MatchString(id) || !sameServer(byProject[project].Server, server) {
 			continue
 		}
-		s, statsErr := engine.stats(ctx, id)
-		if statsErr != nil {
-			err = statsErr
-			continue
-		}
-		// Engine readings are best effort: a starting or overloaded database
-		// still gets its container reading.
-		r := byProject[project]
-		db, _ := m.sampleEngine(ctx, r, id)
-		if r.ReplicaOf != "" && !r.PendingRestore {
-			st := m.replicationStatus(ctx, r, id)
-			m.noteReplication(r.Name, st)
-			if db != nil {
-				db.lag = st.Lag
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			s, statsErr := engine.stats(ctx, id)
+			if statsErr != nil {
+				mu.Lock()
+				err = statsErr
+				mu.Unlock()
+				return
 			}
-		}
-		m.history.add(project, id, s, db)
+			// Engine readings are best effort: a starting or overloaded
+			// database still gets its container reading.
+			r := byProject[project]
+			db, _ := m.sampleEngine(ctx, r, id)
+			if r.ReplicaOf != "" && !r.PendingRestore {
+				st := m.replicationStatus(ctx, r, id)
+				m.noteReplication(r.Name, st)
+				if db != nil {
+					db.lag = st.Lag
+				}
+			}
+			m.history.add(project, id, s, db)
+		})
 	}
+	wg.Wait()
 	return err
 }
 

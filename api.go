@@ -13,17 +13,20 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 )
 
 //go:embed web
 var assets embed.FS
 
-func sendJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
-}
+var webAssets = sync.OnceValues(func() (assetServer, error) {
+	web, err := fs.Sub(assets, "web")
+	if err != nil {
+		return nil, err
+	}
+	return loadAssets(web)
+})
 
 func sendError(w http.ResponseWriter, err error) {
 	var p *problem
@@ -304,17 +307,46 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		return err
 	})
+	// With limit or offset, a page of the matching events with counts;
+	// without, every event, as before pages existed.
 	add("GET /api/activity", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
-		items, err := m.readActivity()
-		if err == nil {
-			sendJSON(w, 200, items)
+		q, paged, err := readEventQuery(r.URL.Query())
+		if err != nil {
+			return err
 		}
-		return err
+		all, err := m.eventLog()
+		if err != nil {
+			return err
+		}
+		if !paged {
+			q.limit = len(all)
+			sendJSON(w, 200, queryEvents(all, q).Items)
+			return nil
+		}
+		sendJSON(w, 200, queryEvents(all, q))
+		return nil
 	})
 	add("GET /api/backups", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
-		items, err := m.backups()
+		q, paged, err := readBackupQuery(r.URL.Query())
+		if err != nil {
+			return err
+		}
+		set, err := m.library()
+		if err != nil {
+			return err
+		}
+		if !paged {
+			q.limit = len(set.all)
+			sendJSON(w, 200, set.query(q).Items)
+			return nil
+		}
+		sendJSON(w, 200, set.query(q))
+		return nil
+	})
+	add("GET /api/backups/{id}", roleViewer, func(w http.ResponseWriter, r *http.Request) error {
+		b, err := m.backup(r.PathValue("id"))
 		if err == nil {
-			sendJSON(w, 200, items)
+			sendJSON(w, 200, b)
 		}
 		return err
 	})
@@ -464,11 +496,17 @@ func handler(m *manager, a auth) http.Handler {
 		}
 		ctx, cancel := requestContext(withIdentity(r.Context(), id), r.Method)
 		defer cancel()
+		if acceptsGzip(r) {
+			w = gzipAllowed{w}
+		}
 		api.ServeHTTP(w, r.WithContext(ctx))
 	})
-	web, _ := fs.Sub(assets, "web")
+	files, err := webAssets()
+	if err != nil {
+		panic("reading the embedded console: " + err.Error())
+	}
 	static := http.NewServeMux()
-	static.Handle("GET /", http.FileServerFS(web))
+	static.Handle("GET /", files)
 	mux.Handle("/", static)
 	safe := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

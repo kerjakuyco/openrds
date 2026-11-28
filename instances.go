@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type instanceView struct {
 	TLSReady       bool               `json:"tlsReady"` // the container has certificates and managed credentials
 	LatestBackup   *time.Time         `json:"latestBackupAt,omitempty"`
 	NextBackup     *time.Time         `json:"nextBackupAt,omitempty"`
+	Automated      int                `json:"automatedBackups"` // automated backups stored
 	Live           *point             `json:"live,omitempty"`
 	PoolerStatus   string             `json:"poolerStatus,omitempty"`
 	Recovery       *recoveryWindow    `json:"recovery,omitempty"` // point-in-time recovery window
@@ -46,28 +48,24 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Database and pooler states are read at the same time.
+	var poolers map[string]string
+	var poolerErr error
+	var reading sync.WaitGroup
+	if slices.ContainsFunc(all, func(r record) bool { return r.Pooler.on() }) {
+		reading.Go(func() { poolers, poolerErr = m.statesFor(ctx, "io.openrds.pooler=true") })
+	}
 	states, err := m.states(ctx)
+	reading.Wait()
 	if err != nil {
 		return nil, fail(503, "Cannot read database status: "+err.Error())
 	}
-	backups, err := m.backups()
+	if poolerErr != nil {
+		return nil, fail(503, "Cannot read connection pooler status: "+poolerErr.Error())
+	}
+	set, err := m.library()
 	if err != nil {
 		return nil, err
-	}
-	automated := latestAutomated(all, backups)
-	var poolers map[string]string
-	if slices.ContainsFunc(all, func(r record) bool { return r.Pooler.on() }) {
-		if poolers, err = m.statesFor(ctx, "io.openrds.pooler=true"); err != nil {
-			return nil, fail(503, "Cannot read connection pooler status: "+err.Error())
-		}
-	}
-	latest := make(map[string]time.Time)
-	for _, r := range all {
-		for _, b := range backups {
-			if b.Name == r.Name && !b.Created.Before(r.Created) && b.Created.After(latest[r.Name]) {
-				latest[r.Name] = b.Created
-			}
-		}
 	}
 	now := time.Now().UTC()
 	result := make([]instanceView, 0, len(all))
@@ -96,18 +94,28 @@ func (m *manager) instances(ctx context.Context) ([]instanceView, error) {
 				v.PrivateHost = srv.PrivateAddress
 			}
 		}
-		if t, ok := latest[r.Name]; ok {
+		mine := set.current(r) // newest first
+		var lastAutomated time.Time
+		for _, b := range mine {
+			if b.Kind == "automated" {
+				if v.Automated++; lastAutomated.IsZero() {
+					lastAutomated = b.Created
+				}
+			}
+		}
+		if len(mine) > 0 {
+			t := mine[0].Created
 			v.LatestBackup = &t
 		}
 		if r.BackupRetentionDays > 0 {
-			next := nextBackup(v.BackupWindow, r.BackupIntervalHours, automated[r.Name], now)
+			next := nextBackup(v.BackupWindow, r.BackupIntervalHours, lastAutomated, now)
 			v.NextBackup = &next
 		}
 		if state == "running" {
 			v.Live = m.history.latest(r.Project, now)
 		}
 		if r.PITR || r.archiving() {
-			w := m.window(r, backups)
+			w := m.window(r, set.byName[r.Name])
 			v.Recovery = &w
 		}
 		if r.Pooler.on() {
@@ -786,20 +794,20 @@ type diskInfo struct {
 }
 
 func (m *manager) host(ctx context.Context) (hostInfo, error) {
-	var out bytes.Buffer
-	var host hostInfo
-	format := `{"name":{{json .Name}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}},"dockerVersion":{{json .ServerVersion}}}`
-	if err := m.docker.run(ctx, nil, nil, &out, "info", "--format", format); err != nil {
-		return host, fail(503, "Cannot read host capacity: "+err.Error())
+	info, ok := m.freshInfo(localServer)
+	if !ok {
+		var err error
+		if info, err = m.dockerInfo(ctx, localServer); err != nil {
+			return hostInfo{}, fail(503, "Cannot read host capacity: "+err.Error())
+		}
 	}
-	err := json.Unmarshal(out.Bytes(), &host)
-	if err == nil {
-		host.VolumeQuota = m.volumeQuota(ctx, localServer)
-	}
+	host := hostInfo{Name: info.Name, CPUs: info.CPUs, MemoryBytes: info.MemoryBytes, Version: info.Version}
+	host.VolumeQuota = m.volumeQuota(ctx, localServer)
 	if free, total, ok := m.space(m.backupDir()); ok {
 		host.BackupDisk = &diskInfo{free, total, backupReserve(total)}
 	}
-	if cfg, err := m.loadNotify(); err == nil {
+	cfg, err := m.loadNotify()
+	if err == nil {
 		host.NotificationChannels = len(cfg.Channels)
 	}
 	return host, err

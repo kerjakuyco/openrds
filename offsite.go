@@ -209,12 +209,12 @@ func (m *manager) offsiteStatus(admin bool) (offsiteView, error) {
 	if admin {
 		v.AccessKey = cfg.AccessKey
 	}
-	list, err := m.backups()
+	set, err := m.library()
 	if err != nil {
 		return v, err
 	}
 	var latest time.Time
-	for _, b := range list {
+	for _, b := range set.all {
 		switch {
 		case b.Offsite != nil && b.Offsite.Status == "copied":
 			v.Copied++
@@ -320,7 +320,9 @@ func (m *manager) markOffsite(id string, state offsiteCopy) bool {
 		return false
 	}
 	b.Offsite = &state
-	if err := writeJSON(filepath.Join(m.backupDir(), id, "meta.json"), b); err != nil {
+	err = writeJSON(filepath.Join(m.backupDir(), id, "meta.json"), b)
+	m.backupsChanged()
+	if err != nil {
 		log.Printf("recording the storage copy of %s: %v", id, err)
 		return false
 	}
@@ -466,7 +468,9 @@ func (m *manager) importBackup(ctx context.Context, id string) (b backup, err er
 	if err := writeJSON(filepath.Join(stage, "meta.json"), b); err != nil {
 		return b, err
 	}
-	return b, os.Rename(stage, filepath.Join(m.backupDir(), id))
+	err = os.Rename(stage, filepath.Join(m.backupDir(), id))
+	m.backupsChanged()
+	return b, err
 }
 
 // Delete a copy that is not in this server's library, such as one left by

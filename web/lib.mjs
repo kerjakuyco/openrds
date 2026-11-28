@@ -322,7 +322,8 @@ export function infoPanel(title, columns, options = {}) {
       h("dl", null, pairs.filter(Boolean).map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, v ?? "—"))))))));
 }
 
-export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, rowClass, caption, id = null }) {
+// sorted: the rows come in order already, as a page from the server.
+export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, rowClass, caption, id = null, sorted = false }) {
   const head = h("tr", null, columns.map(c => {
     const th = h("th", { scope: "col", class: c.cls || null });
     if (c.sort && onSort) {
@@ -335,7 +336,7 @@ export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, row
   }));
   let list = rows;
   const col = columns.find(c => c.key === sortKey);
-  if (col?.sort) {
+  if (col?.sort && !sorted) {
     list = [...rows].sort((a, b) => {
       const x = col.sort(a), y = col.sort(b);
       const order = typeof x === "string" ? x.localeCompare(y) : (x > y) - (x < y);
@@ -344,6 +345,28 @@ export function dataTable({ columns, rows, sortKey, sortDir = "asc", onSort, row
   }
   const body = h("tbody", null, list.map(r => h("tr", { class: rowClass?.(r) || null }, columns.map(c => h("td", { class: c.cls || null, "data-label": typeof c.label === "string" ? c.label : null }, c.value(r))))));
   return h("div", { class: "table-wrap" }, h("table", { id }, caption && h("caption", { class: "sr-only" }, caption), h("thead", null, head), body));
+}
+
+// A query string of the parameters that are set.
+export const query = (params) => new URLSearchParams(Object.entries(params)
+  .filter(([, v]) => v !== "" && v !== null && v !== undefined).map(([k, v]) => [k, String(v)])).toString();
+
+// Which rows of a long list show, "1–50 of 6,720", with Previous and Next:
+// rows from (counting from 0) up to to, of total. Nothing shows while
+// everything fits on one page.
+export function pager({ from, to, total, onPrev, onNext, label = "Pages" }) {
+  if (from === 0 && to >= total) return h("nav", { class: "pager", hidden: true });
+  return h("nav", { class: "pager", "aria-label": label },
+    h("span", { class: "pager-text", "aria-live": "polite" }, `${(to > from ? from + 1 : from).toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}`),
+    h("div", { class: "pager-buttons" },
+      h("button", { type: "button", class: "btn small ghost", disabled: from === 0, "aria-label": "Previous page", onclick: onPrev }, icon("chevron-left"), h("span", null, "Previous")),
+      h("button", { type: "button", class: "btn small ghost", disabled: to >= total, "aria-label": "Next page", onclick: onNext }, h("span", null, "Next"), icon("chevron-right"))));
+}
+
+// A pager for a page of a list the server cut.
+export function serverPager(page, size, go, label) {
+  return pager({ from: page.offset, to: page.offset + page.items.length, total: page.total, label,
+    onPrev: () => go(Math.max(0, page.offset - size)), onNext: () => go(page.offset + size) });
 }
 
 // A copyable block of text such as a command, a URI or a snippet.

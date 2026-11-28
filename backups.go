@@ -9,7 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -183,16 +183,11 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 
 // The size of the newest backup of a database, as a guess for the next one.
 func (m *manager) expectedBackupBytes(name string) int64 {
-	list, err := m.backups()
-	if err != nil {
+	set, err := m.library()
+	if err != nil || len(set.byName[name]) == 0 {
 		return 0
 	}
-	for _, b := range list { // newest first
-		if b.Name == name {
-			return b.Bytes
-		}
-	}
-	return 0
+	return set.byName[name][0].Bytes // newest first
 }
 
 func (m *manager) openDump(id string) (*os.File, error) {
@@ -206,28 +201,15 @@ func (m *manager) openDump(id string) (*os.File, error) {
 	return f, err
 }
 
+// Every backup, newest first. The list is the caller's; the values in it
+// (parameters, expiry and storage state) are shared with the library and
+// must not be changed in place.
 func (m *manager) backups() ([]backup, error) {
-	entries, err := os.ReadDir(m.backupDir())
+	set, err := m.library()
 	if err != nil {
 		return nil, err
 	}
-	result := []backup{}
-	for _, e := range entries {
-		if !e.IsDir() || !idPattern.MatchString(e.Name()) {
-			continue
-		}
-		b, err := m.backup(e.Name())
-		var p *problem
-		if errors.As(err, &p) && p.status == 404 {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, b)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Created.After(result[j].Created) })
-	return result, nil
+	return slices.Clone(set.all), nil
 }
 
 func (m *manager) makeBackup(ctx context.Context, name, kind string) (b backup, err error) {
@@ -339,6 +321,7 @@ func (m *manager) snapshot(ctx context.Context, r record, kind string, final boo
 	if err := os.Rename(stage, filepath.Join(m.backupDir(), b.ID)); err != nil {
 		return b, err
 	}
+	m.backupsChanged()
 	go m.syncOffsite() // copy it to backup storage, when connected
 	return b, nil
 }
@@ -350,6 +333,7 @@ func (m *manager) removeBackup(ctx context.Context, b backup, action string) err
 	if err := os.Rename(dir, dest); err != nil {
 		return err
 	}
+	m.backupsChanged()
 	err := os.RemoveAll(dest)
 	if err == nil {
 		m.note(ctx, b.Name, action, "completed", "")
@@ -391,7 +375,9 @@ func (m *manager) keepBackup(ctx context.Context, id string) (backup, error) {
 		return b, fail(409, "This backup is already a manual snapshot.")
 	}
 	b.Kind, b.Expires = "manual", nil
-	if err := writeJSON(filepath.Join(m.backupDir(), b.ID, "meta.json"), b); err != nil {
+	err = writeJSON(filepath.Join(m.backupDir(), b.ID, "meta.json"), b)
+	m.backupsChanged()
+	if err != nil {
 		return b, err
 	}
 	m.note(ctx, b.Name, "Keep backup as snapshot", "completed", "")
@@ -418,7 +404,9 @@ func (m *manager) retain(r record) error {
 			continue
 		}
 		b.Expires = &expires
-		if err := writeJSON(filepath.Join(m.backupDir(), b.ID, "meta.json"), b); err != nil {
+		err := writeJSON(filepath.Join(m.backupDir(), b.ID, "meta.json"), b)
+		m.backupsChanged()
+		if err != nil {
 			return err
 		}
 	}

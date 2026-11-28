@@ -1,6 +1,6 @@
 // Backup storage: a copy of every backup in S3-compatible object storage,
 // and a way to bring copies back after losing a server.
-import { h, icon, btn, api, toast, modal, panel, infoPanel, dataTable, empty, alertBox, when, ago, bytes, nextId, menu, setAlert } from "./lib.mjs";
+import { h, icon, btn, api, toast, modal, panel, infoPanel, dataTable, empty, alertBox, when, ago, bytes, nextId, menu, setAlert, pager } from "./lib.mjs";
 import { state, subscribe, sync, can, engine, track } from "./store.mjs";
 
 const PROVIDERS = [
@@ -118,23 +118,34 @@ function setupPanel() {
     form.el, note, h("div", { class: "row" }, testButton(form, note), save));
 }
 
+const PAGE = 50;
+
 function remotePanel(onChange) {
   const body = h("div", { class: "flush" }, empty("cloud", "Loading…", ""));
   const refresh = btn([icon("refresh"), "Refresh"], () => load(), "small");
+  let list = [], from = 0;
   async function load() {
     try {
-      const list = await api("storage/backups");
-      body.replaceChildren(list.length ? dataTable({ caption: "Backups in storage", rows: list, columns: [
-        { key: "created", label: "Backup", value: b => h("div", { class: "stack" }, h("strong", null, when(b.createdAt)), h("small", null, ago(b.createdAt))) },
-        { key: "name", label: "Database", value: b => h("div", { class: "stack" }, h("span", null, b.name), h("small", null, `${engine(b.engine)?.title || b.engine} ${b.version || ""}`.trim())) },
-        { key: "size", label: "Size", cls: "num", value: b => bytes(b.bytes) },
-        { key: "where", label: "Location", value: b => b.local ? h("span", { class: "status good" }, icon("ok"), "Also on this server") : h("span", { class: "status info" }, icon("cloud"), "Storage only") },
-        { key: "actions", label: h("span", { class: "sr-only" }, "Actions"), cls: "actions", value: b => b.local ? null : h("div", { class: "cell-actions" },
-          btn([icon("download"), "Import"], () => importBackup(b), "small"),
-          menu("", [{ label: "Delete from storage", icon: "trash", danger: true, run: () => deleteRemote(b) }],
-            { cls: "small ghost icon-only", labelIcon: "more", chevron: false, ariaLabel: `More actions for the ${when(b.createdAt)} backup of ${b.name}` })) },
-      ] }) : empty("cloud", "No backups in storage yet", "Copies appear here as they finish."));
+      list = await api("storage/backups");
+      from = Math.min(from, Math.max(0, Math.floor((list.length - 1) / PAGE) * PAGE));
+      show();
     } catch (err) { body.replaceChildren(alertBox(err.message, "error")); }
+  }
+  // The bucket can hold many copies; the table shows a page of them.
+  function show() {
+    const to = Math.min(from + PAGE, list.length);
+    const turn = (step) => { from = Math.max(0, from + step * PAGE); show(); };
+    body.replaceChildren(list.length ? dataTable({ caption: "Backups in storage", rows: list.slice(from, to), columns: [
+      { key: "created", label: "Backup", value: b => h("div", { class: "stack" }, h("strong", null, when(b.createdAt)), h("small", null, ago(b.createdAt))) },
+      { key: "name", label: "Database", value: b => h("div", { class: "stack" }, h("span", null, b.name), h("small", null, `${engine(b.engine)?.title || b.engine} ${b.version || ""}`.trim())) },
+      { key: "size", label: "Size", cls: "num", value: b => bytes(b.bytes) },
+      { key: "where", label: "Location", value: b => b.local ? h("span", { class: "status good" }, icon("ok"), "Also on this server") : h("span", { class: "status info" }, icon("cloud"), "Storage only") },
+      { key: "actions", label: h("span", { class: "sr-only" }, "Actions"), cls: "actions", value: b => b.local ? null : h("div", { class: "cell-actions" },
+        btn([icon("download"), "Import"], () => importBackup(b), "small"),
+        menu("", [{ label: "Delete from storage", icon: "trash", danger: true, run: () => deleteRemote(b) }],
+          { cls: "small ghost icon-only", labelIcon: "more", chevron: false, ariaLabel: `More actions for the ${when(b.createdAt)} backup of ${b.name}` })) },
+    ] }) : empty("cloud", "No backups in storage yet", "Copies appear here as they finish."),
+      pager({ from, to, total: list.length, label: "Storage pages", onPrev: () => turn(-1), onNext: () => turn(1) }));
   }
   function importBackup(b) {
     track(`Import ${b.name} backup`, api(`storage/backups/${b.id}/import`, { method: "POST" }), {

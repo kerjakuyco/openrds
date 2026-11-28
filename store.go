@@ -134,6 +134,9 @@ type manager struct {
 	busy        map[string]bool
 	attempts    map[string]time.Time // last automated-backup window tried, by project
 	activityMu  sync.Mutex
+	events      []event // the event history, newest first, once read; see activity.go
+	eventsRead  bool
+	lib         libraryIndex // backup metadata in memory; see library.go
 	backupMu    sync.Mutex
 	quotaCache  quotaCache
 	history     history

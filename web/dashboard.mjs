@@ -113,7 +113,7 @@ export function dashboardView() {
   const el = h("div", null, hero, body);
 
   function render() {
-    const dbs = state.instances, backups = state.backups, host = state.host, now = Date.now();
+    const dbs = state.instances, snapshots = state.backups?.kinds?.manual, host = state.host, now = Date.now();
     const trouble = dbs?.filter(needsAttention).length || 0, up = dbs?.filter(isRunning).length || 0;
     const summary = !dbs ? [h("span", null, "Loading…")]
       : !dbs.length ? [h("span", null, "Welcome to OpenRDS.")]
@@ -140,7 +140,6 @@ export function dashboardView() {
         can("operator") || r.href.endsWith("/logs") ? h("a", { class: "btn small", href: r.href }, r.action) : null)))
         : h("div", { class: "all-good" }, icon("ok"), h("div", null, h("strong", null, "All clear"), h("p", { class: "muted" }, "Nothing needs you."))));
 
-    const manual = backups?.filter(b => b.kind !== "automated") || [];
     const scheduled = dbs.filter(d => d.backupRetentionDays).length;
     const row = (symbol, label, value, href) => h("a", { class: "res-row", href }, icon(symbol), h("span", null, label), h("strong", null, value), icon("chevron-right"));
     const live = dbs.filter(isLive);
@@ -149,7 +148,7 @@ export function dashboardView() {
     const resources = panel("Resources", {},
       h("div", { class: "res-list" },
         row("db", "Databases", `${up} of ${dbs.length} running`, "#/databases"),
-        row("camera", "Snapshots", backups ? `${manual.length} · ${bytes(manual.reduce((n, b) => n + b.bytes, 0))}` : "—", "#/backups/snapshots"),
+        row("camera", "Snapshots", snapshots ? `${snapshots.count.toLocaleString()} · ${bytes(snapshots.bytes)}` : "—", "#/backups/snapshots"),
         row("history", "Automated backups", `${scheduled} of ${dbs.length} on`, "#/backups/schedules"),
         row("cloud", "Backup storage", state.storage?.enabled ? `${state.storage.copied} copied` : "Off", "#/backup-storage"),
         (state.servers || []).length > 1 ? row("host", "Servers", `${state.servers.filter(s => s.reachable).length} of ${state.servers.length} reachable`, "#/servers") : null),
@@ -160,7 +159,7 @@ export function dashboardView() {
         line("CPU limits", `${Number(cpu.toFixed(2))} of ${host.cpus} vCPU`, cpu / host.cpus)) : null);
 
     // One line per action: its outcome, or "started" while it still runs.
-    const all = state.activity || [];
+    const all = state.activity?.items || [];
     const key = (e) => `${e.name}|${e.action}|${e.actor}`; // newest first, so an outcome comes before its start
     const events = all.filter((e, i) => e.result !== "started" || !all.slice(0, i).some(x => x.result !== "started" && key(x) === key(e))).slice(0, 5);
     const activity = panel("Recent activity", { actions: [h("a", { class: "btn small ghost", href: "#/events" }, "View all")] },

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -23,26 +24,45 @@ type event struct {
 	alerted bool
 }
 
-func (m *manager) readActivity() ([]event, error) {
+// The event history, newest first. The console is the only writer of
+// activity.json, so it is read once and then kept in memory; each event
+// replaces the list, so a list once returned never changes.
+func (m *manager) eventLog() ([]event, error) {
+	m.activityMu.Lock()
+	defer m.activityMu.Unlock()
+	return m.loadEvents()
+}
+
+func (m *manager) loadEvents() ([]event, error) {
+	if m.eventsRead {
+		return m.events, nil
+	}
 	items := []event{}
 	err := readJSON(filepath.Join(m.dir, "activity.json"), &items)
-	if errors.Is(err, os.ErrNotExist) {
-		return items, nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
-	return items, err
+	m.events, m.eventsRead = items, true
+	return items, nil
+}
+
+// A copy of the history, for callers that change it.
+func (m *manager) readActivity() ([]event, error) {
+	items, err := m.eventLog()
+	return slices.Clone(items), err
 }
 
 // Record an event. A failure is also sent to the notification channels.
 func (m *manager) logEvent(ctx context.Context, e event) {
 	e.At, e.Actor = time.Now().UTC(), actorFrom(ctx)
 	m.activityMu.Lock()
-	items, err := m.readActivity()
+	items, err := m.loadEvents()
 	if err == nil {
-		items = append([]event{e}, items...)
-		if len(items) > activityLimit {
-			items = items[:activityLimit]
-		}
-		err = writeJSON(filepath.Join(m.dir, "activity.json"), items)
+		next := make([]event, 0, min(len(items)+1, activityLimit))
+		next = append(next, e)
+		next = append(next, items[:min(len(items), activityLimit-1)]...)
+		m.events = next
+		err = writeJSON(filepath.Join(m.dir, "activity.json"), next)
 	}
 	m.activityMu.Unlock()
 	if err != nil {

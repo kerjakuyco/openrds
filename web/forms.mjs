@@ -497,8 +497,8 @@ export async function createView() {
 
 export async function restoreView(id) {
   await loadEngines();
-  if (!state.backups) await sync();
-  const b = state.backups?.find(x => x.id === id);
+  if (!state.instances) await sync();
+  const b = await api(`backups/${id}`).catch(() => null);
   if (!b) return { el: h("div", null, heading("Snapshot not found", "It may have been deleted or expired."), h("a", { class: "btn", href: "#/backups" }, "Back to backups")), title: "Restore", nav: "backups", crumbs: [["Backups", "#/backups"], ["Restore"]] };
   const eng = engine(b.engine);
   let name = `${b.name.slice(0, 32)}-restore`;

@@ -1,6 +1,6 @@
 // Sign-in, the workspace shell and the hash router.
 import { h, icon, api, onUnauthorized, setAlert, empty } from "./lib.mjs";
-import { state, sync, startPolling, reset, subscribe, operations, loadEngines, setMe, can } from "./store.mjs";
+import { state, sync, startPolling, reset, subscribe, operations, loadEngines, setMe, can, markEventsSeen } from "./store.mjs";
 import { dashboardView } from "./dashboard.mjs";
 import { databasesView } from "./databases.mjs";
 import { instanceView } from "./instance.mjs";
@@ -14,7 +14,7 @@ import { accountView } from "./account.mjs";
 import { startView } from "./start.mjs";
 import { serversView } from "./servers.mjs";
 import { renderAuth } from "./auth.mjs";
-import { initNav, markEventsSeen } from "./nav.mjs";
+import { initNav } from "./nav.mjs";
 
 const $ = (id) => document.getElementById(id);
 

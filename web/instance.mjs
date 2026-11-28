@@ -1,5 +1,5 @@
 // One database: summary, actions and tabs, like a managed-database console.
-import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, infoPanel, scheduleLabel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip } from "./lib.mjs";
+import { h, icon, btn, api, toast, modal, menu, status, isLive, isRunning, keyValues, panel, infoPanel, scheduleLabel, empty, dataTable, bytes, rate, mib, percent, when, ago, plural, copyText, alertBox, sizeLabel, meter, nextId, clock, chip, query, serverPager } from "./lib.mjs";
 import { endpointChip, engineBadge } from "./databases.mjs";
 import { state, subscribe, instance, engine, loadEngines, sync, go, track, can } from "./store.mjs";
 import { connectGuide } from "./connect.mjs";
@@ -125,23 +125,37 @@ function logsTab(d) {
   }
   const follow = h("input", { type: "checkbox", class: "switch", role: "switch", id: nextId("follow") });
   follow.addEventListener("change", () => { clearInterval(timer); if (follow.checked) { load(); timer = setInterval(() => { if (!document.hidden) load(); }, 10000); } });
-  const events = h("div", { class: "flush" });
-  function renderEvents() {
-    const list = (state.activity || []).filter(e => e.name === d.name).slice(0, 25);
-    events.replaceChildren(list.length ? dataTable({ caption: "Events", rows: list, columns: [
+  const events = h("div", { class: "flush" }, empty("bell", "Reading events…", ""));
+  const refreshEvents = databaseEvents(d.name, (list, err) => {
+    events.replaceChildren(err ? empty("error", "Could not read events", err.message) : list.length ? dataTable({ caption: "Events", rows: list, columns: [
       { key: "at", label: "Time", value: e => h("span", { title: when(e.at) }, ago(e.at)) },
       { key: "action", label: "Operation", value: e => e.action },
       { key: "result", label: "Outcome", value: e => resultChip(e.result) },
       { key: "detail", label: "Detail", cls: "wrap", value: e => e.detail || h("span", { class: "muted" }, "—") },
     ] }) : empty("bell", "No events yet", "Operations on this database appear here."));
-  }
-  renderEvents();
+  });
   load();
   const el = h("div", { class: "stack-gap" },
     panel("Database log", { description: "Last 120 lines. Passwords hidden.",
       actions: [h("label", { class: "check inline", for: follow.id }, follow, "Follow"), btn([icon("refresh"), "Refresh"], load, "small")] }, output),
     panel("Recent events", { actions: [h("a", { class: "btn small", href: "#/events" }, "All events")] }, events));
-  return { el, update: renderEvents, destroy: () => clearInterval(timer) };
+  return { el, update: (_, changed) => refreshEvents(changed), destroy: () => clearInterval(timer) };
+}
+
+// The latest events of one database, read again when new events arrive.
+function databaseEvents(name, show) {
+  let seq = 0;
+  async function load() {
+    const mine = ++seq;
+    try {
+      const page = await api(`activity?${query({ name, limit: 25 })}`);
+      if (mine === seq) show(page.items, null);
+    } catch (err) {
+      if (mine === seq) show(null, err);
+    }
+  }
+  load();
+  return (changed) => { if (changed?.has("activity")) load(); };
 }
 
 export const resultChip = (r) => h("span", { class: `status ${r === "completed" ? "good" : r === "failed" ? "critical" : "info"}` },
@@ -185,10 +199,32 @@ function editButton(d, label, run) {
 }
 
 function backupsTab(d) {
-  const list = h("div", { class: "flush" });
-  function render(cur) {
-    const mine = (state.backups || []).filter(b => b.name === cur.name && Date.parse(b.createdAt) >= Date.parse(cur.createdAt));
-    list.replaceChildren(mine.length ? backupTable(mine, { showInstance: false }) : empty("camera", "No backups of this database yet", isRunning(cur) ? "Take a snapshot or turn on backups." : "Start the database to take a snapshot."));
+  const list = h("div", { class: "flush" }, empty("camera", "Loading backups…", ""));
+  const pages = h("div");
+  const ui = { sort: { key: "created", dir: "desc" }, offset: 0 };
+  let cur = d, seq = 0;
+  // This database's backups, not those of an earlier one with its name.
+  async function load() {
+    const mine = ++seq;
+    try {
+      const page = await api(`backups?${query({ name: cur.name, since: cur.createdAt, sort: ui.sort.key, order: ui.sort.dir, offset: ui.offset, limit: 20 })}`);
+      if (mine !== seq) return;
+      if (page.offset > 0 && page.offset >= page.total) { ui.offset = Math.max(0, Math.floor((page.total - 1) / 20) * 20); load(); return; }
+      list.replaceChildren(page.items.length ? backupTable(page.items, { showInstance: false, sort: ui.sort, onSort: (key) => {
+        ui.sort = { key, dir: ui.sort.key === key && ui.sort.dir === "asc" ? "desc" : "asc" };
+        ui.offset = 0;
+        list.replaceChildren(empty("camera", "Loading backups…", "")); // not the old order meanwhile
+        pages.replaceChildren();
+        load();
+      } }) : empty("camera", "No backups of this database yet", isRunning(cur) ? "Take a snapshot or turn on backups." : "Start the database to take a snapshot."));
+      pages.replaceChildren(serverPager(page, 20, (offset) => { ui.offset = offset; load(); }, "Backup pages"));
+    } catch (err) {
+      if (mine === seq) list.replaceChildren(empty("error", "Could not read backups", err.message));
+    }
+  }
+  function render(next, changed) {
+    cur = next;
+    if (changed?.has("backups") || changed?.has("storage")) load();
   }
   const toggle = btn(d.deletionProtection ? "Turn off" : "Turn on", () => modal({
     title: d.deletionProtection ? "Turn off deletion protection?" : "Turn on deletion protection?", kicker: d.name, confirm: d.deletionProtection ? "Turn off" : "Turn on",
@@ -213,8 +249,8 @@ function backupsTab(d) {
       ["Protection", [["Deletion protection", h("span", { class: "row tight" }, d.deletionProtection ? "On" : "Off", can("operator") ? toggle : null)]]],
     ], { actions: can("operator") ? [editButton(d, [icon("edit"), "Change"], () => editBackups(d)), snap,
       d.recovery?.earliest ? editButton(d, [icon("restore"), "Restore to point in time"], () => restoreToTime(d)) : null].filter(Boolean) : [] }),
-    panel("Snapshots and backups", { description: "Restoring creates a new database." }, list));
-  render(d);
+    panel("Snapshots and backups", { description: "Restoring creates a new database." }, list, pages));
+  load();
   return { el, update: render };
 }
 
@@ -279,16 +315,16 @@ function backupsCard(d) {
 }
 
 function eventsCard(name) {
-  const list = h("ul", { class: "activity" });
-  const render = () => {
-    const mine = (state.activity || []).filter(e => e.name === name);
+  const list = h("ul", { class: "activity" }, h("li", { class: "none" }, h("span"), h("small", null, "Reading events…")));
+  // One line per action: its outcome, or "started" while it still runs.
+  const refresh = databaseEvents(name, (mine, err) => {
+    if (err) { list.replaceChildren(h("li", { class: "none" }, h("span"), h("small", null, err.message))); return; }
     const items = mine.filter((e, i) => e.result !== "started" || !mine.slice(0, i).some(x => x.action === e.action)).slice(0, 5);
     list.replaceChildren(...(items.length ? items.map(e => h("li", { class: e.result },
       icon(e.result === "completed" ? "ok" : e.result === "failed" ? "error" : "pending"),
       h("div", null, h("strong", null, e.action), h("small", { title: when(e.at) }, `${ago(e.at)}${e.detail ? ` · ${e.detail}` : ""}`)))) : [h("li", { class: "none" }, h("span"), h("small", null, "No events yet."))]));
-  };
-  render();
-  return { el: panel("Recent events", { actions: [h("a", { class: "btn small ghost", href: `#/databases/${name}/logs` }, "All events")] }, h("div", { class: "flush" }, list)), update: render };
+  });
+  return { el: panel("Recent events", { actions: [h("a", { class: "btn small ghost", href: `#/databases/${name}/logs` }, "All events")] }, h("div", { class: "flush" }, list)), update: refresh };
 }
 
 function detailsCard(d) {
@@ -341,7 +377,7 @@ function overviewTab(d) {
     h("div", { class: "overview-grid" },
       h("div", { class: "stack-gap" }, connectCard(d), replicationPanel(d), poolerSummary(d)),
       h("div", { class: "stack-gap" }, backupsCard(d), events.el, detailsCard(d))));
-  return { el, update: events.update, destroy: () => clearInterval(timer) };
+  return { el, update: (_, changed) => events.update(changed), destroy: () => clearInterval(timer) };
 }
 
 function poolerSummary(d) {
@@ -444,7 +480,7 @@ export async function instanceView(name, tab = "overview") {
     panelEl.replaceChildren(current.el);
   }
 
-  function update() {
+  function update(changed = new Set()) {
     const d = instance(name);
     if (!d) {
       if (state.instances && !gone) {
@@ -480,7 +516,7 @@ export async function instanceView(name, tab = "overview") {
     if (bsig !== bannerSig) { bannerSig = bsig; alerts.replaceChildren(...banners(d)); }
     if (!current) { setTab(currentKey || tab); return; }
     if (SIGNATURE[currentKey](d) !== currentSig) setTab(currentKey);
-    else current.update?.(d);
+    else current.update?.(d, changed);
   }
 
   update();
